@@ -1,17 +1,28 @@
 diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 --- a/codex-rs/cli/src/main.rs
 +++ b/codex-rs/cli/src/main.rs
-@@ -55,2 +55,3 @@
+@@ -53,6 +53,7 @@
+ #[cfg(any(target_os = "macos", target_os = "windows"))]
+ mod app_cmd;
  mod cloud_config;
 +mod cm_host_identity;
  mod daemon_install;
-@@ -243,2 +244,5 @@
+ mod daemon_telemetry;
+ #[cfg(any(target_os = "macos", target_os = "windows"))]
+@@ -242,6 +243,9 @@
+ 
      /// Inspect feature flags.
      Features(FeaturesCli),
 +
 +    /// Print this CM Host's embedded build identity as JSON.
 +    CmHostIdentity,
-@@ -1889,1 +1893,9 @@
+ }
+ 
+ #[derive(Debug, Parser)]
+@@ -1886,6 +1890,14 @@
+             cmd.strict_config |= root_strict_config;
+             cmd.run(&arg0_paths, &root_config_overrides).await?;
+         }
 +        Some(Subcommand::CmHostIdentity) => {
 +            reject_remote_mode_for_subcommand(
 +                root_remote.as_deref(),
@@ -21,6 +32,13 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 +            cm_host_identity::print()?;
 +        }
          Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
-@@ -2355,1 +2367,2 @@
+             FeaturesSubcommand::List => {
+                 reject_remote_mode_for_subcommand(
+@@ -2353,6 +2365,7 @@
+         Some(Subcommand::ResponsesApiProxy(_)) => Some("responses-api-proxy"),
+         Some(Subcommand::StdioToUds(_)) => Some("stdio-to-uds"),
          Some(Subcommand::Features(_)) => Some("features"),
 +        Some(Subcommand::CmHostIdentity) => Some("cm-host-identity"),
+         Some(Subcommand::TcpTunnel(_)) => Some("tcp-tunnel"),
+     }
+ }
