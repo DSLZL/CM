@@ -18,3 +18,5 @@ crates/cm/src/host_identity.rs
 ci/scripts/host.py
 fixtures/host-baseline/acceptance.sh
 fixtures/host-baseline/test_identity.py
+ci/worker/cache-authority/action.yml
+ci/worker/cache-authority/index.js

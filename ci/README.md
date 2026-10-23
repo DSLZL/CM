@@ -24,7 +24,7 @@ The same Host runs representative CLI commands and four unchanged Core command-a
 
 ## Independent dispatch and cache authority
 
-ci/worker-files.json maps four infrastructure inputs to the builder. Both worker workflows and both policy/record scripts deploy together at an exact reviewed builder commit. The worker fixes its source/builder identities in reviewed YAML and temporarily checks out the requested exact public CM SHA. No repository variables or copied gh credentials are needed for an operator dispatch.
+ci/worker-files.json maps six infrastructure inputs to the builder. Both worker workflows, both policy/record scripts and the small cache-authority JavaScript action deploy together at an exact reviewed builder commit. The action reads the runner-injected effective cache mode, checks it against trusted preflight, and exposes only that validated enum to later shell steps. The worker fixes its source/builder identities in reviewed YAML and temporarily checks out the requested exact public CM SHA. No repository variables or copied gh credentials are needed for an operator dispatch.
 
 .github/cm-ci.json now maps the concrete P01 producer. .github/cm-build-routing.json remains configured=false: automatic/source fanout is still disabled and CM_BUILD_FANOUT_TOKEN is not configured. Direct operator dispatch is distinct from validating that fanout. Any later fanout token must be scoped to this builder only (Actions write, Contents read), never forwarded to source execution.
 

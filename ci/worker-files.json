@@ -18,6 +18,14 @@
     {
       "source": "ci/scripts/record_run.py",
       "destination": ".github/scripts/record_run.py"
+    },
+    {
+      "source": "ci/worker/cache-authority/action.yml",
+      "destination": ".github/actions/cache-authority/action.yml"
+    },
+    {
+      "source": "ci/worker/cache-authority/index.js",
+      "destination": ".github/actions/cache-authority/index.js"
     }
   ]
 }
