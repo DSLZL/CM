@@ -8,11 +8,13 @@
     "codex-rs/Cargo.lock": "319fbf5f0e3f1217f09e3bdeeae5bbd6b9da208e30495d7f5eb3102a76474812",
     "codex-rs/rust-toolchain.toml": "570656042681cfd8795403a455baf9a33035331a07db0645e866bbcea89a3d64"
   },
-  "host_release_id": "cm-host-0.1.0-p01",
-  "host_api_version": "0.0.0",
-  "capabilities": [],
+  "host_release_id": "cm-host-0.1.0-p02",
+  "host_api_version": "0.1.0",
+  "capabilities": [
+    "core.tool_parallel_eligibility.v1"
+  ],
   "protocol_source": "codex-rs/protocol",
-  "stage": "identity-baseline-before-loader",
+  "stage": "native-loader-single-eligibility",
   "official_asset": {
     "url": "https://github.com/openai/codex/releases/download/rust-v0.163.0/codex-x86_64-unknown-linux-musl.tar.gz",
     "sha256": "beb339e8ecd9ba057a6bb2dc81ad8ca474812edfbf0fc5056ca818797648dde4",
@@ -20,6 +22,32 @@
     "role": "Read-only official installation fixture; not a CM musl build or support claim"
   },
   "overlay": {
-    "crates/cm/src/host_identity.rs": "codex-rs/cli/src/cm_host_identity.rs"
-  }
+    "crates/cm/src/host_identity.rs": "codex-rs/cli/src/cm_host_identity.rs",
+    "crates/cm-abi/Cargo.toml": "codex-rs/cm-abi/Cargo.toml",
+    "crates/cm-abi/src/lib.rs": "codex-rs/cm-abi/src/lib.rs",
+    "crates/cm-abi/include/cm_mod_v1.h": "codex-rs/cm-abi/include/cm_mod_v1.h",
+    "crates/cm/Cargo.toml": "codex-rs/cm/Cargo.toml",
+    "crates/cm/src/loader/mod.rs": "codex-rs/cm/src/loader/mod.rs",
+    "crates/cm/src/loader/elf.rs": "codex-rs/cm/src/loader/elf.rs",
+    "crates/cm/src/loader/native.rs": "codex-rs/cm/src/loader/native.rs",
+    "crates/cm/src/lib.rs": "codex-rs/cm/src/lib.rs",
+    "crates/cm/src/tool_policy.rs": "codex-rs/cm/src/tool_policy.rs",
+    "crates/cm/examples/native_probe.rs": "codex-rs/cm/examples/native_probe.rs"
+  },
+  "patches": [
+    "cli.patch",
+    "native.patch",
+    "host-lock.patch"
+  ],
+  "patched_paths": [
+    "codex-rs/Cargo.toml",
+    "codex-rs/Cargo.lock",
+    "codex-rs/cli/Cargo.toml",
+    "codex-rs/cli/src/main.rs",
+    "codex-rs/core/Cargo.toml",
+    "codex-rs/core/src/tools/parallel.rs",
+    "codex-rs/app-server/src/message_processor.rs",
+    "codex-rs/exec/Cargo.toml",
+    "codex-rs/exec/src/lib.rs"
+  ]
 }

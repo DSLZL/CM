@@ -1,28 +1,63 @@
 diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 --- a/codex-rs/cli/src/main.rs
 +++ b/codex-rs/cli/src/main.rs
-@@ -53,6 +53,7 @@
+@@ -52,7 +52,8 @@
+ 
  #[cfg(any(target_os = "macos", target_os = "windows"))]
  mod app_cmd;
- mod cloud_config;
+-mod cloud_config;
++mod cloud_config;
 +mod cm_host_identity;
  mod daemon_install;
  mod daemon_telemetry;
  #[cfg(any(target_os = "macos", target_os = "windows"))]
-@@ -242,6 +243,9 @@
+@@ -241,7 +242,10 @@
+     ExecServer(ExecServerCommand),
  
      /// Inspect feature flags.
-     Features(FeaturesCli),
+-    Features(FeaturesCli),
++    Features(FeaturesCli),
 +
 +    /// Print this CM Host's embedded build identity as JSON.
 +    CmHostIdentity,
  }
  
  #[derive(Debug, Parser)]
-@@ -1886,6 +1890,14 @@
+@@ -1096,7 +1100,28 @@
+         profile_v2_for_subcommand(&interactive, subcommand)?;
+     }
+ 
+-    let open_agents_overview = matches!(&subcommand, Some(Subcommand::Agents(_)));
++    // Metadata/helper commands never execute Mod code. Other Core entry points
++    // must initialize explicitly; P02 admits Mods only for local embedded exec.
++    let cm_business = matches!(
++        &subcommand,
++        None | Some(Subcommand::Agents(_))
++            | Some(Subcommand::Exec(_))
++            | Some(Subcommand::Review(_))
++            | Some(Subcommand::Resume(_))
++            | Some(Subcommand::Fork(_))
++            | Some(Subcommand::Debug(_))
++            | Some(Subcommand::Cloud(_))
++    ) || matches!(&subcommand, Some(Subcommand::AppServer(command)) if command.subcommand.is_none());
++    let _cm_runtime = if cm_business {
++        let embedded_exec =
++            matches!(&subcommand, Some(Subcommand::Exec(command)) if command.command.is_none())
++                && root_remote.is_none();
++        Some(cm_runtime::initialize(&find_codex_home()?, embedded_exec)?)
++    } else {
++        None
++    };
++
++    let open_agents_overview = matches!(&subcommand, Some(Subcommand::Agents(_)));
+     match subcommand {
+         None | Some(Subcommand::Agents(_)) => {
+             prepend_config_flags(
+@@ -1886,7 +1911,15 @@
              cmd.strict_config |= root_strict_config;
              cmd.run(&arg0_paths, &root_config_overrides).await?;
          }
+-        Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
 +        Some(Subcommand::CmHostIdentity) => {
 +            reject_remote_mode_for_subcommand(
 +                root_remote.as_deref(),
@@ -31,13 +66,16 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 +            )?;
 +            cm_host_identity::print()?;
 +        }
-         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
++        Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
              FeaturesSubcommand::List => {
                  reject_remote_mode_for_subcommand(
-@@ -2353,6 +2365,7 @@
+                     root_remote.as_deref(),
+@@ -2352,7 +2385,8 @@
+         Some(Subcommand::Apply(_)) => Some("apply"),
          Some(Subcommand::ResponsesApiProxy(_)) => Some("responses-api-proxy"),
          Some(Subcommand::StdioToUds(_)) => Some("stdio-to-uds"),
-         Some(Subcommand::Features(_)) => Some("features"),
+-        Some(Subcommand::Features(_)) => Some("features"),
++        Some(Subcommand::Features(_)) => Some("features"),
 +        Some(Subcommand::CmHostIdentity) => Some("cm-host-identity"),
          Some(Subcommand::TcpTunnel(_)) => Some("tcp-tunnel"),
      }

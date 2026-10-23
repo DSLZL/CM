@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "configured": true,
-  "task_id": "CM-P01",
+  "task_id": "CM-P02",
   "required_checks": [
-    "CM-P01-AC01",
-    "CM-P01-AC02",
-    "CM-P01-AC03",
-    "CM-P01-AC04",
-    "CM-P01-AC05"
+    "CM-P02-AC01",
+    "CM-P02-AC02",
+    "CM-P02-AC03",
+    "CM-P02-AC04",
+    "CM-P02-AC05"
   ],
   "target": "x86_64-unknown-linux-gnu",
   "rust_toolchain": "1.95.0",
@@ -27,20 +27,34 @@
       "lockfile": "adapters/codex-e4568a3/host/codex-rs/Cargo.lock",
       "packages": [
         "codex-cli",
-        "codex-code-mode-host"
+        "codex-code-mode-host",
+        "cm-abi",
+        "cm-runtime"
       ],
       "features": [],
       "no_default_features": false
     }
   ],
-  "acceptance_script": "fixtures/host-baseline/acceptance.sh",
+  "acceptance_script": "fixtures/native-loader/acceptance.sh",
   "cargo_config_files": [
     "adapters/codex-e4568a3/host/codex-rs/.cargo/config.toml"
   ],
   "native_identity_files": [
     "adapters/codex-e4568a3/source.json",
     "adapters/codex-e4568a3/cli.patch",
-    "crates/cm/src/host_identity.rs"
+    "crates/cm/src/host_identity.rs",
+    "adapters/codex-e4568a3/native.patch",
+    "adapters/codex-e4568a3/host-lock.patch",
+    "crates/cm-abi/Cargo.toml",
+    "crates/cm-abi/src/lib.rs",
+    "crates/cm-abi/include/cm_mod_v1.h",
+    "crates/cm/Cargo.toml",
+    "crates/cm/src/loader/mod.rs",
+    "crates/cm/src/loader/elf.rs",
+    "crates/cm/src/loader/native.rs",
+    "crates/cm/src/lib.rs",
+    "crates/cm/src/tool_policy.rs",
+    "crates/cm/examples/native_probe.rs"
   ],
   "generated_native_identity_files": [
     "adapters/codex-e4568a3/inputs/native.json"

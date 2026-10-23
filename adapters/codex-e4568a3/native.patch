@@ -1,0 +1,312 @@
+diff --git a/codex-rs/Cargo.toml b/codex-rs/Cargo.toml
+--- a/codex-rs/Cargo.toml
++++ b/codex-rs/Cargo.toml
+@@ -1,5 +1,7 @@
+ [workspace]
+-members = [
++members = [
++    "cm",
++    "cm-abi",
+     "aws-auth",
+     "analytics",
+     "agent-graph-store",
+diff --git a/codex-rs/cli/Cargo.toml b/codex-rs/cli/Cargo.toml
+--- a/codex-rs/cli/Cargo.toml
++++ b/codex-rs/cli/Cargo.toml
+@@ -26,7 +26,8 @@
+ [lints]
+ workspace = true
+ 
+-[dependencies]
++[dependencies]
++cm-runtime = { path = "../cm" }
+ codex-utils-process = { workspace = true }
+ anyhow = { workspace = true }
+ chrono = { workspace = true }
+diff --git a/codex-rs/core/Cargo.toml b/codex-rs/core/Cargo.toml
+--- a/codex-rs/core/Cargo.toml
++++ b/codex-rs/core/Cargo.toml
+@@ -11,7 +11,8 @@
+ [lints]
+ workspace = true
+ 
+-[dependencies]
++[dependencies]
++cm-runtime = { path = "../cm" }
+ codex-utils-process = { workspace = true }
+ anyhow = { workspace = true }
+ arc-swap = { workspace = true }
+diff --git a/codex-rs/core/src/tools/parallel.rs b/codex-rs/core/src/tools/parallel.rs
+--- a/codex-rs/core/src/tools/parallel.rs
++++ b/codex-rs/core/src/tools/parallel.rs
+@@ -201,7 +201,29 @@
+ 
+         let mut dispatch_handle = AbortOnDropHandle::new(tokio::spawn(
+             async move {
+-                let _message_admission = message_admission?;
++                let _message_admission = message_admission?;
++                let cm_name = dispatch_call.tool_name.clone().with_default_namespace();
++                let cm_thread = session.thread_id.to_string();
++                let cm_decision = cm_runtime::tool_policy::evaluate(
++                    cm_runtime::tool_policy::Context {
++                        namespace: cm_name.namespace.as_deref().unwrap_or_default(),
++                        tool: &cm_name.name,
++                        call_id: &dispatch_call.call_id,
++                        thread_id: &cm_thread,
++                        turn_id: &turn.sub_id,
++                    },
++                    supports_parallel,
++                    || invocation_cancellation_token.is_cancelled(),
++                )
++                .map_err(|error| match error {
++                    cm_runtime::tool_policy::PolicyError::Cancelled => {
++                        FunctionCallError::RespondToModel("tool call cancelled".to_string())
++                    }
++                    cm_runtime::tool_policy::PolicyError::Failed(message) => {
++                        FunctionCallError::Fatal(message)
++                    }
++                })?;
++                let supports_parallel = cm_decision.supports_parallel;
+                 // Readiness and admission remain cancellable even when the handler must finish.
+                 let guard = async {
+                     if let Some(tool_runtime) = tool_runtime
+@@ -210,21 +232,37 @@
+                         readiness.await;
+                     }
+ 
+-                    if supports_parallel {
+-                        Either::Left(lock.read().await)
+-                    } else {
+-                        Either::Right(lock.write().await)
+-                    }
++                    if supports_parallel {
++                        cm_decision.record("read-gate-wait");
++                        Either::Left(lock.read().await)
++                    } else {
++                        cm_decision.record("write-gate-wait");
++                        let cm_write = lock.write();
++                        tokio::pin!(cm_write);
++                        let mut cm_wait_recorded = false;
++                        let cm_guard = std::future::poll_fn(|cx| {
++                            let state = std::future::Future::poll(cm_write.as_mut(), cx);
++                            if state.is_pending() && !cm_wait_recorded {
++                                cm_decision.record("write-gate-blocked");
++                                cm_wait_recorded = true;
++                            }
++                            state
++                        })
++                        .await;
++                        Either::Right(cm_guard)
++                    }
+                 }
+                 .or_cancel_tool(&invocation_cancellation_token)
+                 .await?;
+-                // Admission through the parallel-execution gate marks the end
++                cm_decision.record("gate-admitted");
++                // Admission through the parallel-execution gate marks the end
+                 // of dispatch waiting and the start of handler execution.
+                 if let Some(execution_started_at) = execution_started_at {
+                     let _ = execution_started_at.set(Instant::now());
+                 }
+ 
+-                let result = router
++                cm_decision.record("handler-started");
++                let result = router
+                     .dispatch_tool_call_with_state(
+                         session,
+                         step_context,
+@@ -236,7 +274,8 @@
+                     )
+                     .instrument(dispatch_span.clone())
+                     .await;
+-                drop(guard);
++                cm_decision.record("handler-finished");
++                drop(guard);
+                 // The sampling loop collects results in order only after its stream ends.
+                 // Record readiness here, before either caller encodes or collects the result.
+                 // A fatal error still propagates to the caller instead of producing a tool
+diff --git a/codex-rs/exec/Cargo.toml b/codex-rs/exec/Cargo.toml
+--- a/codex-rs/exec/Cargo.toml
++++ b/codex-rs/exec/Cargo.toml
+@@ -21,7 +21,8 @@
+ [lints]
+ workspace = true
+ 
+-[dependencies]
++[dependencies]
++cm-runtime = { path = "../cm" }
+ anyhow = { workspace = true }
+ clap = { workspace = true, features = ["derive"] }
+ codex-arg0 = { workspace = true }
+diff --git a/codex-rs/exec/src/lib.rs b/codex-rs/exec/src/lib.rs
+--- a/codex-rs/exec/src/lib.rs
++++ b/codex-rs/exec/src/lib.rs
+@@ -355,9 +355,9 @@
+     let cli_kv_overrides = match config_overrides.parse_overrides() {
+         Ok(v) => v,
+         #[allow(clippy::print_stderr)]
+-        Err(e) => {
+-            eprintln!("Error parsing -c overrides: {e}");
+-            std::process::exit(1);
++        Err(e) => {
++            eprintln!("Error parsing -c overrides: {e}");
++            cm_runtime::exit_after_shutdown(1);
+         }
+     };
+ 
+@@ -373,9 +373,9 @@
+     #[allow(clippy::print_stderr)]
+     let codex_home = match find_codex_home() {
+         Ok(codex_home) => codex_home,
+-        Err(err) => {
+-            eprintln!("Error finding codex home: {err}");
+-            std::process::exit(1);
++        Err(err) => {
++            eprintln!("Error finding codex home: {err}");
++            cm_runtime::exit_after_shutdown(1);
+         }
+     };
+     let user_config_path = config_profile_v2
+@@ -645,9 +645,9 @@
+         Ok(Some(err)) | Err(err) => {
+             eprintln!(
+                 "Error loading rules:\n{}",
+-                format_exec_policy_error_with_source(&err)
+-            );
+-            std::process::exit(1);
++                format_exec_policy_error_with_source(&err)
++            );
++            cm_runtime::exit_after_shutdown(1);
+         }
+     }
+ 
+@@ -655,9 +655,9 @@
+ 
+     if !is_workload_identity_selected()
+         && let Err(err) = enforce_login_restrictions(&config.auth_config()).await
+-    {
+-        eprintln!("{err}");
+-        std::process::exit(1);
++    {
++        eprintln!("{err}");
++        cm_runtime::exit_after_shutdown(1);
+     }
+ 
+     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+@@ -844,9 +844,9 @@
+                     format_config_error_with_source(config_error)
+                 );
+             } else {
+-                eprintln!("Error loading config.toml: {err}");
+-            }
+-            std::process::exit(1);
++                eprintln!("Error loading config.toml: {err}");
++            }
++            cm_runtime::exit_after_shutdown(1);
+         }
+     }
+ }
+@@ -1013,9 +1013,9 @@
+     if !skip_git_repo_check
+         && !dangerously_bypass_approvals_and_sandbox
+         && get_git_repo_root(&default_cwd).is_none()
+-    {
+-        eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
+-        std::process::exit(1);
++    {
++        eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
++        cm_runtime::exit_after_shutdown(1);
+     }
+ 
+     let mut request_ids = RequestIdSequencer::new();
+@@ -1400,9 +1400,9 @@
+     if let Err(err) = client.shutdown().await {
+         warn!("in-process app-server shutdown failed: {err}");
+     }
+-    event_processor.print_final_output();
+-    if error_seen {
+-        std::process::exit(1);
++    event_processor.print_final_output();
++    if error_seen {
++        cm_runtime::exit_after_shutdown(1);
+     }
+ 
+     Ok(())
+@@ -2233,10 +2233,10 @@
+         Ok(contents) => contents,
+         Err(err) => {
+             eprintln!(
+-                "Failed to read output schema file {}: {err}",
+-                path.display()
+-            );
+-            std::process::exit(1);
++                "Failed to read output schema file {}: {err}",
++                path.display()
++            );
++            cm_runtime::exit_after_shutdown(1);
+         }
+     };
+ 
+@@ -2244,10 +2244,10 @@
+         Ok(value) => Some(value),
+         Err(err) => {
+             eprintln!(
+-                "Output schema file {} is not valid JSON: {err}",
+-                path.display()
+-            );
+-            std::process::exit(1);
++                "Output schema file {} is not valid JSON: {err}",
++                path.display()
++            );
++            cm_runtime::exit_after_shutdown(1);
+         }
+     }
+ }
+@@ -2331,9 +2331,9 @@
+     match behavior {
+         StdinPromptBehavior::RequiredIfPiped if stdin_is_terminal => {
+             eprintln!(
+-                "No prompt provided. Either specify one as an argument or pipe the prompt into stdin."
+-            );
+-            std::process::exit(1);
++                "No prompt provided. Either specify one as an argument or pipe the prompt into stdin."
++            );
++            cm_runtime::exit_after_shutdown(1);
+         }
+         StdinPromptBehavior::RequiredIfPiped => {
+             eprintln!("Reading prompt from stdin...");
+@@ -2346,25 +2346,25 @@
+     }
+ 
+     let mut bytes = Vec::new();
+-    if let Err(e) = std::io::stdin().read_to_end(&mut bytes) {
+-        eprintln!("Failed to read prompt from stdin: {e}");
+-        std::process::exit(1);
++    if let Err(e) = std::io::stdin().read_to_end(&mut bytes) {
++        eprintln!("Failed to read prompt from stdin: {e}");
++        cm_runtime::exit_after_shutdown(1);
+     }
+ 
+     let buffer = match decode_prompt_bytes(&bytes) {
+         Ok(s) => s,
+-        Err(e) => {
+-            eprintln!("Failed to read prompt from stdin: {e}");
+-            std::process::exit(1);
++        Err(e) => {
++            eprintln!("Failed to read prompt from stdin: {e}");
++            cm_runtime::exit_after_shutdown(1);
+         }
+     };
+ 
+     if buffer.trim().is_empty() {
+         match behavior {
+             StdinPromptBehavior::OptionalAppend => None,
+-            StdinPromptBehavior::RequiredIfPiped | StdinPromptBehavior::Forced => {
+-                eprintln!("No prompt provided via stdin.");
+-                std::process::exit(1);
++            StdinPromptBehavior::RequiredIfPiped | StdinPromptBehavior::Forced => {
++                eprintln!("No prompt provided via stdin.");
++                cm_runtime::exit_after_shutdown(1);
+             }
+         }
+     } else {

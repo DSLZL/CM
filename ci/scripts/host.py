@@ -107,9 +107,12 @@ def prepare(root, logs):
         if sha(source_file(pristine, name)) != expected:
             raise RuntimeError("Original upstream bytes differ: " + name)
     execute(pristine, logs, "host-worktree", ["git", "worktree", "add", "--detach", str(host), pin["commit"]])
-    execute(host, logs, "host-overlay", ["git", "apply", str(root / ADAPTER / "cli.patch")])
+    for index, patch in enumerate(pin["patches"]):
+        execute(host, logs, "host-overlay-" + str(index), ["git", "apply", str(source_file(root, ADAPTER + "/" + patch))])
     for source, destination in pin["overlay"].items():
-        shutil.copyfile(source_file(root, source), host / destination)
+        mapped = host / destination
+        mapped.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_file(root, source), mapped)
     # Generated worker inputs never become publication inputs or .gitignore exceptions.
     with (root / ".git/info/exclude").open("a", encoding="utf-8") as stream:
         stream.write("\n/" + HOST + "/\n/" + ADAPTER + "/inputs/\n")
@@ -119,8 +122,7 @@ def prepare(root, logs):
     after = {entry["path"]: entry for entry in final}
     changes = [{"path": name, "original": before.get(name), "host": after.get(name)}
                for name in sorted(before.keys() | after.keys()) if before.get(name) != after.get(name)]
-    expected_changes = {"codex-rs/cli/src/main.rs", "codex-rs/app-server/src/message_processor.rs",
-                        *pin["overlay"].values()}
+    expected_changes = {*pin["patched_paths"], *pin["overlay"].values()}
     if {change["path"] for change in changes} != expected_changes:
         raise RuntimeError("Unexpected source changes outside the reviewed Host overlay")
     original_lock = pristine / "codex-rs/Cargo.lock"
@@ -131,7 +133,7 @@ def prepare(root, logs):
         "upstream_repository": pin["repository"], "upstream_commit": pin["commit"], "upstream_tree": pin["tree"],
         "original_manifest_sha256": manifest_digest(original), "host_manifest_sha256": manifest_digest(final),
         "original_lock_sha256": sha(original_lock), "host_lock_sha256": sha(final_lock),
-        "cm_patch_sha256": sha(root / ADAPTER / "cli.patch"),
+        "cm_patch_sha256": {name: sha(root / ADAPTER / name) for name in pin["patches"]},
         "overlay": {name: sha(root / name) for name in pin["overlay"]},
         "changes": changes,
         "lock_change": "none; original and final roles remain separate" if sha(original_lock) == sha(final_lock)
@@ -349,7 +351,7 @@ def official_fixture(root, fixture):
     return installation, binaries[0]
 
 
-def acceptance(root, logs):
+def acceptance(root, logs, report_name="acceptance.json"):
     artifact = Path(os.environ["CM_CI_ARTIFACT_DIR"])
     evidence = artifact / "evidence"
     evidence.mkdir(parents=True, exist_ok=True)
@@ -411,7 +413,7 @@ def acceptance(root, logs):
     helper = Path(os.environ["CARGO_TARGET_DIR"]) / "helper" / TARGET / cfg["build_profile"] / "bwrap"
     execute(root, logs, "host-package", [
         "python3", "-B", str(host / "scripts/build_codex_package.py"), "--target", TARGET,
-        "--package-dir", str(package), "--package-version", "0.1.0-p01", "--strip", "none",
+        "--package-dir", str(package), "--package-version", "0.1.0-p02", "--strip", "none",
         "--entrypoint-bin", str(executable), "--code-mode-host-bin", str(binaries / "codex-code-mode-host"),
         "--bwrap-bin", str(helper),
     ])
@@ -497,8 +499,8 @@ def acceptance(root, logs):
                     "official_fixture": {"release": "rust-v0.163.0", "version_output": official_version,
                                          "initialized_before_protection": True, **before},
                     "after": after, "cm_package_unchanged_sha256": package_before,
-                    "upstream_difference": "Pinned S0 plus CLI identity command, embedded inputs and a behavior-preserving "
-                                           "time-provider let-and-return cleanup for strict Clippy; no loader/capabilities yet. "
+                    "upstream_difference": "Pinned S0 plus the exact reviewed CM patch/overlay manifest, including native runtime "
+                                           "and its final Host lock; empty-Mod behavior is checked on this same H. "
                                            "The official release uses a distinct commit; no binary equivalence is claimed."}
     verify_sources(root, logs)
     package_manifest = manifest(package)
@@ -528,14 +530,15 @@ def acceptance(root, logs):
         ("CM-P01-AC03", "host-identity-rejection.json"), ("CM-P01-AC04", "host-baseline-build.json"),
         ("CM-P01-AC05", "host-empty-baseline.json"),
     ]
-    write(artifact / "acceptance.json", {
+    write(artifact / report_name, {
         "schema_version": 1, "task_id": "CM-P01", "status": "pass", "target": TARGET,
         "implementation_commit": git(root, "rev-parse", "HEAD"),
         "checks": [{"id": check, "status": "pass", "command": "python3 -B ci/scripts/host.py acceptance",
                     "evidence": ["evidence/" + name]} for check, name in checks],
     })
     shutil.copytree(evidence, logs / "acceptance-evidence")
-    shutil.copyfile(artifact / "acceptance.json", logs / "acceptance.json")
+    shutil.copyfile(artifact / report_name, logs / report_name)
+    return package, receipt
 
 
 def main():
