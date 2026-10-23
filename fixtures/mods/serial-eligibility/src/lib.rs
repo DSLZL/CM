@@ -135,9 +135,14 @@ unsafe extern "C" fn policy(
             "abort" => std::process::abort(),
             "segfault" => {
                 unsafe extern "C" {
+                    fn signal(signal: i32, handler: usize) -> usize;
                     fn raise(signal: i32) -> i32;
                 }
-                unsafe { raise(11) };
+                // Rust's stack-overflow handler returns after a synthetic SIGSEGV.
+                unsafe {
+                    signal(11, 0);
+                    raise(11);
+                }
                 return FAILED;
             }
             "hold" | "stuck" => {

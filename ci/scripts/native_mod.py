@@ -146,14 +146,14 @@ def child_case(directory, command, home, mode="", action="load", expected=0, ext
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
-    if expected == "nonzero":
-        assert code != 0, command
-    else:
-        assert code == expected, (command, code, (directory / "stderr.log").read_text())
     result = {"command": command, "return_code": code, "mode": mode, "action": action,
               "elapsed_seconds": time.monotonic() - started,
               "trace": rows(directory / "trace.jsonl"), "mod_events": rows(directory / "mod-events.jsonl")}
     host.write(directory / "result.json", result)
+    if expected == "nonzero":
+        assert code != 0, command
+    else:
+        assert code == expected, (command, code, (directory / "stderr.log").read_text())
     return result
 
 
@@ -463,8 +463,6 @@ def acceptance(root, logs):
         "checks": [{"id": check, "status": "pass", "command": "python3 -B ci/scripts/native_mod.py acceptance",
                     "evidence": ["evidence/" + name]} for check, name in CHECKS.items()],
     })
-    shutil.copytree(evidence, logs / "acceptance-evidence", dirs_exist_ok=True)
-    shutil.copyfile(artifact / "acceptance.json", logs / "acceptance.json")
 
 
 def main():
@@ -474,7 +472,25 @@ def main():
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     root = Path(os.environ["CM_SOURCE_DIR"]).resolve()
     logs = Path(os.environ["CM_CI_LOG_DIR"]).resolve()
-    {"build-fixtures": build_fixtures, "acceptance": acceptance}[sys.argv[1]](root, logs)
+    try:
+        {"build-fixtures": build_fixtures, "acceptance": acceptance}[sys.argv[1]](root, logs)
+    finally:
+        evidence = Path(os.environ["CM_CI_ARTIFACT_DIR"]) / "evidence"
+        for path in evidence.rglob("*"):
+            relative = path.relative_to(evidence)
+            if not path.is_file() or path.is_symlink() or path.suffix not in {".json", ".jsonl", ".log"}:
+                continue
+            if {"profile", "business-profile", "home"}.intersection(relative.parts):
+                continue
+            data = path.read_bytes()
+            data.decode("utf-8")
+            assert b"\0" not in data, "Binary data in lightweight evidence: " + str(relative)
+            destination = logs / "acceptance-evidence" / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(data)
+        report = evidence.parent / "acceptance.json"
+        if report.is_file():
+            shutil.copyfile(report, logs / "acceptance.json")
 
 
 if __name__ == "__main__":
