@@ -11,6 +11,12 @@
   ],
   "target": "x86_64-unknown-linux-gnu",
   "rust_toolchain": "1.95.0",
+  "upstream": {
+    "repository": "openai/codex",
+    "commit": "e4568a3538c9cab6627d64ff8cdfc7d98b79b7db",
+    "release_tag": "rust-v0.163.0",
+    "release_commit": "83086188ae0614bd882818ff1aa23f3194962012"
+  },
   "build_profile": "dev",
   "test_profile": "test",
   "clippy_profile": "dev",

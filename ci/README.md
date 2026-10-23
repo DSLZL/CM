@@ -15,7 +15,7 @@ CI uses the standalone scripts in ci/scripts and the worker workflows in ci/work
 | Source and dispatch control | DSLZL/CM | main |
 | Linux x64 execution and cache owner | DSLZL/CM-build-linux-x64 | main |
 
-.github/workflows/cm-source-check.yml checks the tracked CI payload, Python compilation and rejection of unconfigured product builds. It records the real hosted runner/run identity and retains logs. It does not validate local task documents or build products.
+.github/workflows/cm-source-check.yml checks the tracked CI payload, Python compilation and rejection of unconfigured product builds. It also verifies the fixed Codex commit, distinct release commit, Rust toolchain and four upstream build inputs declared in .github/cm-ci.json. It records the real hosted runner/run identity and retains logs/hashes. It does not validate local task documents or build products.
 
 .github/workflows/cm-linux-x64.yml provides manual dispatch and verifies an exact independent builder run. Automatic dispatch is deferred until product configuration and authority are ready. ci/worker-files.json maps four infrastructure inputs to their builder destinations; deploy both workflows and both scripts together in one reviewed builder commit. The builder checks out the exact source SHA temporarily.
 

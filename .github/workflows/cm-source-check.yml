@@ -85,6 +85,62 @@ jobs:
           print(f"CI payload: {len(paths)} files; no tracked path violates .gitignore")
           PY
 
+      - name: Verify pinned Codex build inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B - <<'PY' 2>&1 | tee "$CM_CI_LOG_DIR/baseline-check.log"
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import tomllib
+          import urllib.request
+
+          cfg = json.loads(Path(".github/cm-ci.json").read_text(encoding="utf-8"))
+          pins = cfg["upstream"]
+          assert pins["repository"] == "openai/codex"
+          assert all(re.fullmatch(r"[0-9a-f]{40}", pins[key]) for key in ("commit", "release_commit"))
+          assert re.fullmatch(r"rust-v[0-9]+\.[0-9]+\.[0-9]+", pins["release_tag"])
+          assert pins["commit"] != pins["release_commit"], "Research and release identities must stay distinct"
+
+          def api(path):
+              request = urllib.request.Request("https://api.github.com/repos/openai/codex/" + path,
+                  headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10",
+                           "Authorization": "Bearer " + os.environ["GH_TOKEN"]})
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          assert api("commits/" + pins["commit"])["sha"] == pins["commit"]
+          tag = api("git/ref/tags/" + pins["release_tag"])["object"]
+          assert tag["type"] == "tag", "The pinned release uses an annotated tag"
+          release = api("git/tags/" + tag["sha"])["object"]
+          assert release["type"] == "commit" and release["sha"] == pins["release_commit"]
+
+          inputs = {}
+          for relative in ("codex-rs/Cargo.toml", "codex-rs/Cargo.lock",
+                           "codex-rs/rust-toolchain.toml", "codex-rs/app-server/src/extensions.rs"):
+              url = "https://raw.githubusercontent.com/openai/codex/" + pins["commit"] + "/" + relative
+              with urllib.request.urlopen(url, timeout=30) as response:
+                  data = response.read()
+              assert data, "Pinned build input is empty: " + relative
+              inputs[relative] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+              if relative.endswith("rust-toolchain.toml"):
+                  assert tomllib.loads(data.decode())["toolchain"]["channel"] == cfg["rust_toolchain"]
+              if relative.endswith("/Cargo.toml"):
+                  assert tomllib.loads(data.decode())["workspace"]["members"], "Real workspace members required"
+              if relative.endswith("/extensions.rs"):
+                  assert "thread_extensions" in data.decode(), "Pinned composition source is missing"
+          logs = Path(os.environ["CM_CI_LOG_DIR"])
+          ci = json.loads((logs / "run-metadata.json").read_text(encoding="utf-8"))["ci"]
+          result = {"schema_version": 1, "status": "pass", "upstream": pins, "release_tag_object": tag["sha"],
+                    "rust_toolchain": cfg["rust_toolchain"], "inputs": inputs,
+                    "source_sha": ci["source_sha"], "run_id": ci["run_id"], "run_attempt": ci["run_attempt"]}
+          (logs / "baseline-check.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+          print("Verified fixed Codex commit, distinct release, toolchain and four build inputs")
+          PY
+
       - name: Record final job status
         if: always() && steps.checkout.outcome == 'success'
         env:
