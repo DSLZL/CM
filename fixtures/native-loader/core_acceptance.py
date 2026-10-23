@@ -251,6 +251,10 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
             assert any(row["event"] == "policy-failed" for row in rows)
             assert not any(row["event"] == "handler-started" for row in rows)
             assert not tools.has("A:entered")
+            assert len(requests) == 1, "Fatal policy error must not retry the model"
+            assert sum(row["event"] == "userdata-released" for row in rows) == 1
+            assert sum(row["event"] == "stopped" for row in rows) == 1
+            assert "panicked at" not in stderr.read_text(), "Policy failure must use the normal turn error path"
         elif scenario == "parallel":
             assert set(decisions) == {"cm-a", "cm-b"}
             assert all(row["detail"]["original_parallel"] is True for row in decisions.values())

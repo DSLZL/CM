@@ -310,3 +310,39 @@ diff --git a/codex-rs/exec/src/lib.rs b/codex-rs/exec/src/lib.rs
              }
          }
      } else {
+diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
+--- a/codex-rs/core/src/session/turn.rs
++++ b/codex-rs/core/src/session/turn.rs
+@@ -2577,8 +2577,9 @@
+     sess: Arc<Session>,
+     step_context: &StepContext,
+ ) -> CodexResult<()> {
+-    let turn_context = &step_context.turn;
+-    while let Some(res) = in_flight.next().await {
++    let turn_context = &step_context.turn;
++    let mut result = Ok(());
++    while let Some(res) = in_flight.next().await {
+         match res {
+             Ok(envelope) => {
+                 mark_thread_memory_mode_polluted_if_external_context(
+@@ -2594,12 +2595,14 @@
+                 )
+                 .await;
+             }
+-            Err(err) => {
+-                error_or_panic(format!("in-flight tool future failed during drain: {err}"));
+-            }
+-        }
+-    }
+-    Ok(())
++            Err(err) => {
++                if result.is_ok() {
++                    result = Err(err);
++                }
++            }
++        }
++    }
++    result
+ }
+ 
+ fn assign_missing_streamed_response_item_id(
