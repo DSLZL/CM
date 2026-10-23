@@ -442,7 +442,7 @@ def acceptance(root, logs):
     reports = {
         "native-loader-entry.json": {"producer": mod, "positive_control": positive,
             "same_host_after_all_cases": frozen["executable_sha256"], "same_mod_payload": mod["payload_sha256"]},
-        "internal-seam-proof.json": {"empty": empty, "mod": active, "removed": removed,
+        "internal-seam-proof.json": {"empty": empty, "with_mod": active, "removed": removed,
             "callback_failure_no_fallback": policy_failure, "cancel_wait": cancelled_wait, "cancel_execute": cancelled_exec,
             "seam": "ToolCallRuntime::handle_tool_call_with_source -> original per-runtime RWLock -> builtin exec_command"},
         "native-abi-contract.json": {"entry_cases": entry, "callback_cases": callbacks, "lifetime_cases": lifetimes,
@@ -456,6 +456,7 @@ def acceptance(root, logs):
             "callback_failure": policy_failure, "hot_unload": False},
     }
     for name, result in reports.items():
+        assert common.keys().isdisjoint(result), "Report overwrites common provenance: " + name
         host.write(evidence / name, {"status": "pass", **common, **result})
     host.write(artifact / "acceptance.json", {
         "schema_version": 1, "task_id": "CM-P02", "status": "pass", "target": TARGET,
