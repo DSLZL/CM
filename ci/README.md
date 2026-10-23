@@ -10,7 +10,7 @@ The source workflow checks tracked paths against .gitignore, payload/worker mapp
 
 ## P01 Host producer
 
-adapters/codex-e4568a3/source.json pins the original upstream commit/tree, original input hashes and separate official release reference. The worker preserves the complete pristine Git snapshot, creates a separate Host worktree, applies cli.patch and copies crates/cm/src/host_identity.rs into the real Codex CLI. No full upstream development tree is published in CM or bundled with the Host.
+adapters/codex-e4568a3/source.json pins the original upstream commit/tree, original input hashes and separate official release reference. The worker preserves the complete pristine Git snapshot, creates a separate Host worktree, applies cli.patch and copies crates/cm/src/host_identity.rs into the real Codex CLI. The patch also removes one redundant time-provider let/return block in app-server for strict Clippy; the exact three-file Host delta and its hashes are recorded separately from pristine S0. No full upstream development tree is published in CM or bundled with the Host.
 
 The builder runs host.py prepare before loading real Cargo mappings, then installs Rust 1.95.0 and native dependencies. host.py native reuses the pinned upstream V8 resolver and records verified V8 bytes, actual Rust binaries, native tools/packages/files. Generated native identity files are required during cache identification, after materialization; they are not publication inputs. Cargo runs from its manifest directory so workspace .cargo configuration is discovered.
 

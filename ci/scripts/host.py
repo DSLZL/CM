@@ -119,9 +119,10 @@ def prepare(root, logs):
     after = {entry["path"]: entry for entry in final}
     changes = [{"path": name, "original": before.get(name), "host": after.get(name)}
                for name in sorted(before.keys() | after.keys()) if before.get(name) != after.get(name)]
-    expected_changes = {"codex-rs/cli/src/main.rs", *pin["overlay"].values()}
+    expected_changes = {"codex-rs/cli/src/main.rs", "codex-rs/app-server/src/message_processor.rs",
+                        *pin["overlay"].values()}
     if {change["path"] for change in changes} != expected_changes:
-        raise RuntimeError("Unexpected source changes outside the reviewed CLI overlay")
+        raise RuntimeError("Unexpected source changes outside the reviewed Host overlay")
     original_lock = pristine / "codex-rs/Cargo.lock"
     final_lock = host / "codex-rs/Cargo.lock"
     shutil.copyfile(original_lock, logs / "original-Cargo.lock")
@@ -481,7 +482,8 @@ def acceptance(root, logs):
                     "core_tests": "command_canonicalization::tests: 4 actual upstream behavior tests",
                     "official_fixture": {"release": "rust-v0.163.0", "version_output": official_version, **before},
                     "after": after, "cm_package_unchanged_sha256": package_before,
-                    "upstream_difference": "Pinned S0 plus CLI identity command and embedded inputs; no loader/capabilities yet. "
+                    "upstream_difference": "Pinned S0 plus CLI identity command, embedded inputs and a behavior-preserving "
+                                           "time-provider let-and-return cleanup for strict Clippy; no loader/capabilities yet. "
                                            "The official release uses a distinct commit; no binary equivalence is claimed."}
     verify_sources(root, logs)
     package_manifest = manifest(package)
