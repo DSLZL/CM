@@ -203,6 +203,14 @@ def helper(root, logs):
         execute(root, logs, "helper-" + phase, args, env)
     binary = target / TARGET / cfg["build_profile"] / "bwrap"
     execute(root, logs, "helper-version", [str(binary), "--version"], env)
+    execute(root, logs, "helper-sandbox", [str(binary), "--unshare-user", "--unshare-net", "--unshare-pid",
+            "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--", "/bin/true"], env)
+    sysctls = {name: Path("/proc/sys/" + name.replace(".", "/")).read_text().strip() for name in (
+        "kernel.unprivileged_userns_clone", "kernel.apparmor_restrict_unprivileged_userns", "user.max_user_namespaces"
+    )}
+    write(logs / "host-sandbox-environment.json", {"status": "pass", "kernel_release": os.uname().release,
+          "sysctls": sysctls, "helper_sha256": sha(binary), "probe_log": "helper-sandbox.log",
+          "scope": "Upstream ephemeral CI userns setup; stock AppArmor compatibility is not qualified"})
     inputs = {"sha256": sha(binary), "target": TARGET, "profile": cfg["build_profile"],
               "package": "codex-bwrap", "integrity_env": "CODEX_BWRAP_SHA256"}
     write(logs / "host-helper.json", inputs)
@@ -306,6 +314,7 @@ def seal(root, logs):
 
 def require_build_success(events):
     required = {unit + "-" + phase for unit in ("helper", "host") for phase in ("fmt", "clippy", "test", "build")}
+    required.add("helper-sandbox")
     successful = {event["phase"] for event in events if event["return_code"] == 0}
     if not required <= successful or any(
         event["return_code"] != 0 for event in events if event["phase"] in required
@@ -497,6 +506,7 @@ def acceptance(root, logs):
                "workflow_repository": os.environ["GITHUB_REPOSITORY"], "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"],
                "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
                "job": os.environ["GITHUB_JOB"], "target": TARGET,
+               "sandbox_environment": read(logs / "host-sandbox-environment.json"),
                "cache_repository": os.environ["GITHUB_REPOSITORY"], "cache_mode": os.environ["ACTIONS_CACHE_MODE"],
                "cache_evidence": "Worker cache observations and always-run sccache statistics accompany this artifact"}
     write(evidence / "host-package-manifest.json", package_manifest)
@@ -504,7 +514,8 @@ def acceptance(root, logs):
     write(evidence / "host-empty-baseline.json", baseline)
     for name in ("host-source-provenance.json", "host-identity.json", "host-cm-inputs.json",
                  "host-source-manifest.json", "original-source-manifest.json", "original-Cargo.lock", "host-Cargo.lock",
-                 "host-input-identity.json", "host-identity-rejection.json", "host-helper.json"):
+                 "host-input-identity.json", "host-identity-rejection.json", "host-helper.json",
+                 "host-sandbox-environment.json"):
         shutil.copyfile(logs / name, evidence / name)
     checks = [
         ("CM-P01-AC01", "host-input-identity.json"), ("CM-P01-AC02", "host-source-provenance.json"),
@@ -517,6 +528,8 @@ def acceptance(root, logs):
         "checks": [{"id": check, "status": "pass", "command": "python3 -B ci/scripts/host.py acceptance",
                     "evidence": ["evidence/" + name]} for check, name in checks],
     })
+    shutil.copytree(evidence, logs / "acceptance-evidence")
+    shutil.copyfile(artifact / "acceptance.json", logs / "acceptance.json")
 
 
 def main():

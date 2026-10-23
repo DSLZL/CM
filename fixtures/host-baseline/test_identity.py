@@ -98,12 +98,13 @@ class IdentityTests(unittest.TestCase):
     def test_failed_or_incomplete_build_cannot_select_stale_outputs(self):
         events = [{"phase": unit + "-" + phase, "return_code": 0}
                   for unit in ("helper", "host") for phase in ("fmt", "clippy", "test", "build")]
+        events.append({"phase": "helper-sandbox", "return_code": 0})
         host.require_build_success(events)
-        with self.assertRaises(RuntimeError):
-            host.require_build_success(events[:-1])
-        events[-1]["return_code"] = 1
-        with self.assertRaises(RuntimeError):
-            host.require_build_success(events)
+        for index, event in enumerate(events):
+            with self.assertRaises(RuntimeError):
+                host.require_build_success(events[:index] + events[index + 1:])
+            with self.assertRaises(RuntimeError):
+                host.require_build_success(events[:index] + [{**event, "return_code": 1}] + events[index + 1:])
 
     def test_shared_cargo_entry_uses_manifest_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
