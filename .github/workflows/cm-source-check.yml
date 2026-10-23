@@ -1,0 +1,101 @@
+name: CM source CI checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+cache-mode: none
+
+concurrency:
+  group: cm-source-check-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  source-ci:
+    name: CI infrastructure / Linux x64 / GitHub hosted
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CM_EXECUTION_ROLE: source_checks
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Set runner temporary path
+        run: echo "CM_CI_LOG_DIR=$RUNNER_TEMP/cm-source-evidence" >> "$GITHUB_ENV"
+
+      - name: Checkout CM
+        id: checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Require hosted Linux x64 and record run identity
+        run: python3 -B ci/scripts/record_run.py "$CM_CI_LOG_DIR"
+
+      - name: Check publication boundary and CI scripts
+        run: |
+          python3 -B - <<'PY' 2>&1 | tee "$CM_CI_LOG_DIR/source-check.log"
+          import json
+          import os
+          from pathlib import Path
+          import py_compile
+          import subprocess
+          import sys
+          import tempfile
+
+          sys.path.insert(0, "ci/scripts")
+          from linux_ci import load_config
+          from record_run import require_hosted_linux
+          require_hosted_linux()
+
+          tracked_bytes = subprocess.check_output(["git", "ls-files", "-z"])
+          tracked = set(tracked_bytes.decode().rstrip("\0").split("\0"))
+          ignored = subprocess.run(["git", "check-ignore", "--no-index", "--stdin", "-z"],
+                                   input=tracked_bytes, capture_output=True)
+          assert ignored.returncode in (0, 1), ignored.stderr.decode()
+          assert not ignored.stdout, "Tracked files violate .gitignore: " + repr(ignored.stdout)
+          paths = Path("ci/source-files.txt").read_text(encoding="utf-8").splitlines()
+          assert paths and len(paths) == len(set(paths)), "Publication paths must be unique"
+          missing = [p for p in paths if p not in tracked or not Path(p).is_file() or Path(p).is_symlink()]
+          assert not missing, f"Required CI files missing from this commit: {missing}"
+          worker = json.loads(Path("ci/worker-files.json").read_text(encoding="utf-8"))
+          assert len(worker["files"]) == 4
+          assert all(row["source"] in paths for row in worker["files"]), "Worker inputs must be published"
+
+          for script in Path("ci/scripts").glob("*.py"):
+              py_compile.compile(str(script), cfile=str(Path(os.environ["RUNNER_TEMP"]) / (script.stem + ".pyc")),
+                                 doraise=True)
+          with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as directory:
+              fixture = Path(directory)
+              (fixture / ".github").mkdir()
+              (fixture / ".github/cm-ci.json").write_text(
+                  json.dumps({"schema_version": 1, "configured": False}), encoding="utf-8")
+              try:
+                  load_config(fixture)
+              except RuntimeError:
+                  pass
+              else:
+                  raise AssertionError("Unconfigured product builds must fail closed")
+          print(f"CI payload: {len(paths)} files; no tracked path violates .gitignore")
+          PY
+
+      - name: Record final job status
+        if: always() && steps.checkout.outcome == 'success'
+        env:
+          CM_JOB_STATUS: ${{ job.status }}
+        run: python3 -B ci/scripts/record_run.py "$CM_CI_LOG_DIR"
+
+      - name: Retain source CI logs and run identity
+        if: always() && steps.checkout.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cm-source-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CM_CI_LOG_DIR }}
+          if-no-files-found: error
+          retention-days: 14

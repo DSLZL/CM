@@ -1,0 +1,55 @@
+# Install in CM. This is a dispatcher, not a native build job.
+# Enable automatic dispatch only after product mappings and credentials are ready.
+name: CM dispatch Linux x64
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact CM commit; empty selects this trusted control revision
+        required: false
+        type: string
+      cache_epoch:
+        description: Reviewed cache namespace epoch
+        required: true
+        default: v1
+        type: string
+
+permissions:
+  contents: read
+cache-mode: none
+
+concurrency:
+  group: cm-linux-dispatch-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CM_SOURCE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      CM_REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
+      CM_REQUESTED_CACHE_EPOCH: ${{ inputs.cache_epoch || 'v1' }}
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Set runner temporary path
+        run: echo "CM_DISPATCH_EVIDENCE_DIR=$RUNNER_TEMP/cm-dispatch-evidence" >> "$GITHUB_ENV"
+      - name: Checkout the exact trusted control workflow revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Dispatch and verify the exact independent worker run
+        env:
+          CM_BUILD_FANOUT_TOKEN: ${{ secrets.CM_BUILD_FANOUT_TOKEN }}
+        run: python3 -B ci/scripts/dispatch_build.py
+      - name: Retain child request run and verified artifact identities
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cm-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CM_DISPATCH_EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 14

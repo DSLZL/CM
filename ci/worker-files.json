@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "configured": true,
+  "repository": "DSLZL/CM-build-linux-x64",
+  "files": [
+    {
+      "source": "ci/worker/build.yml",
+      "destination": ".github/workflows/build.yml"
+    },
+    {
+      "source": "ci/worker/linux-recipe.yml",
+      "destination": ".github/workflows/linux-recipe.yml"
+    },
+    {
+      "source": "ci/scripts/worker_policy.py",
+      "destination": ".github/scripts/worker_policy.py"
+    },
+    {
+      "source": "ci/scripts/record_run.py",
+      "destination": ".github/scripts/record_run.py"
+    }
+  ]
+}

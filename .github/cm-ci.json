@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "configured": false,
+  "task_id": "CM-P01",
+  "required_checks": [
+    "CM-P01-AC01",
+    "CM-P01-AC02",
+    "CM-P01-AC03",
+    "CM-P01-AC04",
+    "CM-P01-AC05"
+  ],
+  "target": "x86_64-unknown-linux-gnu",
+  "rust_toolchain": "1.95.0",
+  "build_profile": "dev",
+  "test_profile": "test",
+  "clippy_profile": "dev",
+  "units": [],
+  "acceptance_script": null,
+  "cargo_config_files": [],
+  "native_identity_files": [],
+  "native_tools": [
+    "cc",
+    "c++",
+    "ar",
+    "ld"
+  ],
+  "compile_env": {}
+}
