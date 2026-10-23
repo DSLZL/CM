@@ -444,11 +444,18 @@ def acceptance(root, logs):
         (profile / "config.toml").write_text('model = "official-profile-sentinel"\n')
         (profile / "auth.json").write_text('{"fixture":true}\n')
         installation, official = official_fixture(root, fixture)
-        before = {"installation": manifest_digest(manifest(installation)), "profile": manifest_digest(manifest(profile))}
         cm_home = fixture / "cm-home"
         cm_home.mkdir()
         env = {**os.environ, "CODEX_HOME": str(cm_home), "HOME": str(fixture / "home")}
         Path(env["HOME"]).mkdir()
+        official_version = subprocess.check_output(
+            [str(official), "--version"], env={**env, "CODEX_HOME": str(profile)}, text=True).strip()
+        if "0.163.0" not in official_version:
+            raise RuntimeError("Official reference version differs from its pinned release")
+        # Official startup creates its own helper files before CM's protection interval.
+        before_files = {"installation": manifest(installation), "profile": manifest(profile)}
+        write(logs / "official-fixture-before.json", before_files)
+        before = {name: manifest_digest(entries) for name, entries in before_files.items()}
         verify_binary(package / "bin/codex", identity, env)
         if sha(package / "codex-resources/bwrap") != identity["inputs"]["helper"]["sha256"]:
             raise RuntimeError("Packaged helper differs from the compiled-in integrity digest")
@@ -471,10 +478,6 @@ def acceptance(root, logs):
             if expected not in (logs / (label + ".log")).read_text():
                 raise RuntimeError("Packaged CLI baseline output mismatch: " + label)
             behavior[" ".join(args)] = sha(logs / (label + ".log"))
-        official_version = subprocess.check_output(
-            [str(official), "--version"], env={**env, "CODEX_HOME": str(profile)}, text=True).strip()
-        if "0.163.0" not in official_version:
-            raise RuntimeError("Official reference version differs from its pinned release")
         core_args = ["cargo", "test", "--locked", "--manifest-path", cfg["units"][0]["manifest"],
                      "--target", TARGET, "--profile", cfg["test_profile"], "-p", "codex-core", "--lib",
                      "command_canonicalization::tests::", "--", "--nocapture"]
@@ -482,14 +485,17 @@ def acceptance(root, logs):
                 {**os.environ, "CARGO_TARGET_DIR": str(binaries.parents[1]), "CODEX_HOME": str(cm_home)})
         if "4 passed; 0 failed" not in (logs / "host-core-baseline.log").read_text():
             raise RuntimeError("Representative unchanged Core behavior tests did not actually run")
-        after = {"installation": manifest_digest(manifest(installation)), "profile": manifest_digest(manifest(profile))}
+        after_files = {"installation": manifest(installation), "profile": manifest(profile)}
+        write(logs / "official-fixture-after.json", after_files)
+        after = {name: manifest_digest(entries) for name, entries in after_files.items()}
         if before != after:
             raise RuntimeError("Official installation/profile was modified")
         if manifest_digest(manifest(package)) != package_before:
             raise RuntimeError("The same packaged CM Host was modified during its no-Mod baseline")
         baseline = {"host_build_id": identity["host_build_id"], "mod_set": [], "behavior_logs_sha256": behavior,
                     "core_tests": "command_canonicalization::tests: 4 actual upstream behavior tests",
-                    "official_fixture": {"release": "rust-v0.163.0", "version_output": official_version, **before},
+                    "official_fixture": {"release": "rust-v0.163.0", "version_output": official_version,
+                                         "initialized_before_protection": True, **before},
                     "after": after, "cm_package_unchanged_sha256": package_before,
                     "upstream_difference": "Pinned S0 plus CLI identity command, embedded inputs and a behavior-preserving "
                                            "time-provider let-and-return cleanup for strict Clippy; no loader/capabilities yet. "
@@ -515,7 +521,7 @@ def acceptance(root, logs):
     for name in ("host-source-provenance.json", "host-identity.json", "host-cm-inputs.json",
                  "host-source-manifest.json", "original-source-manifest.json", "original-Cargo.lock", "host-Cargo.lock",
                  "host-input-identity.json", "host-identity-rejection.json", "host-helper.json",
-                 "host-sandbox-environment.json"):
+                 "host-sandbox-environment.json", "official-fixture-before.json", "official-fixture-after.json"):
         shutil.copyfile(logs / name, evidence / name)
     checks = [
         ("CM-P01-AC01", "host-input-identity.json"), ("CM-P01-AC02", "host-source-provenance.json"),
