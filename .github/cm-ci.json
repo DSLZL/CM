@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "configured": false,
+  "configured": true,
   "task_id": "CM-P01",
   "required_checks": [
     "CM-P01-AC01",
@@ -17,18 +17,49 @@
     "release_tag": "rust-v0.163.0",
     "release_commit": "83086188ae0614bd882818ff1aa23f3194962012"
   },
-  "build_profile": "dev",
-  "test_profile": "test",
-  "clippy_profile": "dev",
-  "units": [],
-  "acceptance_script": null,
-  "cargo_config_files": [],
-  "native_identity_files": [],
+  "build_profile": "dev-small",
+  "test_profile": "dev-small",
+  "clippy_profile": "dev-small",
+  "units": [
+    {
+      "id": "host",
+      "manifest": "adapters/codex-e4568a3/host/codex-rs/Cargo.toml",
+      "lockfile": "adapters/codex-e4568a3/host/codex-rs/Cargo.lock",
+      "packages": [
+        "codex-cli",
+        "codex-code-mode-host"
+      ],
+      "features": [],
+      "no_default_features": false
+    }
+  ],
+  "acceptance_script": "fixtures/host-baseline/acceptance.sh",
+  "cargo_config_files": [
+    "adapters/codex-e4568a3/host/codex-rs/.cargo/config.toml"
+  ],
+  "native_identity_files": [
+    "adapters/codex-e4568a3/source.json",
+    "adapters/codex-e4568a3/cli.patch",
+    "crates/cm/src/host_identity.rs"
+  ],
+  "generated_native_identity_files": [
+    "adapters/codex-e4568a3/inputs/native.json"
+  ],
   "native_tools": [
     "cc",
     "c++",
     "ar",
-    "ld"
+    "ld",
+    "pkg-config",
+    "sccache"
   ],
-  "compile_env": {}
+  "compile_env": {
+    "RUSTFLAGS": "-C target-cpu=x86-64",
+    "CC": "gcc",
+    "CXX": "g++",
+    "AR": "ar",
+    "LD": "ld",
+    "CFLAGS": "-march=x86-64 -mtune=generic",
+    "CXXFLAGS": "-march=x86-64 -mtune=generic"
+  }
 }

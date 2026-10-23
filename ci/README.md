@@ -1,38 +1,37 @@
 # CM Linux x64 CI
 
-Source CI runs independently of product builds. Product dispatch remains disabled until real Cargo units, acceptance code and scoped dispatch credentials are configured.
+CM source is DSLZL/CM; the independent hosted ubuntu-24.04 X64 producer and cache owner is DSLZL/CM-build-linux-x64. The only CM target is x86_64-unknown-linux-gnu. All compilation, checks, tests, smoke runs and experiments execute there. Local work edits and reviews source/configuration and lightweight evidence.
 
-## Publication boundary
+## Publication inputs
 
-Follow the existing .gitignore without exceptions. ci/source-files.txt lists the required project CI files only. Ignored development directories, task packs, reports, specs, journals and local assistant settings stay local. Do not force-add them or copy them into another publication directory. The existing journal-only .gitattributes is outside this CI payload.
+ci/source-files.txt lists the exact reviewed public source inputs. Existing .gitignore rules remain unchanged. Assistant settings, task packs, reports, specs and journals stay local; do not force-add or copy them into public directories. The journal-only .gitattributes is outside this payload.
 
-CI uses the standalone scripts in ci/scripts and the worker workflows in ci/worker. There is no development-task runtime dependency. The source workflow checks every tracked path against .gitignore using git check-ignore --no-index, including files that might have been force-added.
+The source workflow checks tracked paths against .gitignore, payload/worker mappings, CI Python compilation, unconfigured rejection and the pinned upstream/release baseline. It does not execute product acceptance or read ignored developer materials. New product results require a new exact source commit and independent worker run.
 
-## Source and independent builder
+## P01 Host producer
 
-| Role | Repository | Default branch |
-| --- | --- | --- |
-| Source and dispatch control | DSLZL/CM | main |
-| Linux x64 execution and cache owner | DSLZL/CM-build-linux-x64 | main |
+adapters/codex-e4568a3/source.json pins the original upstream commit/tree, original input hashes and separate official release reference. The worker preserves the complete pristine Git snapshot, creates a separate Host worktree, applies cli.patch and copies crates/cm/src/host_identity.rs into the real Codex CLI. No full upstream development tree is published in CM or bundled with the Host.
 
-.github/workflows/cm-source-check.yml checks the tracked CI payload, Python compilation and rejection of unconfigured product builds. It also verifies the fixed Codex commit, distinct release commit, Rust toolchain and four upstream build inputs declared in .github/cm-ci.json. It records the real hosted runner/run identity and retains logs/hashes. It does not validate local task documents or build products.
+The builder runs host.py prepare before loading real Cargo mappings, then installs Rust 1.95.0 and native dependencies. host.py native reuses the pinned upstream V8 resolver and records verified V8 bytes, actual Rust binaries, native tools/packages/files. Generated native identity files are required during cache identification, after materialization; they are not publication inputs. Cargo runs from its manifest directory so workspace .cargo configuration is discovered.
 
-.github/workflows/cm-linux-x64.yml provides manual dispatch and verifies an exact independent builder run. Automatic dispatch is deferred until product configuration and authority are ready. ci/worker-files.json maps four infrastructure inputs to their builder destinations; deploy both workflows and both scripts together in one reviewed builder commit. The builder checks out the exact source SHA temporarily.
+The worker first builds/checks bwrap in a fresh helper unit and supplies its actual digest through upstream CODEX_BWRAP_SHA256. host.py seal refuses existing Host target artifacts and canonicalizes full source/overlay, final lock, actual tools/native/V8, target, profiles, features and flags. Relative paths and file bytes/modes enter the identity; traversal order, mtime and temporary roots do not. User Mod selections are absent. Host inputs, including the compiled helper digest, are sealed before Host compilation and embedded through CM_HOST_IDENTITY_JSON; codex cm-host-identity reads the compiled-in JSON. host_release_id, host_api_version, protocol_contract_id and host_build_id have separate roles. Final artifact_sha256 is recorded externally after packaging, avoiding self-reference.
 
-All compilation, checks, tests and experiments run only on GitHub-hosted ubuntu-24.04 / X64, target x86_64-unknown-linux-gnu. Local work edits source, configuration and lightweight evidence only.
+The current candidate is a dev-small P01 identity baseline. Capabilities are empty and the loader/Mod ABI is not implemented. P02 must produce a new candidate after actual adapter/loader integration. A package pass cannot establish whole-product or release readiness.
 
-## Configuration and cache boundaries
+The worker runs producer rejection tests, fmt, clippy with warnings denied, actual package tests and locked Host/helper builds. Acceptance checks the real embedded identity, source/final lock drift and stale-output refusal. It reuses the fixed upstream package builder with the just-built CLI, code-mode host and bwrap, and its verified ripgrep resource. The package includes identity, original license notices and a resolved dependency/license inventory. Required ELF/system-baseline and complete license-compliance gates remain later work.
 
-.github/cm-build-routing.json and .github/cm-ci.json deliberately retain configured=false. Repository/branch names are recorded; product Cargo units, acceptance code and dispatch credentials are not wired. These states must fail closed. Complete the real mappings and authority before enabling product execution.
+The same Host runs representative CLI commands and four unchanged Core command-approval canonicalization tests (command_canonicalization::tests) with an empty Mod set. A separately downloaded, digest-pinned official rust-v0.163.0 installation and isolated official profile must remain byte-identical. That release only publishes a musl Linux reference; this read-only fixture does not add a CM musl target. Its release commit differs from the pinned development source, so binary equivalence is not claimed. Full no-compiler Mod combinations remain later gates.
 
-The builder requires fixed CM_SOURCE_REPOSITORY and CM_BUILDER_REPOSITORY variables. Source dispatch requires CM_BUILD_FANOUT_TOKEN scoped to the selected builder with Actions: write and Contents: read; never forward it to product code. This route currently supports public source checkout; private-source credentials are not wired.
+## Independent dispatch and cache authority
 
-Only the verified source default-branch HEAD and trusted builder workflow may write builder-owned caches. Other reviewed source SHAs use platform-enforced cache-mode: read; source checks and dispatch use none. Retain separate Cargo download and runner-directory sccache archives, Linux/X64/GNU/compiler/config-qualified keys, RUSTC_WRAPPER=sccache, CARGO_INCREMENTAL=0 and SCCACHE_GHA_ENABLED=false. Do not archive target/ or copy cache archives across repositories.
+ci/worker-files.json maps four infrastructure inputs to the builder. Both worker workflows and both policy/record scripts deploy together at an exact reviewed builder commit. The worker fixes its source/builder identities in reviewed YAML and temporarily checks out the requested exact public CM SHA. No repository variables or copied gh credentials are needed for an operator dispatch.
 
-Receipts bind the exact source SHA, independent workflow SHA, run/attempt/job and actual artifact digest. Cache hits do not replace checks; CI provenance alone does not establish product acceptance. User installation consumes prebuilt Host/Mod binaries without dispatching builds.
+.github/cm-ci.json now maps the concrete P01 producer. .github/cm-build-routing.json remains configured=false: automatic/source fanout is still disabled and CM_BUILD_FANOUT_TOKEN is not configured. Direct operator dispatch is distinct from validating that fanout. Any later fanout token must be scoped to this builder only (Actions write, Contents read), never forwarded to source execution.
 
-## Unrun gates
+Only the verified source default-branch HEAD and trusted worker revision may write builder-owned caches. Other reviewed source SHAs get platform-enforced cache-mode read. Preflight, source checks and receipts use none. Cargo downloads and sccache snapshots remain separate; compiler/target/config/native-qualified keys never cross platforms or repositories. RUSTC_WRAPPER=sccache, CARGO_INCREMENTAL=0 and SCCACHE_GHA_ENABLED=false remain required; target/ is not cached.
 
-Source infrastructure check results are recorded by the source workflow for the exact commit. Variables/credentials, dispatcher/builder execution and product/runtime acceptance remain pending. No local test, lint, compile or simulated CI is permitted. Local task-pack acceptance remains not_run/blocked because its ignored inputs are not published.
+Worker logs retain sccache statistics and restore/save observations. Product receipts bind source/workflow repositories and SHAs, target, run/attempt/job, Host/package/helper hashes and final GitHub upload digest. Cache hits do not replace validation. Artifacts and caches remain remote; developer machines only collect lightweight evidence.
 
-References: [context availability](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability), [cache access modes](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching), [workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event).
+## Current verification boundary
+
+This implementation has not run yet. All five P01 product acceptance criteria remain not_run until the exact published commit completes the real independent worker and its evidence is reviewed. No local build, test, lint or simulated CI is permitted. Publication and dispatch follow the current explicit session authorization; credentials require separate concrete authorization.

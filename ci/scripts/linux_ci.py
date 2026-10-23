@@ -81,6 +81,12 @@ def load_config(root):
 
 
 def execute(root, logs, label, args, env=None):
+    if args[0] == "cargo" and "--manifest-path" in args:
+        args = list(args)
+        index = args.index("--manifest-path") + 1
+        manifest = source_file(root, args[index])
+        root = manifest.parent
+        args[index] = manifest.name
     started = time.monotonic()
     print("CM CI:", " ".join(args), flush=True)
     logfile = logs / (label + ".log")
@@ -121,7 +127,9 @@ def identify(root, logs, cfg):
         real = Path(path).resolve()
         native[tool] = {"path": str(real), "sha256": digest(real.read_bytes()),
                         "version": subprocess.check_output([path, "--version"], text=True).strip()}
-    files = {p: digest(source_file(root, p).read_bytes()) for p in cfg.get("native_identity_files", []) + cfg.get("cargo_config_files", [])}
+    files = {p: digest(source_file(root, p).read_bytes()) for p in
+             cfg.get("native_identity_files", []) + cfg.get("cargo_config_files", []) +
+             cfg.get("generated_native_identity_files", [])}
     profiles = {u["manifest"]: tomllib.loads(source_file(root, u["manifest"]).read_text(encoding="utf-8")).get("profile", {}) for u in cfg["units"]}
     flags = {key: value for key, value in os.environ.items() if key in {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CC", "CXX", "AR", "LD", "CFLAGS", "CXXFLAGS", "LDFLAGS"} or key.startswith(("CARGO_PROFILE_", "CARGO_TARGET_")) and key != "CARGO_TARGET_DIR"}
     compatibility = {"rustc": rustc, "cargo": cargo, "target": TARGET, "sccache": sccache,

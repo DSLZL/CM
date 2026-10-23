@@ -1,0 +1,26 @@
+diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
+--- a/codex-rs/cli/src/main.rs
++++ b/codex-rs/cli/src/main.rs
+@@ -55,2 +55,3 @@
+ mod cloud_config;
++mod cm_host_identity;
+ mod daemon_install;
+@@ -243,2 +244,5 @@
+     /// Inspect feature flags.
+     Features(FeaturesCli),
++
++    /// Print this CM Host's embedded build identity as JSON.
++    CmHostIdentity,
+@@ -1889,1 +1893,9 @@
++        Some(Subcommand::CmHostIdentity) => {
++            reject_remote_mode_for_subcommand(
++                root_remote.as_deref(),
++                root_remote_auth_token_env.as_deref(),
++                "cm-host-identity",
++            )?;
++            cm_host_identity::print()?;
++        }
+         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
+@@ -2355,1 +2367,2 @@
+         Some(Subcommand::Features(_)) => Some("features"),
++        Some(Subcommand::CmHostIdentity) => Some("cm-host-identity"),

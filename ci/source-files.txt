@@ -12,3 +12,9 @@ ci/source-files.txt
 ci/worker-files.json
 ci/worker/build.yml
 ci/worker/linux-recipe.yml
+adapters/codex-e4568a3/source.json
+adapters/codex-e4568a3/cli.patch
+crates/cm/src/host_identity.rs
+ci/scripts/host.py
+fixtures/host-baseline/acceptance.sh
+fixtures/host-baseline/test_identity.py
