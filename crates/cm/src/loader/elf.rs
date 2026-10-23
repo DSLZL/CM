@@ -13,7 +13,8 @@ fn bytes(data: &[u8], offset: u64, size: u64) -> Result<&[u8], String> {
     let end = offset.checked_add(size).ok_or("ELF range overflow")?;
     let start = usize::try_from(offset).map_err(|_| "ELF offset overflow")?;
     let end = usize::try_from(end).map_err(|_| "ELF size overflow")?;
-    data.get(start..end).ok_or_else(|| "truncated ELF range".into())
+    data.get(start..end)
+        .ok_or_else(|| "truncated ELF range".into())
 }
 
 fn number(data: &[u8], offset: u64, size: u64) -> Result<u64, String> {
@@ -80,7 +81,9 @@ pub(super) fn check(data: &[u8]) -> Result<Vec<String>, String> {
             10 if table_size.is_none() => table_size = Some(value),
             5 | 10 => return Err("duplicate ELF string-table declaration".into()),
             15 | 29 | 0x7fff_fffd | 0x7fff_ffff | 0x6fff_fefb | 0x6fff_fefc => {
-                return Err("P02 rejects RPATH/RUNPATH, filters and native audit resolution".into());
+                return Err(
+                    "P02 rejects RPATH/RUNPATH, filters and native audit resolution".into(),
+                );
             }
             _ => {}
         }
@@ -115,8 +118,7 @@ pub(super) fn check(data: &[u8]) -> Result<Vec<String>, String> {
                 .iter()
                 .position(|byte| *byte == 0)
                 .ok_or("unterminated ELF dependency")?;
-            let name =
-                std::str::from_utf8(&tail[..end]).map_err(|_| "non-UTF8 ELF dependency")?;
+            let name = std::str::from_utf8(&tail[..end]).map_err(|_| "non-UTF8 ELF dependency")?;
             if !SYSTEM_LIBRARIES.contains(&name) {
                 return Err(format!("unsupported native dependency: {name}"));
             }

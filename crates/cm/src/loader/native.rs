@@ -39,7 +39,10 @@ fn invoke(stage: &str, call: impl FnOnce(*mut ErrorBuffer) -> u32) -> Result<(),
         || error.capacity != ERROR_CAPACITY as u64
         || error.len > ERROR_CAPACITY as u64
     {
-        return Err(LoadError::native(stage, "invalid error buffer/length/canary"));
+        return Err(LoadError::native(
+            stage,
+            "invalid error buffer/length/canary",
+        ));
     }
     let message = std::str::from_utf8(&storage.data[..error.len as usize])
         .map_err(|_| LoadError::native(stage, "error buffer is not UTF-8"))?;

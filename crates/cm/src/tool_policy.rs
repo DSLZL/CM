@@ -159,8 +159,7 @@ mod tests {
             turn_id: "default-turn",
         };
         assert!(super::evaluate(context(), true, || false).is_err());
-        let home =
-            std::env::temp_dir().join(format!("cm-empty-runtime-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("cm-empty-runtime-{}", std::process::id()));
         let guard = crate::initialize(&home, true).unwrap();
         for original in [false, true] {
             let decision = super::evaluate(context(), original, || false).unwrap();
@@ -173,6 +172,9 @@ mod tests {
         ));
         guard.finish().unwrap();
         assert!(super::evaluate(context(), true, || false).is_err());
-        assert!(crate::initialize(&home, true).is_err(), "shutdown is terminal");
+        assert!(
+            crate::initialize(&home, true).is_err(),
+            "shutdown is terminal"
+        );
     }
 }

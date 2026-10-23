@@ -209,7 +209,10 @@ fn shutdown() -> Result<(), LoadError> {
     if let Some(mut registration) = state.registration.take() {
         registration.release()?;
     }
-    event("stopped", json!({"active_tools": 0, "libraries_unloaded": 0}));
+    event(
+        "stopped",
+        json!({"active_tools": 0, "libraries_unloaded": 0}),
+    );
     Ok(())
 }
 
@@ -231,7 +234,9 @@ impl ShutdownGuard {
 
 impl Drop for ShutdownGuard {
     fn drop(&mut self) {
-        if self.active && let Err(error) = shutdown() {
+        if self.active
+            && let Err(error) = shutdown()
+        {
             eprintln!("{error}");
             std::process::exit(1);
         }
@@ -246,7 +251,11 @@ mod tests {
     fn native_entry_rejects_reentry_and_does_not_require_init_thread_tls() {
         let outer = NativeCall::enter().unwrap();
         assert!(NativeCall::enter().is_err());
-        assert!(std::thread::spawn(|| NativeCall::enter().is_ok()).join().unwrap());
+        assert!(
+            std::thread::spawn(|| NativeCall::enter().is_ok())
+                .join()
+                .unwrap()
+        );
         drop(outer);
         assert!(NativeCall::enter().is_ok());
     }

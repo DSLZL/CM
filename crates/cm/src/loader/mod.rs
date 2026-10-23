@@ -151,10 +151,7 @@ fn sealed_snapshot(bytes: &[u8]) -> Result<File, String> {
         )
     };
     if fd < 0 {
-        return Err(format!(
-            "memfd_create: {}",
-            std::io::Error::last_os_error()
-        ));
+        return Err(format!("memfd_create: {}", std::io::Error::last_os_error()));
     }
     let mut writer = unsafe { File::from_raw_fd(fd) };
     writer.write_all(bytes).map_err(|e| e.to_string())?;
@@ -169,7 +166,9 @@ fn sealed_snapshot(bytes: &[u8]) -> Result<File, String> {
     }
     let mut snapshot = File::open(format!("/proc/self/fd/{fd}")).map_err(|e| e.to_string())?;
     let mut sealed = Vec::new();
-    snapshot.read_to_end(&mut sealed).map_err(|e| e.to_string())?;
+    snapshot
+        .read_to_end(&mut sealed)
+        .map_err(|e| e.to_string())?;
     if hash(&sealed) != hash(bytes) {
         return Err("sealed payload identity drift".into());
     }
@@ -258,8 +257,8 @@ mod tests {
         let replacement =
             fs::read(std::env::var_os("CM_P02_REPLACEMENT_LIBRARY").unwrap()).unwrap();
         for replace in [true, false] {
-            let home = std::env::temp_dir()
-                .join(format!("cm-snapshot-{}-{replace}", std::process::id()));
+            let home =
+                std::env::temp_dir().join(format!("cm-snapshot-{}-{replace}", std::process::id()));
             let package = home.join("mods/fixture");
             fs::create_dir_all(&package).unwrap();
             let path = package.join("payload.so");

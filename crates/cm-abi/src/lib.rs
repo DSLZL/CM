@@ -88,8 +88,12 @@ pub struct PolicyOutput {
 }
 
 pub type Init = unsafe extern "C" fn(*mut *mut c_void, *mut ErrorBuffer) -> u32;
-pub type Policy =
-    unsafe extern "C" fn(*mut c_void, *const PolicyInput, *mut PolicyOutput, *mut ErrorBuffer) -> u32;
+pub type Policy = unsafe extern "C" fn(
+    *mut c_void,
+    *const PolicyInput,
+    *mut PolicyOutput,
+    *mut ErrorBuffer,
+) -> u32;
 pub type Release = unsafe extern "C" fn(*mut c_void, *mut ErrorBuffer) -> u32;
 
 #[repr(C)]
