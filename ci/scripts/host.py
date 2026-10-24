@@ -194,6 +194,8 @@ def native(root, logs):
 
 def helper(root, logs):
     cfg = load_config(root)
+    execute(root, logs, "composition-shared-fmt", ["rustfmt", "--edition", "2024", "--check",
+            str(source_file(root, "fixtures/mods/composition-common.rs"))])
     target = Path(os.environ["CARGO_TARGET_DIR"]) / "helper"
     if target.exists():
         raise RuntimeError("Refusing old helper target artifacts")

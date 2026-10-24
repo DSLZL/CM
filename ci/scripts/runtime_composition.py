@@ -97,8 +97,10 @@ def pair(home, mods, variant_a="normal", variant_b="normal", dependency=True, ex
 def build_mods(root, logs, package, frozen):
     cfg = load_config(root)
     assert host.sha(package / "bin/codex") == frozen["executable_sha256"]
-    execute(root, logs, "composition-shared-fmt", ["rustfmt", "--edition", "2024", "--check",
-            str(root / "fixtures/mods/composition-common.rs")])
+    events = [json.loads(line) for line in (logs / "phase-results.jsonl").read_text().splitlines()]
+    assert any(
+        row["phase"] == "composition-shared-fmt" and row["return_code"] == 0 for row in events
+    ), "Shared fixture formatting must pass before the Host build"
     mods = {}
     for role, variants in (
         ("a", ("normal", "replacement", "short", "init-fail", "release-fail", "max-table", *INVALID)),

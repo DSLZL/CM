@@ -70,7 +70,8 @@ unsafe fn view<'a>(value: Bytes) -> &'a str {
     if value.len == 0 {
         return "";
     }
-    std::str::from_utf8(unsafe { std::slice::from_raw_parts(value.data, value.len as usize) }).unwrap()
+    std::str::from_utf8(unsafe { std::slice::from_raw_parts(value.data, value.len as usize) })
+        .unwrap()
 }
 
 fn mode() -> String {
@@ -123,17 +124,16 @@ unsafe extern "C" fn init(
         for index in 0..context.resource_count as usize {
             let resource = unsafe { &*context.resources.add(index) };
             assert_eq!(unsafe { view(resource.path) }, "data.txt");
-            assert_eq!(unsafe { view(resource.content) }, "composition-resource-v1\n");
+            assert_eq!(
+                unsafe { view(resource.content) },
+                "composition-resource-v1\n"
+            );
         }
         if context.config.len != 0 {
             assert!(unsafe { view(context.config) }.contains("format_version"));
         }
         unsafe { *userdata = Box::into_raw(Box::new(0_u64)).cast() };
-        if VARIANT == "init-fail" {
-            FAILED
-        } else {
-            OK
-        }
+        if VARIANT == "init-fail" { FAILED } else { OK }
     })
 }
 
@@ -182,7 +182,8 @@ unsafe extern "C" fn hook(
             v2::AROUND => {
                 if mode == "hold" || mode == "stuck" {
                     let mut socket =
-                        UnixStream::connect(std::env::var_os("CM_FIXTURE_SOCKET").unwrap()).unwrap();
+                        UnixStream::connect(std::env::var_os("CM_FIXTURE_SOCKET").unwrap())
+                            .unwrap();
                     socket.write_all(b"callback-entered\n").unwrap();
                     let mut release = [0];
                     socket.read_exact(&mut release).unwrap();
@@ -222,7 +223,8 @@ unsafe extern "C" fn hook(
                         return OK;
                     }
                     if status != OK
-                        && !["repeat", "stale", "wrong-thread", "cross-owner"].contains(&mode.as_str())
+                        && !["repeat", "stale", "wrong-thread", "cross-owner"]
+                            .contains(&mode.as_str())
                     {
                         return status;
                     }
