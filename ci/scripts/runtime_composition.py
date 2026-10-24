@@ -266,9 +266,20 @@ def determinism(cases, probe, mods):
     for index, reverse in enumerate((False, True)):
         home = cases / ("permutation-" + str(index)) / "profile"
         pair(home, mods, reverse=reverse)
-        observed = [entry.name for entry in os.scandir(home / "mods")]
+        insertion = ["compose-b", "compose-a"] if reverse else ["compose-a", "compose-b"]
+        # Filesystem enumeration need not follow insertion; also reverse the loader's path-to-ID order.
+        for slot, owner in enumerate(insertion):
+            (home / "mods" / owner).rename(home / "mods" / ("slot-" + str(slot)))
+        entries = list(os.scandir(home / "mods"))
+        observed = [tomllib.loads((Path(entry.path) / "mod.toml").read_text())["id"]
+                    for entry in sorted(entries, key=lambda entry: entry.name)]
+        assert observed == insertion
         result = plan_result(cases / ("plan-permutation-" + str(index)), probe, home)
+        result["insertion_order"] = insertion
+        result["observed_directory_entries"] = [entry.name for entry in entries]
+        result["discovery_order_kind"] = "loader_inventory_package_path"
         result["observed_discovery_order"] = observed
+        host.write(cases / ("plan-permutation-" + str(index)) / "result.json", result)
         results.append(result)
     assert results[0]["observed_discovery_order"] != results[1]["observed_discovery_order"]
     assert results[0]["plan"] == results[1]["plan"]
