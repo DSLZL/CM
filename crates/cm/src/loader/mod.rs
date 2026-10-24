@@ -150,19 +150,35 @@ pub(crate) fn executable_hash(path: &Path) -> Result<String, String> {
     if !metadata.is_file() {
         return Err("Host executable must be a regular file".into());
     }
-    let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let length = file.read(&mut buffer).map_err(|e| e.to_string())?;
-        if length == 0 {
-            break;
+    let mut previous = None;
+    for _ in 0..2 {
+        let mut digest = Sha256::new();
+        loop {
+            let length = file.read(&mut buffer).map_err(|e| e.to_string())?;
+            if length == 0 {
+                break;
+            }
+            digest.update(&buffer[..length]);
         }
-        digest.update(&buffer[..length]);
+        let current = file.metadata().map_err(|e| e.to_string())?;
+        if metadata.dev() != current.dev()
+            || metadata.ino() != current.ino()
+            || metadata.len() != current.len()
+            || metadata.mtime() != current.mtime()
+            || metadata.mtime_nsec() != current.mtime_nsec()
+        {
+            return Err("Host executable changed while hashing".into());
+        }
+        let digest = format!("{:x}", digest.finalize());
+        if file_stamp(&metadata) == file_stamp(&current) || previous.as_ref() == Some(&digest) {
+            return Ok(digest);
+        }
+        // Linking a shared executable changes ctime; confirm its bytes with a second full read.
+        previous = Some(digest);
+        file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     }
-    if file_stamp(&metadata) != file_stamp(&file.metadata().map_err(|e| e.to_string())?) {
-        return Err("Host executable changed while hashing".into());
-    }
-    Ok(format!("{:x}", digest.finalize()))
+    Err("Host executable changed while hashing".into())
 }
 
 fn open_at(parent: &File, name: &std::ffi::OsStr, directory: bool) -> Result<File, String> {
@@ -503,6 +519,25 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"verified bytes");
         let mut writer = fs::OpenOptions::new().write(true).open(path).unwrap();
         assert!(writer.write_all(b"changed bytes!").is_err());
+    }
+
+    #[test]
+    fn executable_hash_tracks_bytes_across_link_changes() {
+        let base = std::env::temp_dir().join(format!("cm-executable-hash-{}", std::process::id()));
+        fs::create_dir_all(&base).unwrap();
+        let path = base.join("host");
+        let link = base.join("installation");
+        fs::write(&path, b"original executable").unwrap();
+        let expected = hash(b"original executable");
+        assert_eq!(executable_hash(&path).unwrap(), expected);
+        fs::hard_link(&path, &link).unwrap();
+        assert_eq!(executable_hash(&path).unwrap(), expected);
+        fs::remove_file(&link).unwrap();
+        assert_eq!(executable_hash(&path).unwrap(), expected);
+        fs::write(&path, b"modified executable").unwrap();
+        assert_ne!(executable_hash(&path).unwrap(), expected);
+        fs::remove_file(&path).unwrap();
+        fs::remove_dir(&base).unwrap();
     }
 
     #[test]
