@@ -413,7 +413,7 @@ def acceptance(root, logs, report_name="acceptance.json"):
     helper = Path(os.environ["CARGO_TARGET_DIR"]) / "helper" / TARGET / cfg["build_profile"] / "bwrap"
     execute(root, logs, "host-package", [
         "python3", "-B", str(host / "scripts/build_codex_package.py"), "--target", TARGET,
-        "--package-dir", str(package), "--package-version", "0.1.0-p02", "--strip", "none",
+        "--package-dir", str(package), "--package-version", "0.2.0-p03", "--strip", "none",
         "--entrypoint-bin", str(executable), "--code-mode-host-bin", str(binaries / "codex-code-mode-host"),
         "--bwrap-bin", str(helper),
     ])

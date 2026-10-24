@@ -126,8 +126,10 @@ def cli_arguments(binary, cwd, endpoint):
             "-m", "gpt-5.4", "CM deterministic local acceptance"]
 
 
-def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mode=""):
+def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mode="",
+             extra_env=None, command_prefix=(), expected_releases=1, restrictive=None):
     require_hosted_linux()
+    restrictive = mod_loaded if restrictive is None else restrictive
     directory.mkdir(parents=True)
     trace = directory / "core-trace.jsonl"
     tools = Tools(directory / "tools.sock")
@@ -204,9 +206,10 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
     env = {**os.environ, "CODEX_HOME": str(home), "CODEX_SQLITE_HOME": str(home),
            "HOME": str(directory / "home"), "CM_NATIVE_TRACE": str(trace),
            "CM_FIXTURE_MODE": mode, "CM_FIXTURE_EVENTS": str(directory / "mod-events.jsonl"),
-           "CODEX_API_KEY": "cm-controlled-fixture-only", "OPENAI_API_KEY": "cm-controlled-fixture-only"}
+           "CODEX_API_KEY": "cm-controlled-fixture-only", "OPENAI_API_KEY": "cm-controlled-fixture-only",
+           **(extra_env or {})}
     Path(env["HOME"]).mkdir()
-    args = cli_arguments(binary, directory, endpoint)
+    args = [*command_prefix, *cli_arguments(binary, directory, endpoint)]
     stdout = directory / "stdout.jsonl"
     stderr = directory / "stderr.log"
     return_code = None
@@ -223,7 +226,7 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
                 if scenario == "cancel-executing":
                     await_barrier(initial_response_sent.is_set, process, "provider finished A response")
                     process.send_signal(signal.SIGINT)
-                elif mod_loaded:
+                elif restrictive:
                     await_barrier(lambda: any(row["event"] == "write-gate-blocked"
                         and row["detail"]["call_id"] == "cm-b" for row in trace_rows(trace)),
                         process, "actual B write-gate blocked")
@@ -252,19 +255,19 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
             assert not any(row["event"] == "handler-started" for row in rows)
             assert not tools.has("A:entered")
             assert len(requests) == 1, "Fatal policy error must not retry the model"
-            assert sum(row["event"] == "userdata-released" for row in rows) == 1
+            assert sum(row["event"] == "userdata-released" for row in rows) == expected_releases
             assert sum(row["event"] == "stopped" for row in rows) == 1
             assert "panicked at" not in stderr.read_text(), "Policy failure must use the normal turn error path"
         elif scenario == "parallel":
             assert set(decisions) == {"cm-a", "cm-b"}
             assert all(row["detail"]["original_parallel"] is True for row in decisions.values())
-            assert all(row["detail"]["final_parallel"] is (not mod_loaded) for row in decisions.values())
-            assert all(row["detail"]["decision"] == (1 if mod_loaded else 0) for row in decisions.values())
+            assert all(row["detail"]["final_parallel"] is (not restrictive) for row in decisions.values())
+            assert all(row["detail"]["decision"] == (1 if restrictive else 0) for row in decisions.values())
             ids = {(row["detail"]["thread_id"], row["detail"]["turn_id"]) for row in decisions.values()}
             assert len(ids) == 1 and all(all(value for value in pair) for pair in ids)
             def sequence(event, call_id):
                 return next(row["seq"] for row in rows if row["event"] == event and row["detail"]["call_id"] == call_id)
-            if mod_loaded:
+            if restrictive:
                 assert sequence("handler-finished", "cm-a") < sequence("gate-admitted", "cm-b")
                 assert sequence("gate-admitted", "cm-b") < sequence("handler-started", "cm-b")
                 assert all(row["detail"]["guard"] == "write" for row in decisions.values())
@@ -290,6 +293,12 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
+        if not (directory / "result.json").exists():
+            write(directory / "result.json", {
+                "status": "failed", "command": args,
+                "return_code": process_ref[0].returncode if process_ref else None,
+                "events": tools.events, "provider_requests": requests, "errors": errors,
+            })
         server.shutdown()
         server.server_close()
         server_thread.join(timeout=2)

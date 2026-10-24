@@ -30,11 +30,28 @@ fn policy(cancelled: &AtomicBool) -> Result<(), String> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let home = PathBuf::from(std::env::args_os().nth(1).ok_or("missing profile")?);
-    let guard = cm_runtime::initialize(&home, true)?;
     let action = std::env::var("CM_PROBE_ACTION").unwrap_or_else(|_| "load".into());
+    let guard = if matches!(action.as_str(), "plan" | "prepared") {
+        let executable = std::env::var_os("CM_PLAN_EXECUTABLE")
+            .map(PathBuf::from).unwrap_or_else(|| "/proc/self/exe".into());
+        let prepared = cm_runtime::runtime_plan::prepare_for_executable(&home, &executable)?;
+        println!("{}", serde_json::json!({
+            "plan": prepared.plan(), "plan_sha256": prepared.plan().sha256(),
+        }));
+        std::io::Write::flush(&mut std::io::stdout())?;
+        if action == "plan" { return Ok(()); }
+        let mut command = String::new();
+        std::io::stdin().lock().read_line(&mut command)?;
+        if command.trim() != "commit" { return Err("missing commit barrier command".into()); }
+        cm_runtime::initialize_prepared(prepared, true)?
+    } else { cm_runtime::initialize(&home, true)? };
     match action.as_str() {
-        "load" => {}
+        "load" | "prepared" => {}
         "policy" => policy(&AtomicBool::new(false))?,
+        "twice" => {
+            policy(&AtomicBool::new(false))?;
+            policy(&AtomicBool::new(false))?;
+        }
         "cancel-before" => {
             let error = policy(&AtomicBool::new(true)).unwrap_err();
             if error != "Cancelled" {

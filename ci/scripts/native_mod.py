@@ -146,6 +146,11 @@ def child_case(directory, command, home, mode="", action="load", expected=0, ext
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
+            host.write(directory / "result.json", {
+                "command": command, "return_code": process.returncode, "mode": mode, "action": action,
+                "elapsed_seconds": time.monotonic() - started,
+                "trace": rows(directory / "trace.jsonl"), "mod_events": rows(directory / "mod-events.jsonl"),
+            })
     result = {"command": command, "return_code": code, "mode": mode, "action": action,
               "elapsed_seconds": time.monotonic() - started,
               "trace": rows(directory / "trace.jsonl"), "mod_events": rows(directory / "mod-events.jsonl")}
@@ -369,10 +374,10 @@ def lifetime(cases, probe, library):
     return results
 
 
-def acceptance(root, logs):
+def acceptance(root, logs, report_name="acceptance.json"):
     cfg = load_config(root)
     artifact = Path(os.environ["CM_CI_ARTIFACT_DIR"])
-    package, frozen = host.acceptance(root, logs, report_name="host-baseline-acceptance.json")
+    package, frozen = host.acceptance(root, logs, report_name="p01-baseline-acceptance.json")
     execute(root, logs, "native-mod-producer", ["python3", "-B", str(root / "ci/scripts/native_mod.py"), "build-fixtures"])
     mod = host.read(logs / "mod-build.json")
     library = Path(mod["payload"])
@@ -458,12 +463,14 @@ def acceptance(root, logs):
     for name, result in reports.items():
         assert common.keys().isdisjoint(result), "Report overwrites common provenance: " + name
         host.write(evidence / name, {"status": "pass", **common, **result})
-    host.write(artifact / "acceptance.json", {
+    host.write(artifact / report_name, {
         "schema_version": 1, "task_id": "CM-P02", "status": "pass", "target": TARGET,
         "implementation_commit": common["source_sha"],
         "checks": [{"id": check, "status": "pass", "command": "python3 -B ci/scripts/native_mod.py acceptance",
                     "evidence": ["evidence/" + name]} for check, name in CHECKS.items()],
     })
+
+    return package, frozen, mod, probe
 
 
 def main():

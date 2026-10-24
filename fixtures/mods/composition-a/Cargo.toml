@@ -1,0 +1,19 @@
+[package]
+name = "cm-composition-a-fixture"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[workspace]
+members = ["."]
+
+[dependencies]
+cm-abi = { path = "../../../crates/cm-abi" }
+
+[profile.dev-small]
+inherits = "dev"
+debug = 0
+panic = "unwind"

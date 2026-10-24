@@ -18,15 +18,17 @@ The ephemeral runner uses the pinned upstream CI user-namespace setup (unprivile
 
 The worker runs producer rejection tests, fmt, clippy with warnings denied, actual package tests and locked Host/helper builds. Acceptance reuses the fixed upstream package builder with the just-built CLI, code-mode host and bwrap, and its verified ripgrep resource. The package includes identity, original license notices and a resolved dependency/license inventory. Required ELF/system-baseline and complete license-compliance gates remain later work.
 
-The P01 regression producer still checks the real embedded identity, stale-output refusal, source/final lock drift, representative CLI commands and four unchanged Core command-approval canonicalization tests. Its new run report is host-baseline-acceptance.json; the P02 root report uses only the five P02 checks. The historical accepted P01 run does not accept a new Host revision.
+The P01 regression producer still checks the real embedded identity, stale-output refusal, source/final lock drift, representative CLI commands and four unchanged Core command-approval canonicalization tests. Its new run report is p01-baseline-acceptance.json. The P02 regression report is p02-baseline-acceptance.json; the root report uses only the six P03 checks. The historical accepted P01 run does not accept a new Host revision.
 
 A separately downloaded, digest-pinned official rust-v0.163.0 installation and isolated official profile must remain byte-identical throughout the baseline. The official CLI initializes its own helper files before the protected snapshot; complete before/after manifests are retained. That release only publishes a musl Linux reference; this read-only fixture does not add a CM musl target. Its release commit differs from the pinned development source, so binary equivalence is not claimed.
 
-## P02 native loader candidate
+## Runtime collection candidate (P03)
 
-The current source is a dev-small candidate, pending its exact independent Actions run. It implements only core.tool_parallel_eligibility.v1 for one Mod on a new local embedded codex exec session. The same packaged Host is exercised with no Mod, an installed Mod and that Mod removed. Remote/LocalDaemon and other session paths with a Core Mod fail before native execution; metadata commands never load Mods. TUI, resume/fork, Code Mode qualification, multiple Mods and a complete public SDK/manager remain later work.
+The current source is a dev-small candidate, pending its exact independent Actions run. It composes multiple precompiled policies at the existing core.tool_parallel_eligibility.v1 seam on new local embedded codex exec sessions. The original eligibility query runs before the policy chain; final_parallel = original_parallel AND NOT force_serial. The chain does not wrap the asynchronous tool handler. Remote/LocalDaemon and other session paths with selected Core Mods fail before native execution; metadata commands never load Mods. TUI, resume/fork, Code Mode, other Hook seams and a complete public SDK/manager remain later work.
 
-The candidate reads CODEX_HOME/mods. An absent or empty directory means no Mod. Any candidate entry must be one plain directory containing mod.toml and a bounded regular payload; extra candidates are errors. The manifest has exactly these required fields:
+The runtime reads at most 32 plain directories under CODEX_HOME/mods. Each candidate has a bounded mod.toml. An optional separate CODEX_HOME/cm-runtime.toml uses format_version=1 and enabled=[Mod IDs]: missing selects all, an explicit empty list selects none, and unknown/duplicate IDs fail. All candidate manifests are parsed and locked, including disabled candidates; execution compatibility and payload/resource verification apply to the selected set. A missing mods directory means an empty set.
+
+The legacy ABI 1.0 and format 1 manifest remain valid without changes:
 
 ```toml
 format_version = 1
@@ -43,11 +45,38 @@ dependencies = []
 contribution = "core.tool_parallel_eligibility.v1"
 ```
 
-Unknown/duplicate keys, symlinks, multiply linked files, unsupported declarations, paths, sizes, hashes, ELF targets, RPATH/RUNPATH, filters/audit resolution and non-allowlisted native dependency names are rejected before dlopen. The verified byte buffer becomes a sealed, read-only memfd; loading uses its absolute /proc/self/fd path with RTLD_NOW | RTLD_LOCAL. No package path is reopened for loading. Constructor execution is possible as soon as dlopen begins; ABI/entry/init failures are classified as already_native_executed and never become Ready.
+Unknown/duplicate keys, symlinks, multiply linked files, unsupported declarations, paths, sizes, hashes, ELF targets, RPATH/RUNPATH, filters/audit resolution and non-allowlisted native dependency names are rejected before dlopen. Every path component is opened relative to verified directory descriptors without following symlinks. The verified byte buffer becomes a sealed, read-only memfd; loading uses its absolute /proc/self/fd path with RTLD_NOW | RTLD_LOCAL. No package path is reopened for loading. Constructor execution is possible as soon as dlopen begins; ABI/entry/init failures are classified as already_native_executed and never become Ready.
 
-crates/cm-abi/include/cm_mod_v1.h is the C contract. It uses fixed-width repr(C) layouts, borrowed UTF-8 pointer/length views, caller-owned bounded output/error storage and Mod-owned userdata/release. The entry reads size before header/table fields. Only KEEP and FORCE_SERIAL decisions are valid; final eligibility is original_parallel AND decision != FORCE_SERIAL. The existing per-runtime Core RWLock still controls actual execution. A callback error is fatal and never silently falls back to KEEP. In-flight tools drain before that error returns to the normal turn error path. Calls are synchronous, serialized and non-reentrant; cancellation is checked before and after. Normal shutdown stops admission, drains tool leases and native calls, then calls the Mod's release once. Libraries and sealed payloads stay pinned until process exit; removing files affects only the next process.
+crates/cm-abi/include/cm_mod_v1.h is the C contract. It uses fixed-width repr(C) layouts, borrowed UTF-8 pointer/length views, caller-owned bounded output/error storage and Mod-owned userdata/release. The entry reads size before header/table fields. Only KEEP and FORCE_SERIAL decisions are valid; final eligibility is original_parallel AND decision != FORCE_SERIAL. The existing per-runtime Core RWLock still controls actual execution. A callback error is fatal and never silently falls back to KEEP. In-flight tools drain before that error returns to the normal turn error path. Calls are synchronous, serialized and reject ordinary runtime reentry; cancellation is checked at synchronous boundaries. Normal shutdown stops admission, drains tool leases and native calls, then releases owners once in reverse initialization order. Libraries and sealed payloads stay pinned until process exit; removing files affects only the next process.
 
 Native Mods execute with Host permissions. This ABI and loader are not a memory/process sandbox. Invalid pointers, abort, segfault or a stuck callback may terminate or hang the process; a watchdog kill is recorded as failure containment, not successful cancellation or isolation. There is no hot unload.
+
+## Composition ABI and immutable plan
+
+Host API 0.2.0 advertises both the legacy capability and core.tool_parallel_eligibility.compose.v1. New format 2 packages require ABI 2.0 and export cm_mod_entry_v2. crates/cm-abi/include/cm_mod_v2.h and cm-abi::v2 declare this separate protocol; no v1 table tail is read as v2 data.
+
+A format 2 manifest uses the common id/version/payload/digest/target fields above, abi_major=2, abi_minor=0, required_capabilities=["core.tool_parallel_eligibility.compose.v1"], and these fields:
+
+```toml
+dependencies = [{ id = "other-mod", version = "0.1.0" }]
+conflicts = []
+contributions = [
+  { id = "policy", kind = "around", capability = "core.tool_parallel_eligibility.compose.v1", resource = "core.tool_parallel_eligibility.v1", order_before = [], order_after = [], priority = 0 }
+]
+resources = [{ path = "data.txt", size = 24, sha256 = "<exact resource SHA-256>" }]
+```
+
+Dependencies match exact selected versions and determine initialization order only. No dependency is downloaded or implicitly enabled. Order references use mod-id::contribution-id within one resource/phase; missing references, cycles and cross-phase edges fail. Stable ID order breaks topological ties. Priority is bounded diagnostic metadata, with no arbitration role. Two replacement claims on the same resource fail before order/priority can choose a winner. Mod/contribution namespaces cm and core (including their dotted prefixes) are reserved.
+
+Phases are before -> around/replacement -> legacy_filter -> after. Before/after observe and return KEEP. Around calls its own synchronous Next token zero or one time; zero calls requires FORCE_SERIAL. A replacement is an exclusive terminal policy. Downstream restrictions and errors are latched. Legacy v1 filters run outside the v2 body and cannot be skipped by around. Once a chain starts, all after observers are attempted during success/error/cancellation cleanup; the first fatal error wins. Initial cancellation enters no callback.
+
+Next is bound to the active dispatch, owner, stack frame and OS thread. Repeated, stale, wrong-owner/thread/scope and malformed-buffer calls fail even when the Mod swallows the status. Only this controlled synchronous path may nest; it does not lock Runtime again or expose Rust objects/Futures across C. Out-of-dispatch violations poison further admission. An already running native function cannot be forcibly cancelled.
+
+RuntimePlan is canonical data with a schema/domain, actual Host executable hash/build identity, all candidate manifest digests, selected Mod payload/resources/content-tree digests, configuration presence/raw digest, independent dependency/hook graphs and resolved orders. It contains no absolute profile path or inode/mtime/discovery order. PreparedPlan privately owns verified sealed payloads and resource/config snapshots. Before the first dlopen it revalidates the whole candidate inventory, every locked input and the current executable identity. Any drift rejects that old plan. After this input linearization point the collection consumes only owned snapshots; disk edits affect a later process.
+
+Loading/negotiation/init occurs in private staging, in dependency order. Actual descriptor IDs/capabilities/kinds/resources must exactly equal the manifest. All init calls must succeed before one registration commit/Ready event. Failure attempts every allocated owner's release in reverse initialization order, including a failing init with nonnull userdata, and keeps the first error. Libraries and exposed snapshots stay pinned until process exit. Native code with an invalid or missing owner release cannot be safely freed by the Host.
+
+Limits: 32 packages, 128 contributions, 64 resources; manifest/config 64 KiB each; payload 64 MiB each/256 MiB selected total; resource 8 MiB each/64 MiB total; IDs 128 bytes, relative paths 512 bytes, native errors 1024 bytes and table size 4096 bytes. Resources may contain arbitrary bytes; init receives only declared read-only views.
 
 ## Independent Mod and acceptance
 
@@ -55,13 +84,19 @@ ci/scripts/native_mod.py reuses the existing execute, cargo_args, source and pac
 
 The Actions acceptance uses a local Responses SSE provider and real builtin exec_command processes with Unix-socket barriers. It observes actual A/B handler entry, the original Core gate's pending/admitted states, real tool results and thread/turn/call identities. Empty and removed sets must allow B before A releases; the restrictive Mod must keep B waiting until A finishes. No elapsed-time overlap estimate substitutes for those barriers.
 
-Additional child processes cover pre-load constructor rejection, short tables and version/length/status errors, independent allocator release, catchable panic, actual abort/segfault, cancellation, held callback drain and an explicitly classified stuck callback kill. A focused integration test loads the sealed original after both path replacement and in-place modification. Separate logs retain the original failed process outcomes. All five root P02 reports are written only after every required assertion succeeds.
+Additional child processes cover pre-load constructor rejection, short tables and version/length/status errors, independent allocator release, catchable panic, actual abort/segfault, cancellation, held callback drain and an explicitly classified stuck callback kill. A focused integration test loads the sealed original after both path replacement and in-place modification. Separate logs retain the original failed process outcomes. All five P02 regression reports are written only after every required assertion succeeds.
+
+ci/scripts/runtime_composition.py runs those current-source P01/P02 regressions, then freezes/reuses the same H and independently builds composition A/B plus fixed invalid binaries. Each author has a separate workspace, committed lock and initially empty target; all depend only on cm-abi. No combination rebuilds H or any Mod. Set/per-object exact limits and limit+1 cases, canonical plan permutations, separate graphs, staged input drift, exclusive conflicts, actual registration errors, Next/error/cancellation behavior, failed init/release cleanup and mixed v1/v2 are exercised by Actions.
+
+The P03 business matrix reuses the same SSE provider, builtin exec_command and Unix socket A/B barriers, including actual Core write-gate Pending, outputs and real thread/turn/call IDs. Successful selection cases run under a real exec/network observer and reject compiler/linker/JIT calls and undeclared service connections. Signal-cancellation regressions keep direct child delivery. Probe-only plan/ABI cases are identified separately from real Core business. A stuck synchronous callback is recorded as a killed process failure. This observation is not the P04 toolchain-free isolated consumer gate.
+
+Six separate P03 reports preserve common source/workflow/runner/Host/mod provenance with disjoint-key assertions; the root acceptance records only CM-P03-AC01 through AC06. Raw child results are written before assertions, and a finally path retains bounded UTF-8/NUL-free logs/JSON without profiles, packages or caches.
 
 ## Independent dispatch and cache authority
 
 ci/worker-files.json maps six infrastructure inputs to the builder. Both worker workflows, both policy/record scripts and the cache-authority JavaScript action deploy together at an exact reviewed builder commit. The action reads the runner-injected effective cache mode, checks it against trusted preflight, and exposes only that validated enum to later shell steps. The worker fixes its source/builder identities in reviewed YAML and temporarily checks out the requested exact public CM SHA. No repository variables or copied gh credentials are needed for an operator dispatch.
 
-.github/cm-ci.json maps the P02 producer through the existing acceptance entry. No worker recipe change is needed for this candidate. .github/cm-build-routing.json remains configured=false: automatic/source fanout is still disabled and CM_BUILD_FANOUT_TOKEN is not configured. Direct operator dispatch is distinct from validating fanout.
+.github/cm-ci.json maps fixtures/runtime-composition/acceptance.sh through the existing acceptance entry. No worker recipe change is needed for this candidate. .github/cm-build-routing.json remains configured=false: automatic/source fanout is still disabled and CM_BUILD_FANOUT_TOKEN is not configured. Direct operator dispatch is distinct from validating fanout.
 
 Only the verified source default-branch HEAD and trusted worker revision may write builder-owned caches. Other reviewed source SHAs get platform-enforced cache-mode read. Preflight, source checks and receipts use none. Cargo downloads and sccache snapshots remain separate; compiler/target/config/native-qualified keys never cross platforms or repositories. RUSTC_WRAPPER=sccache, CARGO_INCREMENTAL=0 and SCCACHE_GHA_ENABLED=false remain required; target/ is not cached.
 
@@ -69,4 +104,4 @@ Worker logs retain sccache statistics, restore/save observations and final accep
 
 ## Verification boundary
 
-P02 is not accepted until the exact published commit completes all five real independent-worker checks and evidence review. Failed/partial runs cannot accept a newer source revision. A package or loader pass cannot establish whole-product or release readiness. Compiler-free installation/combination acceptance remains a later gate. No local build, test, lint or simulated CI is permitted. Publication and dispatch follow the current explicit session authorization; credentials and product Releases require separate concrete authorization.
+P03 is not accepted until the exact published commit completes current-source P01/P02 regressions, all six independent-worker checks and evidence review. Failed/partial runs cannot accept a newer source revision. A package or loader pass cannot establish whole-product or release readiness. Compiler-free installation/combination acceptance remains a later gate. No local build, test, lint or simulated CI is permitted. Publication and dispatch follow the current explicit session authorization; credentials and product Releases require separate concrete authorization.

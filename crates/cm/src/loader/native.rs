@@ -20,7 +20,7 @@ struct ErrorStorage {
     after: [u8; 16],
 }
 
-fn invoke(stage: &str, call: impl FnOnce(*mut ErrorBuffer) -> u32) -> Result<(), LoadError> {
+pub(crate) fn invoke(stage: &str, call: impl FnOnce(*mut ErrorBuffer) -> u32) -> Result<(), LoadError> {
     let mut storage = ErrorStorage {
         before: [0x5a; 16],
         data: [0; ERROR_CAPACITY],
@@ -70,7 +70,7 @@ fn header(header: Header, minimum: usize) -> Result<(), LoadError> {
     Ok(())
 }
 
-unsafe fn text(view: Bytes, limit: usize) -> Result<String, LoadError> {
+pub(crate) unsafe fn text(view: Bytes, limit: usize) -> Result<String, LoadError> {
     if view.len > limit as u64 || (view.len != 0 && view.data.is_null()) {
         return Err(LoadError::native(
             "negotiate",
@@ -103,31 +103,34 @@ pub(crate) struct NativeMod {
 // All access, including release, is serialized by the owning Runtime's mutex.
 unsafe impl Send for NativeMod {}
 
+pub(crate) fn open(
+    manifest: &super::Manifest,
+    snapshot: std::fs::File,
+    needed: &[String],
+) -> Result<&'static Library, LoadError> {
+    let path = snapshot_path(&snapshot);
+    event("preflighted", serde_json::json!({
+        "id": manifest.id, "version": manifest.version,
+        "payload_sha256": manifest.payload_sha256,
+        "needed": needed, "load_path": path, "sealed": true,
+    }));
+    // Constructors can publish pointers even when negotiation subsequently fails.
+    let _snapshot = Box::leak(Box::new(snapshot));
+    event("dlopen-start", serde_json::json!({"id": manifest.id, "already_native_executed": true}));
+    let library = unsafe { Library::open(Some(&path), RTLD_NOW | RTLD_LOCAL) }
+        .map_err(|e| LoadError::native("dlopen", &e.to_string()))?;
+    Ok(Box::leak(Box::new(library)))
+}
+
 impl NativeMod {
     pub(crate) fn load(preflighted: Preflighted) -> Result<Self, LoadError> {
         let Preflighted {
             manifest,
             snapshot,
             needed,
+            ..
         } = preflighted;
-        let path = snapshot_path(&snapshot);
-        event(
-            "preflighted",
-            serde_json::json!({
-                "id": manifest.id, "version": manifest.version,
-                "payload_sha256": manifest.payload_sha256,
-                "needed": needed, "load_path": path, "sealed": true,
-            }),
-        );
-        // Pin even failure paths: native constructors may already have published pointers.
-        let _snapshot = Box::leak(Box::new(snapshot));
-        event(
-            "dlopen-start",
-            serde_json::json!({"already_native_executed": true}),
-        );
-        let library = unsafe { Library::open(Some(&path), RTLD_NOW | RTLD_LOCAL) }
-            .map_err(|e| LoadError::native("dlopen", &e.to_string()))?;
-        let library = Box::leak(Box::new(library));
+        let library = open(&manifest, snapshot, &needed)?;
         let entry = unsafe { library.get::<Entry>(b"cm_mod_entry_v1\0") }
             .map_err(|e| LoadError::native("entry", &e.to_string()))?;
         let host = HostApi {
@@ -182,7 +185,9 @@ impl NativeMod {
             ));
         }
         if let Err(error) = result {
-            loaded.release()?;
+            if let Err(cleanup) = loaded.release() {
+                event("release-failed", serde_json::json!(cleanup.owner(&manifest.id, None)));
+            }
             return Err(error);
         }
         Ok(loaded)

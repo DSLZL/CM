@@ -2,6 +2,8 @@
 //! Native callers must supply valid allocations; validation is not a sandbox.
 use core::ffi::c_void;
 
+pub mod v2;
+
 pub const ABI_MAJOR: u16 = 1;
 pub const ABI_MINOR: u16 = 0;
 pub const OK: u32 = 0;

@@ -1,6 +1,6 @@
 //! Host-owned immutable native runtime. Libraries and sealed payloads stay pinned.
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
-compile_error!("CM P02 only supports Linux x86_64 GNU");
+compile_error!("CM only supports Linux x86_64 GNU");
 
 use std::cell::Cell;
 use std::fs::File;
@@ -18,24 +18,48 @@ use serde_json::Value;
 use serde_json::json;
 
 mod loader;
+pub mod runtime_plan;
 pub mod tool_policy;
 
-use loader::native::NativeMod;
+use loader::registration::RegistrationSet;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LoadError {
     pub stage: String,
     pub already_native_executed: bool,
     pub message: String,
+    pub code: String,
+    pub mod_id: Option<String>,
+    pub contribution: Option<String>,
+    pub resource: Option<String>,
 }
 
 impl LoadError {
-    fn new(stage: &str, already_native_executed: bool, message: &str) -> Self {
+    pub(crate) fn new(stage: &str, already_native_executed: bool, message: &str) -> Self {
         Self {
             stage: stage.into(),
             already_native_executed,
             message: message.into(),
+            code: stage.into(),
+            mod_id: None,
+            contribution: None,
+            resource: None,
         }
+    }
+
+    pub(crate) fn input(code: &str, owner: &str, message: &str) -> Self {
+        let mut error = Self::new("preflight", false, message);
+        error.code = code.into();
+        error.owner(owner, None)
+    }
+
+    pub(crate) fn owner(mut self, owner: &str, contribution: Option<&str>) -> Self {
+        self.mod_id = (!owner.is_empty()).then(|| owner.to_string());
+        if let Some(contribution) = contribution {
+            self.contribution = Some(contribution.into());
+        }
+        self.resource = Some(cm_abi::CAPABILITY.into());
+        self
     }
 
     pub(crate) fn native(stage: &str, message: &str) -> Self {
@@ -47,8 +71,10 @@ impl std::fmt::Display for LoadError {
     fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             output,
-            "CM {} (already_native_executed={}): {}",
-            self.stage, self.already_native_executed, self.message
+            "CM {} [{}] mod={} contribution={} resource={} (already_native_executed={}): {}",
+            self.stage, self.code, self.mod_id.as_deref().unwrap_or("-"),
+            self.contribution.as_deref().unwrap_or("-"), self.resource.as_deref().unwrap_or("-"),
+            self.already_native_executed, self.message
         )
     }
 }
@@ -104,7 +130,7 @@ pub(crate) fn event(kind: &str, detail: Value) {
 }
 
 struct State {
-    registration: Option<NativeMod>,
+    registration: Option<RegistrationSet>,
     stopping: bool,
     failed: Option<String>,
     active_tools: usize,
@@ -121,66 +147,62 @@ pub struct ShutdownGuard {
 }
 
 /// Initialize exactly once before opening Core business sessions.
-/// P02 admits Core Mods only for the local embedded exec backend.
 pub fn initialize(home: &Path, embedded_exec: bool) -> Result<ShutdownGuard, LoadError> {
+    initialize_with(embedded_exec, || runtime_plan::prepare(home))
+}
+
+/// Actions probe seam: only an owned, previously prepared snapshot can be committed.
+pub fn initialize_prepared(
+    prepared: runtime_plan::PreparedPlan,
+    embedded_exec: bool,
+) -> Result<ShutdownGuard, LoadError> {
+    initialize_with(embedded_exec, || Ok(prepared))
+}
+
+fn initialize_with(
+    embedded_exec: bool,
+    prepare: impl FnOnce() -> Result<runtime_plan::PreparedPlan, LoadError>,
+) -> Result<ShutdownGuard, LoadError> {
     if STARTED.swap(true, Ordering::AcqRel) {
-        return Err(LoadError::new(
-            "startup",
-            false,
-            "runtime initialization is terminal and cannot be retried",
-        ));
+        return Err(LoadError::new("startup", false,
+            "runtime initialization is terminal and cannot be retried"));
     }
     let result = (|| {
         let trace = std::env::var_os("CM_NATIVE_TRACE")
             .map(|path| {
-                OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(path)
+                OpenOptions::new().write(true).create_new(true).open(path)
                     .map(|file| Mutex::new(Trace { file, sequence: 0 }))
                     .map_err(|e| LoadError::new("trace", false, &e.to_string()))
-            })
-            .transpose()?;
+            }).transpose()?;
         let _ = TRACE.set(trace);
-        let candidate =
-            loader::prepare(home).map_err(|e| LoadError::new("preflight", false, &e))?;
-        if candidate.is_some() && !embedded_exec {
-            return Err(LoadError::new(
-                "backend",
-                false,
-                "P02 Core Mods require local embedded exec; Remote/LocalDaemon and other session paths lack a verified handshake",
-            ));
+        let prepared = prepare()?;
+        event("planned", json!({
+            "plan_sha256": prepared.plan().sha256(), "plan": prepared.plan(),
+            "already_native_executed": false,
+        }));
+        if !prepared.plan().mods.is_empty() && !embedded_exec {
+            return Err(LoadError::new("backend", false,
+                "Core Mods require local embedded exec; other backends lack a verified handshake"));
         }
-        let registration = candidate
-            .map(|candidate| {
-                let _call =
-                    NativeCall::enter().map_err(|e| LoadError::new("startup", false, &e))?;
-                NativeMod::load(candidate)
-            })
-            .transpose()?;
-        event(
-            "ready",
-            json!({"mod_count": usize::from(registration.is_some()), "immutable": true}),
-        );
+        let (plan, modules, config) = prepared.commit()?;
+        let _call = NativeCall::enter().map_err(|e| LoadError::new("startup", false, &e))?;
+        let registration = RegistrationSet::load(plan, modules, config)?;
+        event("ready", json!({
+            "mod_count": registration.len(), "immutable": true,
+            "plan_sha256": registration.digest, "plan": registration.plan,
+        }));
         Ok(Runtime {
             stopping: AtomicBool::new(false),
             state: Mutex::new(State {
-                registration,
-                stopping: false,
-                failed: None,
-                active_tools: 0,
+                registration: Some(registration), stopping: false, failed: None, active_tools: 0,
             }),
             drained: Condvar::new(),
         })
     })();
-    if let Err(error) = &result {
-        event("startup-failed", json!(error));
-    }
+    if let Err(error) = &result { event("startup-failed", json!(error)); }
     let failure = result.as_ref().err().cloned();
     let _ = RUNTIME.set(result);
-    if let Some(error) = failure {
-        return Err(error);
-    }
+    if let Some(error) = failure { return Err(error); }
     Ok(ShutdownGuard { active: true })
 }
 
