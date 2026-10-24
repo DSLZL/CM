@@ -97,6 +97,7 @@ def pair(home, mods, variant_a="normal", variant_b="normal", dependency=True, ex
 def build_mods(root, logs, package, frozen):
     cfg = load_config(root)
     assert host.sha(package / "bin/codex") == frozen["executable_sha256"]
+    assert host.read(logs / "composition-observer-self-check.json")["status"] == "pass"
     events = [json.loads(line) for line in (logs / "phase-results.jsonl").read_text().splitlines()]
     assert any(
         row["phase"] == "composition-shared-fmt" and row["return_code"] == 0 for row in events
@@ -175,7 +176,7 @@ def prefix(directory):
 def audit_network(lines, directory, ports):
     unix_connections = set()
     for line in lines:
-        call = re.match(r'\d+\s+(connect|sendto)\(\d+(?:<([^>]*)>)?, ', line)
+        call = re.match(r'\d+\s+(connect|sendto)\(\d+(?:<(.*?)>)?, ', line)
         assert call, "Unclassified network syscall: " + line
         descriptor = call[2] or ""
         address = re.search(r', (\{sa_family=(?:AF_UNIX|AF_INET6?), [^}]*\}), \d+\)?(?: = [^"]*| <unfinished \.\.\.>)$', line)
@@ -912,10 +913,8 @@ def main():
                   "checks": [{"id": check, "status": "not_run", "evidence": ["evidence/" + name]}
                              for check, name in CHECKS.items()]}
     host.write(artifact / "acceptance.json", acceptance)
-    stage = "network observer self-check"
+    stage = "P01/P02 regressions"
     try:
-        check_network_audit()
-        stage = "P01/P02 regressions"
         package, frozen, legacy, probe = native_mod.acceptance(root, logs, report_name="p02-baseline-acceptance.json")
         for name in ("p01-baseline-acceptance.json", "p02-baseline-acceptance.json"):
             assert host.read(artifact / name)["status"] == "pass"

@@ -194,6 +194,10 @@ def native(root, logs):
 
 def helper(root, logs):
     cfg = load_config(root)
+    import runtime_composition
+    runtime_composition.check_network_audit()
+    write(logs / "composition-observer-self-check.json", {
+        "status": "pass", "scope": "Literal parser cases only; actual runtime socket audit remains required"})
     execute(root, logs, "composition-shared-fmt", ["rustfmt", "--edition", "2024", "--check",
             str(source_file(root, "fixtures/mods/composition-common.rs"))])
     target = Path(os.environ["CARGO_TARGET_DIR"]) / "helper"
