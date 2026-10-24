@@ -168,8 +168,52 @@ def build_mods(root, logs, package, frozen):
 
 
 def prefix(directory):
-    return ["strace", "-f", "-qq", "-s", "1024", "-e",
+    return ["strace", "-f", "-qq", "-yy", "-s", "1024", "-e",
             "trace=execve,execveat,connect,sendto", "-o", str(directory / "syscalls.log"), "--"]
+
+
+def audit_network(lines, directory, ports):
+    unix_connections = set()
+    for line in lines:
+        call = re.match(r'\d+\s+(connect|sendto)\(\d+(?:<([^>]*)>)?, ', line)
+        assert call, "Unclassified network syscall: " + line
+        descriptor = call[2] or ""
+        address = re.search(r', (\{sa_family=(?:AF_UNIX|AF_INET6?), [^}]*\}), \d+\)?(?: = [^"]*| <unfinished \.\.\.>)$', line)
+        if address:
+            if "sa_family=AF_UNIX" in address[1]:
+                scoped = 'sun_path="' + str(directory) + '/' in address[1]
+                assert scoped or ("nscd/socket" in address[1] and "ENOENT" in line), line
+                if scoped:
+                    inode = re.fullmatch(r'UNIX(?:-[A-Z]+)?:\[(\d+)[^\]]*\]', descriptor)
+                    assert inode, "Missing Unix socket identity: " + line
+                    unix_connections.add(inode[1])
+            else:
+                port = re.search(r'sin6?_port=htons\(([0-9]+)\)', address[1])
+                local = 'inet_addr("127.0.0.1")' in address[1] or 'inet_pton(AF_INET6, "::1",' in address[1]
+                assert local and port and port[1] in ports, "Unexpected runtime network: " + line
+        else:
+            assert call[1] == "sendto" and re.search(r', NULL, 0\)?(?: = [^"]*| <unfinished \.\.\.>)$', line), line
+            # Decoded socket identity ties address-less sends to the observed fixture connection.
+            unix = re.fullmatch(r'UNIX(?:-[A-Z]+)?:\[(\d+)->\d+(?:,[^\]]*)?\]', descriptor)
+            tcp = re.fullmatch(r'TCP:\[127[.]0[.]0[.]1:\d+->127[.]0[.]0[.]1:(\d+)\]', descriptor)
+            assert ((unix and unix[1] in unix_connections) or (tcp and tcp[1] in ports)), "Unknown socket peer: " + line
+
+
+def check_network_audit():
+    directory = Path("/fixture")
+    connect = '1 connect(4<UNIX-STREAM:[41]>, {sa_family=AF_UNIX, sun_path="/fixture/callback.sock"}, 32) = 0'
+    send = '1 sendto(4<UNIX-STREAM:[41->42]>, "callback-entered\\n", 17, MSG_NOSIGNAL, NULL, 0) = 17'
+    tcp = '2 sendto(5<TCP:[127.0.0.1:1234->127.0.0.1:8080]>, "request", 7, MSG_NOSIGNAL, NULL, 0) = 7'
+    audit_network([connect, send, tcp], directory, {"8080"})
+    for unknown in ([send], [connect, send.replace("41->42", "43->42")],
+                    [connect, send.replace("<UNIX-STREAM:[41->42]>", "")],
+                    [tcp.replace(":8080]", ":8081]")], [tcp.replace("->127.0.0.1", "->198.51.100.1")],
+                    [connect.replace("/fixture/", "/outside/")]):
+        try:
+            audit_network(unknown, directory, {"8080"})
+        except AssertionError:
+            continue
+        raise AssertionError("Network audit accepted an unknown peer: " + repr(unknown))
 
 
 def audit(directory, pure=False):
@@ -187,16 +231,10 @@ def audit(directory, pure=False):
         assert Path(match[1]).name in allowed or "/codex-" in match[1], "Unclassified executable: " + line
         if Path(match[1]).name.startswith("python"):
             assert "fixtures/native-loader/tool_barrier.py" in line, line
-    network = [line for line in calls if "connect(" in line or "sendto(" in line]
+    network = [line for line in calls if re.match(r'\d+\s+(?:connect|sendto)\(', line)]
     command = host.read(directory / "result.json")["command"]
     ports = set(re.findall(r"http://127[.]0[.]0[.]1:([0-9]+)", " ".join(command)))
-    for line in network:
-        if "AF_UNIX" in line:
-            assert str(directory) in line or ("nscd/socket" in line and "ENOENT" in line), line
-        else:
-            port = re.search(r"sin6?_port=htons\(([0-9]+)\)", line)
-            assert ("AF_INET" in line and ("127.0.0.1" in line or "::1" in line)
-                    and port and port[1] in ports), "Unexpected runtime network: " + line
+    audit_network(network, directory, ports)
     if pure:
         assert len(executions) == 1 and not network, "Pure planning spawned code/network"
     result = {"status": "pass", "exec_count": len(executions), "network_count": len(network),
@@ -874,8 +912,10 @@ def main():
                   "checks": [{"id": check, "status": "not_run", "evidence": ["evidence/" + name]}
                              for check, name in CHECKS.items()]}
     host.write(artifact / "acceptance.json", acceptance)
-    stage = "P01/P02 regressions"
+    stage = "network observer self-check"
     try:
+        check_network_audit()
+        stage = "P01/P02 regressions"
         package, frozen, legacy, probe = native_mod.acceptance(root, logs, report_name="p02-baseline-acceptance.json")
         for name in ("p01-baseline-acceptance.json", "p02-baseline-acceptance.json"):
             assert host.read(artifact / name)["status"] == "pass"
