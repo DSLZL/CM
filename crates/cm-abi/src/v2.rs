@@ -75,14 +75,9 @@ pub struct Input {
     pub next_token: u64,
 }
 
-pub type Hook = unsafe extern "C" fn(
-    *mut c_void,
-    *const Input,
-    *mut Decision,
-    *mut ErrorBuffer,
-) -> u32;
-pub type Init =
-    unsafe extern "C" fn(*const InitContext, *mut *mut c_void, *mut ErrorBuffer) -> u32;
+pub type Hook =
+    unsafe extern "C" fn(*mut c_void, *const Input, *mut Decision, *mut ErrorBuffer) -> u32;
+pub type Init = unsafe extern "C" fn(*const InitContext, *mut *mut c_void, *mut ErrorBuffer) -> u32;
 
 #[repr(C)]
 #[derive(Clone, Copy)]

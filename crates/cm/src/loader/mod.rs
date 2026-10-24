@@ -167,7 +167,9 @@ pub(crate) fn executable_hash(path: &Path) -> Result<String, String> {
 
 fn open_at(parent: &File, name: &std::ffi::OsStr, directory: bool) -> Result<File, String> {
     let name = CString::new(name.as_bytes()).map_err(|e| e.to_string())?;
-    let flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW
+    let flags = libc::O_RDONLY
+        | libc::O_CLOEXEC
+        | libc::O_NOFOLLOW
         | if directory { libc::O_DIRECTORY } else { 0 };
     let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
     if fd < 0 {
@@ -193,8 +195,13 @@ fn open_directory(path: &Path) -> Result<File, String> {
 
 fn file_stamp(metadata: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
     (
-        metadata.dev(), metadata.ino(), metadata.len(), metadata.mtime(),
-        metadata.mtime_nsec(), metadata.ctime(), metadata.ctime_nsec(),
+        metadata.dev(),
+        metadata.ino(),
+        metadata.len(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.ctime(),
+        metadata.ctime_nsec(),
     )
 }
 
@@ -210,12 +217,27 @@ pub(crate) struct InputPin {
 
 impl InputPin {
     pub(crate) fn revalidate(&self) -> Result<(), String> {
-        let (_, current) = read_input(&self.path, self.limit).map_err(|error| format!(
-            "locked input {} expected size={} sha256={}: {error}", self.path.display(), self.size, self.sha256))?;
-        if self.sha256 != current.sha256 || self.size != current.size
-            || self.device != current.device || self.inode != current.inode
+        let (_, current) = read_input(&self.path, self.limit).map_err(|error| {
+            format!(
+                "locked input {} expected size={} sha256={}: {error}",
+                self.path.display(),
+                self.size,
+                self.sha256
+            )
+        })?;
+        if self.sha256 != current.sha256
+            || self.size != current.size
+            || self.device != current.device
+            || self.inode != current.inode
         {
-            return Err(format!("locked input changed: {} expected size={} sha256={} actual size={} sha256={}", self.path.display(), self.size, self.sha256, current.size, current.sha256));
+            return Err(format!(
+                "locked input changed: {} expected size={} sha256={} actual size={} sha256={}",
+                self.path.display(),
+                self.size,
+                self.sha256,
+                current.size,
+                current.sha256
+            ));
         }
         Ok(())
     }
@@ -223,13 +245,20 @@ impl InputPin {
 
 pub(crate) fn read_input(path: &Path, limit: u64) -> Result<(Vec<u8>, InputPin), String> {
     let parent = open_directory(path.parent().ok_or("missing input parent")?)?;
-    let mut file = open_at(&parent, path.file_name().ok_or("missing input name")?, false)?;
+    let mut file = open_at(
+        &parent,
+        path.file_name().ok_or("missing input name")?,
+        false,
+    )?;
     let before = file.metadata().map_err(|e| e.to_string())?;
     if !before.is_file() || before.nlink() != 1 || before.len() > limit {
         return Err("expected a bounded regular file with one link".into());
     }
     let mut bytes = Vec::new();
-    (&mut file).take(limit + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    (&mut file)
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
     if bytes.len() as u64 > limit
         || bytes.len() as u64 != before.len()
         || file_stamp(&before) != file_stamp(&file.metadata().map_err(|e| e.to_string())?)
@@ -237,8 +266,12 @@ pub(crate) fn read_input(path: &Path, limit: u64) -> Result<(Vec<u8>, InputPin),
         return Err("input changed while reading or exceeded its bound".into());
     }
     let pin = InputPin {
-        path: path.into(), sha256: hash(&bytes), size: bytes.len() as u64, limit,
-        device: before.dev(), inode: before.ino(),
+        path: path.into(),
+        sha256: hash(&bytes),
+        size: bytes.len() as u64,
+        limit,
+        device: before.dev(),
+        inode: before.ino(),
     };
     Ok((bytes, pin))
 }
@@ -256,7 +289,10 @@ pub(crate) fn inventory(home: &Path) -> Result<Inventory, String> {
     let root = home.join("mods");
     match fs::symlink_metadata(&root) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Inventory { packages: BTreeMap::new(), root: None });
+            return Ok(Inventory {
+                packages: BTreeMap::new(),
+                root: None,
+            });
         }
         Err(e) => return Err(e.to_string()),
         Ok(_) => {}
@@ -266,7 +302,10 @@ pub(crate) fn inventory(home: &Path) -> Result<Inventory, String> {
     let mut packages = BTreeMap::new();
     for entry in fs::read_dir(snapshot_path(&directory)).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
-        let name = entry.file_name().into_string().map_err(|_| "package path is not UTF-8")?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| "package path is not UTF-8")?;
         if packages.len() >= 32 {
             return Err("runtime set exceeds 32 packages".into());
         }
@@ -274,13 +313,20 @@ pub(crate) fn inventory(home: &Path) -> Result<Inventory, String> {
         let metadata = package.metadata().map_err(|e| e.to_string())?;
         packages.insert(name, (metadata.dev(), metadata.ino()));
     }
-    Ok(Inventory { packages, root: Some((metadata.dev(), metadata.ino())) })
+    Ok(Inventory {
+        packages,
+        root: Some((metadata.dev(), metadata.ino())),
+    })
 }
 
 pub(crate) fn payload_path(package: &Path, relative: &str) -> Result<PathBuf, String> {
     let path = Path::new(relative);
-    if relative.is_empty() || relative.len() > 512 || path.is_absolute()
-        || !path.components().all(|part| matches!(part, Component::Normal(_)))
+    if relative.is_empty()
+        || relative.len() > 512
+        || path.is_absolute()
+        || !path
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
     {
         return Err("input must be a bounded package-relative normal path".into());
     }
@@ -292,34 +338,49 @@ pub(crate) fn payload_path(package: &Path, relative: &str) -> Result<PathBuf, St
 }
 
 pub(crate) fn identifier(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 128 && value.bytes()
-        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
 }
 
 pub(crate) fn version(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 128 && value.bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b".+-".contains(&b))
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".+-".contains(&b))
 }
 
 fn digest(value: &str) -> bool {
-    value.len() == 64 && value.bytes()
-        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 pub(crate) fn check_manifest(manifest: &Manifest) -> Result<(), String> {
-    if !identifier(&manifest.id) || !version(&manifest.version)
-        || manifest.target != TARGET || manifest.payload_size == 0
-        || manifest.payload_size > MAX_PAYLOAD || !digest(&manifest.payload_sha256)
+    if !identifier(&manifest.id)
+        || !version(&manifest.version)
+        || manifest.target != TARGET
+        || manifest.payload_size == 0
+        || manifest.payload_size > MAX_PAYLOAD
+        || !digest(&manifest.payload_sha256)
     {
         return Err("unsupported manifest id/version/target/digest/size".into());
     }
     match manifest.format_version {
-        1 if manifest.abi_major == ABI_MAJOR && manifest.abi_minor == ABI_MINOR
+        1 if manifest.abi_major == ABI_MAJOR
+            && manifest.abi_minor == ABI_MINOR
             && manifest.contribution == CONTRIBUTION
             && manifest.required_capabilities == [CAPABILITY]
-            && manifest.dependencies.is_empty() && manifest.conflicts.is_empty()
-            && manifest.contributions.is_empty() && manifest.resources.is_empty() => {}
-        2 if manifest.abi_major == v2::ABI_MAJOR && manifest.abi_minor == v2::ABI_MINOR
+            && manifest.dependencies.is_empty()
+            && manifest.conflicts.is_empty()
+            && manifest.contributions.is_empty()
+            && manifest.resources.is_empty() => {}
+        2 if manifest.abi_major == v2::ABI_MAJOR
+            && manifest.abi_minor == v2::ABI_MINOR
             && manifest.contribution.is_empty()
             && manifest.required_capabilities == [v2::CAPABILITY]
             && !manifest.contributions.is_empty()
@@ -354,19 +415,36 @@ pub(crate) fn prepare_package(
         }
         let (bytes, pin) = read_input(&payload_path(package, &resource.path)?, MAX_RESOURCE)?;
         if pin.size != resource.size || pin.sha256 != resource.sha256 {
-            return Err(format!("resource size or SHA-256 mismatch: {}", resource.path));
+            return Err(format!(
+                "resource size or SHA-256 mismatch: {}",
+                resource.path
+            ));
         }
-        resources.push(ResourceSnapshot { path: resource.path.clone(), bytes });
+        resources.push(ResourceSnapshot {
+            path: resource.path.clone(),
+            bytes,
+        });
         pins.push(pin);
     }
     resources.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok((Preflighted { manifest, snapshot, needed, resources }, pins))
+    Ok((
+        Preflighted {
+            manifest,
+            snapshot,
+            needed,
+            resources,
+        },
+        pins,
+    ))
 }
 
 pub(crate) fn sealed_snapshot(bytes: &[u8]) -> Result<File, String> {
     // Seal the verified buffer, never reopen the package path for dlopen.
     let fd = unsafe {
-        libc::memfd_create(c"cm-mod-v1".as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING)
+        libc::memfd_create(
+            c"cm-mod-v1".as_ptr(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        )
     };
     if fd < 0 {
         return Err(format!("memfd_create: {}", std::io::Error::last_os_error()));
@@ -377,15 +455,22 @@ pub(crate) fn sealed_snapshot(bytes: &[u8]) -> Result<File, String> {
     if unsafe { libc::fcntl(fd, libc::F_ADD_SEALS, seals) } < 0
         || unsafe { libc::fcntl(fd, libc::F_GET_SEALS) } & seals != seals
     {
-        return Err(format!("required memfd seals unavailable: {}", std::io::Error::last_os_error()));
+        return Err(format!(
+            "required memfd seals unavailable: {}",
+            std::io::Error::last_os_error()
+        ));
     }
     let mut snapshot = File::open(format!("/proc/self/fd/{fd}")).map_err(|e| e.to_string())?;
     let mut sealed = Vec::new();
-    snapshot.read_to_end(&mut sealed).map_err(|e| e.to_string())?;
+    snapshot
+        .read_to_end(&mut sealed)
+        .map_err(|e| e.to_string())?;
     if hash(&sealed) != hash(bytes) {
         return Err("sealed payload identity drift".into());
     }
-    snapshot.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    snapshot
+        .seek(SeekFrom::Start(0))
+        .map_err(|e| e.to_string())?;
     drop(writer);
     Ok(snapshot)
 }
@@ -442,9 +527,11 @@ mod tests {
     #[ignore = "requires the separately built author Mod after Host freeze"]
     fn replacement_and_in_place_edits_cannot_change_preflight_snapshot() {
         let original = fs::read(std::env::var_os("CM_P02_FIXTURE_LIBRARY").unwrap()).unwrap();
-        let replacement = fs::read(std::env::var_os("CM_P02_REPLACEMENT_LIBRARY").unwrap()).unwrap();
+        let replacement =
+            fs::read(std::env::var_os("CM_P02_REPLACEMENT_LIBRARY").unwrap()).unwrap();
         for replace in [true, false] {
-            let home = std::env::temp_dir().join(format!("cm-snapshot-{}-{replace}", std::process::id()));
+            let home =
+                std::env::temp_dir().join(format!("cm-snapshot-{}-{replace}", std::process::id()));
             let package = home.join("mods/fixture");
             fs::create_dir_all(&package).unwrap();
             let path = package.join("payload.so");
@@ -460,7 +547,10 @@ mod tests {
                 fs::rename(&path, path.with_extension("old")).unwrap();
             }
             fs::write(&path, &replacement).unwrap();
-            assert_eq!(hash(&fs::read(snapshot_path(&candidate.snapshot)).unwrap()), hash(&original));
+            assert_eq!(
+                hash(&fs::read(snapshot_path(&candidate.snapshot)).unwrap()),
+                hash(&original)
+            );
             let mut loaded = native::NativeMod::load(candidate).unwrap();
             let input = cm_abi::PolicyInput {
                 header: cm_abi::Header::of::<cm_abi::PolicyInput>(),

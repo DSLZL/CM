@@ -20,7 +20,10 @@ struct ErrorStorage {
     after: [u8; 16],
 }
 
-pub(crate) fn invoke(stage: &str, call: impl FnOnce(*mut ErrorBuffer) -> u32) -> Result<(), LoadError> {
+pub(crate) fn invoke(
+    stage: &str,
+    call: impl FnOnce(*mut ErrorBuffer) -> u32,
+) -> Result<(), LoadError> {
     let mut storage = ErrorStorage {
         before: [0x5a; 16],
         data: [0; ERROR_CAPACITY],
@@ -109,14 +112,20 @@ pub(crate) fn open(
     needed: &[String],
 ) -> Result<&'static Library, LoadError> {
     let path = snapshot_path(&snapshot);
-    event("preflighted", serde_json::json!({
-        "id": manifest.id, "version": manifest.version,
-        "payload_sha256": manifest.payload_sha256,
-        "needed": needed, "load_path": path, "sealed": true,
-    }));
+    event(
+        "preflighted",
+        serde_json::json!({
+            "id": manifest.id, "version": manifest.version,
+            "payload_sha256": manifest.payload_sha256,
+            "needed": needed, "load_path": path, "sealed": true,
+        }),
+    );
     // Constructors can publish pointers even when negotiation subsequently fails.
     let _snapshot = Box::leak(Box::new(snapshot));
-    event("dlopen-start", serde_json::json!({"id": manifest.id, "already_native_executed": true}));
+    event(
+        "dlopen-start",
+        serde_json::json!({"id": manifest.id, "already_native_executed": true}),
+    );
     let library = unsafe { Library::open(Some(&path), RTLD_NOW | RTLD_LOCAL) }
         .map_err(|e| LoadError::native("dlopen", &e.to_string()))?;
     Ok(Box::leak(Box::new(library)))
@@ -186,7 +195,10 @@ impl NativeMod {
         }
         if let Err(error) = result {
             if let Err(cleanup) = loaded.release() {
-                event("release-failed", serde_json::json!(cleanup.owner(&manifest.id, None)));
+                event(
+                    "release-failed",
+                    serde_json::json!(cleanup.owner(&manifest.id, None)),
+                );
             }
             return Err(error);
         }

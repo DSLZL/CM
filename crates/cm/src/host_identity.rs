@@ -23,7 +23,10 @@ mod tests {
         assert_eq!(identity["stage"], "runtime-composition-eligibility");
         assert_eq!(
             identity["capabilities"],
-            serde_json::json!(["core.tool_parallel_eligibility.v1", "core.tool_parallel_eligibility.compose.v1"])
+            serde_json::json!([
+                "core.tool_parallel_eligibility.v1",
+                "core.tool_parallel_eligibility.compose.v1"
+            ])
         );
         assert!(identity.get("artifact_sha256").is_none());
         Ok(())

@@ -72,9 +72,13 @@ impl std::fmt::Display for LoadError {
         write!(
             output,
             "CM {} [{}] mod={} contribution={} resource={} (already_native_executed={}): {}",
-            self.stage, self.code, self.mod_id.as_deref().unwrap_or("-"),
-            self.contribution.as_deref().unwrap_or("-"), self.resource.as_deref().unwrap_or("-"),
-            self.already_native_executed, self.message
+            self.stage,
+            self.code,
+            self.mod_id.as_deref().unwrap_or("-"),
+            self.contribution.as_deref().unwrap_or("-"),
+            self.resource.as_deref().unwrap_or("-"),
+            self.already_native_executed,
+            self.message
         )
     }
 }
@@ -164,45 +168,68 @@ fn initialize_with(
     prepare: impl FnOnce() -> Result<runtime_plan::PreparedPlan, LoadError>,
 ) -> Result<ShutdownGuard, LoadError> {
     if STARTED.swap(true, Ordering::AcqRel) {
-        return Err(LoadError::new("startup", false,
-            "runtime initialization is terminal and cannot be retried"));
+        return Err(LoadError::new(
+            "startup",
+            false,
+            "runtime initialization is terminal and cannot be retried",
+        ));
     }
     let result = (|| {
         let trace = std::env::var_os("CM_NATIVE_TRACE")
             .map(|path| {
-                OpenOptions::new().write(true).create_new(true).open(path)
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)
                     .map(|file| Mutex::new(Trace { file, sequence: 0 }))
                     .map_err(|e| LoadError::new("trace", false, &e.to_string()))
-            }).transpose()?;
+            })
+            .transpose()?;
         let _ = TRACE.set(trace);
         let prepared = prepare()?;
-        event("planned", json!({
-            "plan_sha256": prepared.plan().sha256(), "plan": prepared.plan(),
-            "already_native_executed": false,
-        }));
+        event(
+            "planned",
+            json!({
+                "plan_sha256": prepared.plan().sha256(), "plan": prepared.plan(),
+                "already_native_executed": false,
+            }),
+        );
         if !prepared.plan().mods.is_empty() && !embedded_exec {
-            return Err(LoadError::new("backend", false,
-                "Core Mods require local embedded exec; other backends lack a verified handshake"));
+            return Err(LoadError::new(
+                "backend",
+                false,
+                "Core Mods require local embedded exec; other backends lack a verified handshake",
+            ));
         }
         let (plan, modules, config) = prepared.commit()?;
         let _call = NativeCall::enter().map_err(|e| LoadError::new("startup", false, &e))?;
         let registration = RegistrationSet::load(plan, modules, config)?;
-        event("ready", json!({
-            "mod_count": registration.len(), "immutable": true,
-            "plan_sha256": registration.digest, "plan": registration.plan,
-        }));
+        event(
+            "ready",
+            json!({
+                "mod_count": registration.len(), "immutable": true,
+                "plan_sha256": registration.digest, "plan": registration.plan,
+            }),
+        );
         Ok(Runtime {
             stopping: AtomicBool::new(false),
             state: Mutex::new(State {
-                registration: Some(registration), stopping: false, failed: None, active_tools: 0,
+                registration: Some(registration),
+                stopping: false,
+                failed: None,
+                active_tools: 0,
             }),
             drained: Condvar::new(),
         })
     })();
-    if let Err(error) = &result { event("startup-failed", json!(error)); }
+    if let Err(error) = &result {
+        event("startup-failed", json!(error));
+    }
     let failure = result.as_ref().err().cloned();
     let _ = RUNTIME.set(result);
-    if let Some(error) = failure { return Err(error); }
+    if let Some(error) = failure {
+        return Err(error);
+    }
     Ok(ShutdownGuard { active: true })
 }
 
