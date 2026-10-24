@@ -113,6 +113,10 @@ def prepare(root, logs):
         mapped = host / destination
         mapped.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source_file(root, source), mapped)
+    # Hash update generics instantiate in cm-runtime; optimize them and SHA compression.
+    with (host / "codex-rs/Cargo.toml").open("a", encoding="utf-8") as stream:
+        stream.write("\n[profile.dev-small.package.cm-runtime]\nopt-level = 3\n"
+                     "\n[profile.dev-small.package.sha2]\nopt-level = 3\n")
     # Generated worker inputs never become publication inputs or .gitignore exceptions.
     with (root / ".git/info/exclude").open("a", encoding="utf-8") as stream:
         stream.write("\n/" + HOST + "/\n/" + ADAPTER + "/inputs/\n")
