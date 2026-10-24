@@ -90,6 +90,8 @@ The shared composition include is checked with rustfmt --edition 2024 --check du
 
 The P03 business matrix reuses the same SSE provider, builtin exec_command and Unix socket A/B barriers, including actual Core write-gate Pending, outputs and real thread/turn/call IDs. Successful selection cases run under a real exec/network observer and reject compiler/linker/JIT calls and undeclared service connections. Signal-cancellation regressions keep direct child delivery. Probe-only plan/ABI cases are identified separately from real Core business. A stuck synchronous callback is recorded as a killed process failure. This observation is not the P04 toolchain-free isolated consumer gate.
 
+The controlled Core fixture disables unrelated upstream plugins/apps and analytics and inherits only explicit runtime environment keys. The observer tracks fixture connections and kernel-returned Unix socketpair identities, including the exact upstream process-setup re-exec. It joins split syscalls by thread ID and redacts socket payloads before evidence export; descriptors, targets, byte counts and results remain. Literal observer checks run before Host compilation; actual runtime traces remain required.
+
 Six separate P03 reports preserve common source/workflow/runner/Host/mod provenance with disjoint-key assertions; the root acceptance records only CM-P03-AC01 through AC06. Raw child results are written before assertions, and a finally path retains bounded UTF-8/NUL-free logs/JSON without profiles, packages or caches.
 
 ## Independent dispatch and cache authority

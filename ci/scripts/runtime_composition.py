@@ -170,12 +170,45 @@ def build_mods(root, logs, package, frozen):
 
 def prefix(directory):
     return ["strace", "-f", "-qq", "-yy", "-s", "1024", "-e",
-            "trace=execve,execveat,connect,sendto", "-o", str(directory / "syscalls.log"), "--"]
+            "trace=execve,execveat,connect,sendto,socketpair", "-o", str(directory / "syscalls.log"), "--"]
+
+
+def redact_syscalls(text):
+    return re.sub(r'(^\d+\s+sendto\(\d+(?:<.*?>)?, )"(?:[^"\\]|\\.)*"(\.\.\.)?',
+                  r'\1"<payload redacted>"', text, flags=re.MULTILINE)
+
+
+def complete_syscalls(lines):
+    pending = {}
+    complete = []
+    for line in lines:
+        start = re.fullmatch(r'(\d+)\s+(\w+\(.*) <unfinished \.\.\.>', line)
+        resumed = re.fullmatch(r'(\d+)\s+<\.\.\. (\w+) resumed>(.*)', line)
+        if start:
+            assert start[1] not in pending, line
+            pending[start[1]] = start[2]
+            continue
+        if resumed:
+            head = pending.pop(resumed[1], "")
+            assert head.startswith(resumed[2] + "("), line
+            line = resumed[1] + " " + head + re.sub(r'\)\s+=', ') =', resumed[3])
+        complete.append(line)
+    assert not pending, "Observer missed syscall completion: " + repr(pending)
+    return complete
 
 
 def audit_network(lines, directory, ports):
     unix_connections = set()
+    unix_pairs = set()
     for line in lines:
+        if re.match(r'\d+\s+socketpair\(', line):
+            fd = r'\d+<UNIX(?:-STREAM)?:\[(\d+)(?:->(\d+))?\]>'
+            pair = re.fullmatch(r'\d+\s+socketpair\(AF_UNIX, SOCK_STREAM(?:\|SOCK_(?:CLOEXEC|NONBLOCK))*, 0, \['
+                                + fd + ', ' + fd + r'\]\) = 0', line)
+            assert pair and pair[1] != pair[3], "Unclassified socketpair: " + line
+            assert pair[2] in (None, pair[3]) and pair[4] in (None, pair[1]), line
+            unix_pairs.update(((pair[1], pair[3]), (pair[3], pair[1])))
+            continue
         call = re.match(r'\d+\s+(connect|sendto)\(\d+(?:<(.*?)>)?, ', line)
         assert call, "Unclassified network syscall: " + line
         descriptor = call[2] or ""
@@ -195,9 +228,26 @@ def audit_network(lines, directory, ports):
         else:
             assert call[1] == "sendto" and re.search(r', NULL, 0\)?(?: = [^"]*| <unfinished \.\.\.>)$', line), line
             # Decoded socket identity ties address-less sends to the observed fixture connection.
-            unix = re.fullmatch(r'UNIX(?:-[A-Z]+)?:\[(\d+)->\d+(?:,[^\]]*)?\]', descriptor)
+            unix = re.fullmatch(r'UNIX(?:-[A-Z]+)?:\[(\d+)->(\d+)(?:,[^\]]*)?\]', descriptor)
             tcp = re.fullmatch(r'TCP:\[127[.]0[.]0[.]1:\d+->127[.]0[.]0[.]1:(\d+)\]', descriptor)
-            assert ((unix and unix[1] in unix_connections) or (tcp and tcp[1] in ports)), "Unknown socket peer: " + line
+            assert ((unix and (unix[1] in unix_connections or (unix[1], unix[2]) in unix_pairs))
+                    or (tcp and tcp[1] in ports)), "Unknown socket peer: " + line
+
+
+def audit_executions(executions):
+    assert executions, "Observer missed the initial exec"
+    forbidden = re.compile(r'/(?:cargo|rustc|rustdoc|cc|gcc(?:-[0-9]+)?|g\+\+(?:-[0-9]+)?|c\+\+|clang(?:\+\+)?|ld(?:\.[a-z]+)?|lld|collect2|as|ar|make|cmake|ninja|sccache|node|bun|deno|java)(?=[" ])')
+    assert not any(forbidden.search(line) for line in executions), executions
+    allowed = {"codex", "native_probe", "bash", "sh", "env", "python3", "python3.12", "bwrap",
+               "rg", "uname", "id", "tty", "stty", "getent", "ps", "which", "readlink",
+               "lsb_release", "getopt", "cut", "tr", "getconf"}
+    for line in executions:
+        match = re.search(r'execve\("([^"]+)"', line)
+        assert match, "Unclassified execveat: " + line
+        helper = match[1] == "/proc/self/exe" and '"--codex-run-as-process-setup"' in line
+        assert Path(match[1]).name in allowed or helper, "Unclassified executable: " + line
+        if Path(match[1]).name.startswith("python"):
+            assert "fixtures/native-loader/tool_barrier.py" in line, line
 
 
 def check_network_audit():
@@ -205,42 +255,63 @@ def check_network_audit():
     connect = '1 connect(4<UNIX-STREAM:[41]>, {sa_family=AF_UNIX, sun_path="/fixture/callback.sock"}, 32) = 0'
     send = '1 sendto(4<UNIX-STREAM:[41->42]>, "callback-entered\\n", 17, MSG_NOSIGNAL, NULL, 0) = 17'
     tcp = '2 sendto(5<TCP:[127.0.0.1:1234->127.0.0.1:8080]>, "request", 7, MSG_NOSIGNAL, NULL, 0) = 7'
-    audit_network([connect, send, tcp], directory, {"8080"})
+    pair = '3 socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0, [8<UNIX-STREAM:[51->52]>, 9<UNIX-STREAM:[52->51]>]) = 0'
+    ipc = '3 sendto(8<UNIX-STREAM:[51->52]>, "CI_TOKEN=observer-canary\\0", 25, MSG_NOSIGNAL, NULL, 0) = 25'
+    split = ['3 socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0,  <unfinished ...>',
+             '3 <... socketpair resumed>[8<UNIX-STREAM:[51->52]>, 9<UNIX-STREAM:[52->51]>])             = 0']
+    assert complete_syscalls(split) == [pair]
+    for incomplete in ([split[0]], [split[1]], [split[0], split[1].replace("socketpair resumed", "sendto resumed")]):
+        try:
+            complete_syscalls(incomplete)
+        except AssertionError:
+            continue
+        raise AssertionError("Observer accepted incomplete syscalls: " + repr(incomplete))
+    sanitized = redact_syscalls(ipc)
+    assert "observer-canary" not in sanitized and "<payload redacted>" in sanitized
+    assert sanitized.endswith(', 25, MSG_NOSIGNAL, NULL, 0) = 25')
+    audit_network([connect, send, tcp, *complete_syscalls(split), sanitized], directory, {"8080"})
     for unknown in ([send], [connect, send.replace("41->42", "43->42")],
                     [connect, send.replace("<UNIX-STREAM:[41->42]>", "")],
                     [tcp.replace(":8080]", ":8081]")], [tcp.replace("->127.0.0.1", "->198.51.100.1")],
-                    [connect.replace("/fixture/", "/outside/")]):
+                    [connect.replace("/fixture/", "/outside/")], [ipc],
+                    [pair, ipc.replace("51->52", "51->53")], [pair.replace("52->51", "52->53")]):
         try:
             audit_network(unknown, directory, {"8080"})
         except AssertionError:
             continue
         raise AssertionError("Network audit accepted an unknown peer: " + repr(unknown))
+    helper = '4 execve("/proc/self/exe", ["/proc/self/exe", "--codex-run-as-process-setup"], 0x1 /* 0 vars */) = 0'
+    audit_executions([helper, '4 execve("/usr/bin/lsb_release", ["lsb_release", "-a"], 0x1) = 0'])
+    for unknown in ('4 execve("/usr/bin/cargo", ["cargo"], 0x1) = 0',
+                    '4 execve("/tmp/codex-tools/unknown", ["unknown"], 0x1) = 0',
+                    helper.replace('"--codex-run-as-process-setup"', '"--unknown"')):
+        try:
+            audit_executions([unknown])
+        except AssertionError:
+            continue
+        raise AssertionError("Execution audit accepted an unknown executable: " + unknown)
 
 
 def audit(directory, pure=False):
-    text = (directory / "syscalls.log").read_text()
-    calls = text.splitlines()
-    executions = [line for line in calls if re.search(r"\bexecve(?:at)?\(", line)]
-    assert executions, "Observer missed the initial exec"
-    forbidden = re.compile(r'/(?:cargo|rustc|rustdoc|cc|gcc(?:-[0-9]+)?|g\+\+(?:-[0-9]+)?|c\+\+|clang(?:\+\+)?|ld(?:\.[a-z]+)?|lld|collect2|as|ar|make|cmake|ninja|sccache|node|bun|deno|java)(?=[" ])')
-    assert not any(forbidden.search(line) for line in executions), executions
-    allowed = {"codex", "native_probe", "bash", "sh", "env", "python3", "python3.12", "bwrap",
-               "rg", "uname", "id", "tty", "stty", "getent", "ps", "which", "readlink"}
-    for line in executions:
-        match = re.search(r'execve\("([^"]+)"', line)
-        assert match, "Unclassified execveat: " + line
-        assert Path(match[1]).name in allowed or "/codex-" in match[1], "Unclassified executable: " + line
-        if Path(match[1]).name.startswith("python"):
-            assert "fixtures/native-loader/tool_barrier.py" in line, line
-    network = [line for line in calls if re.match(r'\d+\s+(?:connect|sendto)\(', line)]
+    path = directory / "syscalls.log"
+    text = redact_syscalls(path.read_text())
+    path.write_text(text)
+    calls = complete_syscalls(text.splitlines())
+    executions = [line for line in calls if re.match(r"\d+\s+execve(?:at)?\(", line)]
+    audit_executions(executions)
+    observed = [line for line in calls if re.match(r'\d+\s+(?:connect|sendto|socketpair)\(', line)]
+    network = [line for line in observed if not re.match(r'\d+\s+socketpair\(', line)]
+    pairs = [line for line in observed if re.match(r'\d+\s+socketpair\(', line)]
     command = host.read(directory / "result.json")["command"]
     ports = set(re.findall(r"http://127[.]0[.]0[.]1:([0-9]+)", " ".join(command)))
-    audit_network(network, directory, ports)
+    audit_network(observed, directory, ports)
     if pure:
-        assert len(executions) == 1 and not network, "Pure planning spawned code/network"
+        assert len(executions) == 1 and not observed, "Pure planning spawned code/network"
     result = {"status": "pass", "exec_count": len(executions), "network_count": len(network),
               "compiler_linker_jit_build_service_calls": 0, "syscalls": str(directory / "syscalls.log"),
-              "executions": executions, "network": network, "pure_planning": pure}
+              "executions": executions, "network": network, "pure_planning": pure,
+              "socketpair_count": len(pairs), "socketpairs": pairs,
+              "socket_payloads": "redacted; syscall descriptors, targets, sizes and results retained"}
     host.write(directory / "audit.json", result)
     return result
 
@@ -887,7 +958,8 @@ def collect_lightweight(artifact, logs):
             continue
         if {"profile", "business-profile", "home"}.intersection(relative.parts):
             continue
-        data = path.read_bytes()
+        data = (redact_syscalls(path.read_text()).encode("utf-8")
+                if path.name == "syscalls.log" else path.read_bytes())
         data.decode("utf-8")
         assert b"\0" not in data and len(data) <= 16 * 1024 * 1024, str(relative)
         destination = logs / "acceptance-evidence" / relative

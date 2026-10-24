@@ -197,7 +197,7 @@ def helper(root, logs):
     import runtime_composition
     runtime_composition.check_network_audit()
     write(logs / "composition-observer-self-check.json", {
-        "status": "pass", "scope": "Literal parser cases only; actual runtime socket audit remains required"})
+        "status": "pass", "scope": "Literal syscall joining, redaction, execution and network cases only; actual runtime audit remains required"})
     execute(root, logs, "composition-shared-fmt", ["rustfmt", "--edition", "2024", "--check",
             str(source_file(root, "fixtures/mods/composition-common.rs"))])
     target = Path(os.environ["CARGO_TARGET_DIR"]) / "helper"

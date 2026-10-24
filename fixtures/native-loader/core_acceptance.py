@@ -121,6 +121,7 @@ def cli_arguments(binary, cwd, endpoint):
             "-c", "model_providers.cm_fixture.supports_websockets=false",
             "-c", "features.code_mode=false", "-c", "features.code_mode_only=false",
             "-c", "features.unified_exec=true", "-c", "features.shell_snapshot=false",
+            "-c", "features.plugins=false", "-c", "features.apps=false", "-c", "analytics.enabled=false",
             "exec", "--skip-git-repo-check", "--ephemeral", "--json",
             "--dangerously-bypass-approvals-and-sandbox", "-C", str(cwd),
             "-m", "gpt-5.4", "CM deterministic local acceptance"]
@@ -203,12 +204,16 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     endpoint = "http://127.0.0.1:" + str(server.server_port)
-    env = {**os.environ, "CODEX_HOME": str(home), "CODEX_SQLITE_HOME": str(home),
+    assert all(key.startswith("CM_") for key in (extra_env or {}))
+    # The process helper transfers its environment over an observed socket; never inherit CI credentials.
+    inherited = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR") if key in os.environ}
+    env = {**inherited, "CODEX_HOME": str(home), "CODEX_SQLITE_HOME": str(home),
            "HOME": str(directory / "home"), "CM_NATIVE_TRACE": str(trace),
            "CM_FIXTURE_MODE": mode, "CM_FIXTURE_EVENTS": str(directory / "mod-events.jsonl"),
            "CODEX_API_KEY": "cm-controlled-fixture-only", "OPENAI_API_KEY": "cm-controlled-fixture-only",
            **(extra_env or {})}
     Path(env["HOME"]).mkdir()
+    assert not any(key.startswith(("ACTIONS_", "GITHUB_", "GH_")) for key in env)
     args = [*command_prefix, *cli_arguments(binary, directory, endpoint)]
     stdout = directory / "stdout.jsonl"
     stderr = directory / "stderr.log"
@@ -284,7 +289,7 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
         result = {"status": "pass", "command": args, "return_code": return_code,
                   "scenario": scenario, "mod_loaded": mod_loaded, "trace": trace.name,
                   "stdout": stdout.name, "stderr": stderr.name,
-                  "events": tools.events, "provider_requests": requests,
+                  "events": tools.events, "provider_requests": requests, "environment_keys": sorted(env),
                   "executable_sha256": sha(binary)}
         write(directory / "result.json", result)
         return result
@@ -298,6 +303,7 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
                 "status": "failed", "command": args,
                 "return_code": process_ref[0].returncode if process_ref else None,
                 "events": tools.events, "provider_requests": requests, "errors": errors,
+                "environment_keys": sorted(env),
             })
         server.shutdown()
         server.server_close()
