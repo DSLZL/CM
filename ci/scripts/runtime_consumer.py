@@ -17,6 +17,7 @@ import threading
 
 TARGET = "x86_64-unknown-linux-gnu"
 CAPABILITY = "core.exec_output_limit.v1"
+CONSUMER_ENV_PREFIX = ("/usr/bin/env", "-u", "PWD")
 ENTRY_INVALID = ("short-prefix", "short-tail", "future-minor", "stride", "count", "null-array",
                  "misaligned-array", "reserved", "descriptor-size", "descriptor-minor",
                  "descriptor-reserved", "null-callback", "null-view", "huge-view", "utf8")
@@ -347,6 +348,12 @@ def self_check():
         assert subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", owner], text=True).strip()
     print(json.dumps({"dpkg_query_loader_owners": actual_owners}))
 
+    expected_env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "CM_ENV_SENTINEL": "retained"}
+    cleaned_env = json.loads(subprocess.check_output([*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "-c",
+        "import json, os; print(json.dumps(dict(os.environ)))"], env={**expected_env, "PWD": "/must-not-pass"}, text=True))
+    assert cleaned_env == expected_env, sorted(cleaned_env)
+    print(json.dumps({"consumer_pwd_cleanup": "pass"}))
+
     observer.check_network_audit()
     for source in ('1 recvfrom(4<UNIX-STREAM:[1->2]>, "observer-secret", 15, 0, NULL, NULL) = 15',
                    '1 <... recvfrom resumed>"observer-secret", 15, 0, NULL, NULL) = 15'):
@@ -546,7 +553,7 @@ def consume():
                            "TERM": "dumb", "TMPDIR": "/tmp", "HOME": "/home/fixture", "PYTHONNOUSERSITE": "1",
                            "PYTHONDONTWRITEBYTECODE": "1"}.items():
             base += ["--setenv", key, value]
-        driver = ["/usr/bin/python3", "-B", "/fixture/fixtures/runtime-consumer/driver.py"]
+        driver = [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "/fixture/fixtures/runtime-consumer/driver.py"]
         try:
             stage = "strict isolation probes"
             with (logs / "consumer-probes.log").open("w") as stream:
