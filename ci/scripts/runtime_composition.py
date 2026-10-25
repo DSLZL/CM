@@ -278,7 +278,19 @@ def audit_network(lines, directory, ports, kernel_routes=()):
                     or (tcp and tcp[1] in ports)), "Unknown socket peer: " + line
 
 
-def audit_executions(executions, python_scripts=("fixtures/native-loader/tool_barrier.py",)):
+def bound_sandbox_aliases(lines):
+    aliases = set()
+    for line in lines:
+        match = re.fullmatch(r'\d+\s+symlink(?:at)?\("([^"]+)", (?:AT_FDCWD(?:<[^>]*>)?, )?"([^"]+)"\) = 0', line)
+        if not match or Path(match[2]).name != "codex-linux-sandbox":
+            continue
+        assert match[1] == "/inputs/host/bin/codex", "Sandbox alias is not the frozen Host: " + line
+        assert re.fullmatch(r'(?:/profile|/work(?:/[A-Za-z0-9_-]+)*)/tmp/arg0-linux/codex-arg0[A-Za-z0-9]+/codex-linux-sandbox', match[2]), line
+        aliases.add(match[2])
+    return aliases
+
+
+def audit_executions(executions, python_scripts=("fixtures/native-loader/tool_barrier.py",), sandbox_aliases=()):
     assert executions, "Observer missed the initial exec"
     forbidden = re.compile(r'/(?:cargo|rustc|rustdoc|cc|gcc(?:-[0-9]+)?|g\+\+(?:-[0-9]+)?|c\+\+|clang(?:\+\+)?|ld(?:\.[a-z]+)?|lld|collect2|as|ar|make|cmake|ninja|sccache|node|bun|deno|java)(?=[" ])')
     assert not any(forbidden.search(line) for line in executions), executions
@@ -288,7 +300,8 @@ def audit_executions(executions, python_scripts=("fixtures/native-loader/tool_ba
     for line in executions:
         match = re.search(r'execve\("([^"]+)"', line)
         assert match, "Unclassified execveat: " + line
-        helper = match[1] == "/proc/self/exe" and '"--codex-run-as-process-setup"' in line
+        helper = (match[1] == "/proc/self/exe" and '"--codex-run-as-process-setup"' in line) or (
+            match[1] in sandbox_aliases and '"--sandbox-policy-cwd"' in line and '"--permission-profile"' in line)
         assert Path(match[1]).name in allowed or helper, "Unclassified executable: " + line
         if Path(match[1]).name.startswith("python"):
             assert any(script in line for script in python_scripts), line
@@ -353,8 +366,23 @@ def check_network_audit():
         raise AssertionError("Network audit accepted an unknown peer: " + repr(unknown))
     helper = '4 execve("/proc/self/exe", ["/proc/self/exe", "--codex-run-as-process-setup"], 0x1 /* 0 vars */) = 0'
     audit_executions([helper, '4 execve("/usr/bin/lsb_release", ["lsb_release", "-a"], 0x1) = 0'])
+    alias = "/profile/tmp/arg0-linux/codex-arg0ABC123/codex-linux-sandbox"
+    creation = '4 symlink("/inputs/host/bin/codex", "' + alias + '") = 0'
+    bindings = bound_sandbox_aliases([creation])
+    assert bindings == {alias}
+    assert bound_sandbox_aliases([creation.replace('symlink(', 'symlinkat(').replace(', "' + alias, ', AT_FDCWD</work>, "' + alias)]) == bindings
+    sandbox = '4 execve("' + alias + '", ["' + alias + '", "--sandbox-policy-cwd", "/work", "--permission-profile", "{}"], 0x1) = 0'
+    audit_executions([sandbox], sandbox_aliases=bindings)
+    for invalid in (creation.replace("/inputs/host/bin/codex", "/tmp/codex"),
+                    creation.replace("/profile/tmp/", "/outside/tmp/")):
+        try:
+            bound_sandbox_aliases([invalid])
+        except AssertionError:
+            continue
+        raise AssertionError("Unknown sandbox alias accepted")
     for unknown in ('4 execve("/usr/bin/cargo", ["cargo"], 0x1) = 0',
                     '4 execve("/tmp/codex-tools/unknown", ["unknown"], 0x1) = 0',
+                    sandbox,
                     helper.replace('"--codex-run-as-process-setup"', '"--unknown"')):
         try:
             audit_executions([unknown])

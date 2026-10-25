@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Real exec_command payload: explicit socket barriers, no timing-based oracle."""
-import socket
+"""Real exec_command payload: explicit file barriers, no timing-based oracle."""
 import sys
 from pathlib import Path
 import subprocess
+import time
 
-with socket.socket(socket.AF_UNIX) as connection:
-    connection.connect(sys.argv[1])
-    connection.sendall((sys.argv[2] + ":entered\n").encode())
-    if connection.recv(1) != b"R":
-        raise RuntimeError("Missing explicit tool release")
-    connection.sendall((sys.argv[2] + ":exiting\n").encode())
+barriers, label = Path(sys.argv[1]), sys.argv[2]
+assert label in ("A", "B")
+(barriers / (label + ".entered")).touch(exist_ok=False)
+deadline = time.monotonic() + 45
+while not (barriers / (label + ".release")).exists():
+    if time.monotonic() >= deadline:
+        raise TimeoutError("Missing explicit tool release")
+    time.sleep(0.01)
+(barriers / (label + ".exiting")).touch(exist_ok=False)
 print("cm-real-tool-" + sys.argv[2] + "-ok")
 if len(sys.argv) > 3 and sys.argv[3] == "long":
     fixture = Path(sys.argv[1]).parent

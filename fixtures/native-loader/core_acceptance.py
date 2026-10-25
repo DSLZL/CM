@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 import shlex
 import signal
-import socket
 import subprocess
 import threading
 import time
@@ -48,14 +47,10 @@ class Tools:
         self.path = path
         self.condition = threading.Condition()
         self.events = []
-        self.connections = {}
         self.error = None
-        self.listener = socket.socket(socket.AF_UNIX)
-        self.listener.bind(str(path))
-        self.listener.listen(2)
-        self.listener.settimeout(0.1)
+        self.path.mkdir()
         self.closed = False
-        self.thread = threading.Thread(target=self.accept, daemon=True)
+        self.thread = threading.Thread(target=self.watch, daemon=True)
         self.thread.start()
 
     def record(self, label):
@@ -63,38 +58,22 @@ class Tools:
             self.events.append({"seq": len(self.events) + 1, "event": label})
             self.condition.notify_all()
 
-    def accept(self):
-        while not self.closed:
-            try:
-                connection, _ = self.listener.accept()
-            except socket.timeout:
-                continue
-            except OSError:
-                if not self.closed:
-                    self.error = "barrier listener failed"
-                return
-            threading.Thread(target=self.handle, args=(connection,), daemon=True).start()
-
-    def handle(self, connection):
+    def watch(self):
         try:
-            connection.settimeout(45)
-            with connection, connection.makefile("rb") as stream:
-                entered = stream.readline().decode().strip()
-                if entered not in ("A:entered", "B:entered"):
-                    raise RuntimeError("Unexpected real tool barrier " + repr(entered))
-                label = entered[0]
-                with self.condition:
-                    self.connections[label] = connection
-                    self.record(entered)
-                exiting = stream.readline().decode().strip()
-                if exiting:
-                    if exiting != label + ":exiting":
-                        raise RuntimeError("Unexpected tool exit barrier")
-                    self.record(exiting)
-        except (ConnectionResetError, BrokenPipeError):
-            self.record("tool-connection-cancelled")
+            while not self.closed:
+                for marker in sorted(self.path.iterdir()):
+                    label, _, event = marker.name.partition(".")
+                    assert label in ("A", "B") and event in ("entered", "release", "exiting"), marker
+                    assert not marker.is_symlink() and marker.is_file() and marker.stat().st_size == 0, marker
+                    if event != "release" and not self.has(label + ":" + event):
+                        if event == "exiting":
+                            assert self.has(label + ":entered") and self.has(label + ":release")
+                        self.record(label + ":" + event)
+                threading.Event().wait(0.01)
         except Exception as error:
-            self.error = repr(error)
+            with self.condition:
+                self.error = repr(error)
+                self.condition.notify_all()
 
     def has(self, label):
         with self.condition:
@@ -102,12 +81,12 @@ class Tools:
 
     def release(self, label):
         with self.condition:
+            assert self.has(label + ":entered")
             self.record(label + ":release")
-            self.connections[label].sendall(b"R")
+            (self.path / (label + ".release")).touch(exist_ok=False)
 
     def close(self):
         self.closed = True
-        self.listener.close()
         self.thread.join(timeout=2)
 
 
@@ -145,7 +124,7 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
     restrictive = mod_loaded if restrictive is None else restrictive
     directory.mkdir(parents=True)
     trace = directory / "core-trace.jsonl"
-    tools = Tools(directory / "tools.sock")
+    tools = Tools(directory / "tool-barriers")
     requests = []
     errors = []
     process_ref = []

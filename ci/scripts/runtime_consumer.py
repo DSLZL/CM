@@ -183,7 +183,7 @@ def produce():
         shutil.copyfile(root / relative, destination)
     # Only runtime parser functions are handed to the outer observer, not build modules.
     observer = "import json\nimport re\nfrom pathlib import Path\n\n" + "\n\n".join(inspect.getsource(getattr(composition, name))
-        for name in ("redact_syscalls", "complete_syscalls", "kernel_route_sockets", "audit_network", "audit_executions", "check_network_audit"))
+        for name in ("redact_syscalls", "complete_syscalls", "kernel_route_sockets", "audit_network", "bound_sandbox_aliases", "audit_executions", "check_network_audit"))
     (inputs / "observer.py").write_text(observer, encoding="utf-8")
     shutil.copyfile(Path(__file__), inputs / "runtime_consumer.py")
     official_root = Path(os.environ["RUNNER_TEMP"]) / "cm-p04-official"
@@ -344,7 +344,7 @@ def copy_evidence(source, destination):
 def self_check():
     import runtime_composition as observer
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "fixtures/native-loader"))
-    from core_acceptance import cli_arguments, trace_rows
+    from core_acceptance import Tools, await_barrier, cli_arguments, trace_rows
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "fixtures/runtime-consumer"))
     from driver import check_mounts
 
@@ -420,6 +420,35 @@ def self_check():
         assert routes and packets, "Actual sandbox loopback setup was not observed"
         observer.audit_network(packets, Path(directory), set(), routes)
         print(json.dumps({"actual_helper_kernel_route_audit": "pass", "socket_count": len(routes), "packet_count": len(packets)}))
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        tools = Tools(root / "tool-barriers")
+        command = [str(binary), "--unshare-user", "--unshare-net", "--cap-drop", "ALL", "--ro-bind", "/", "/",
+            "--bind", str(root), str(root), "--chdir", str(root), "--clearenv", "--", "/usr/bin/python3", "-B",
+            str(Path(__file__).resolve().parents[2] / "fixtures/native-loader/tool_barrier.py"), str(tools.path)]
+        processes = {}
+        try:
+            for label in ("A", "B"):
+                processes[label] = subprocess.Popen([*command, label], stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, text=True, close_fds=True)
+            for label, process in processes.items():
+                await_barrier(lambda label=label: tools.has(label + ":entered"), process, label)
+                assert not (tools.path / (label + ".exiting")).exists()
+            for label in ("B", "A"):
+                tools.release(label)
+                stdout, stderr = processes[label].communicate(timeout=10)
+                assert processes[label].returncode == 0 and "cm-real-tool-" + label + "-ok" in stdout, stderr
+            assert tools.error is None
+            (tools.path / "invalid").touch()
+            with tools.condition:
+                assert tools.condition.wait_for(lambda: tools.error is not None, timeout=2)
+            print(json.dumps({"actual_helper_file_barriers": "pass"}))
+        finally:
+            for process in processes.values():
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+            tools.close()
     for source in ('1 recvfrom(4<UNIX-STREAM:[1->2]>, "observer-secret", 15, 0, NULL, NULL) = 15',
                    '1 <... recvfrom resumed>"observer-secret", 15, 0, NULL, NULL) = 15'):
         sanitized = observer.redact_syscalls(source)
@@ -537,6 +566,7 @@ def observe(directory, evidence):
     scripts = ("fixtures/native-loader/tool_barrier.py", "fixtures/runtime-consumer/driver.py")
     network = []
     sockets = []
+    symlinks = []
     executions = []
     files = []
     executable_memory = []
@@ -548,13 +578,15 @@ def observe(directory, evidence):
         assert not re.search(r'\b(?:sendto|recvfrom)\([^\n]*?, "(?!<payload redacted>)', text)
         calls = observer.complete_syscalls(text.splitlines())
         sockets.extend(line for line in calls if re.match(r'\d+\s+socket\(', line))
+        symlinks.extend(line for line in calls if re.match(r'\d+\s+symlink(?:at)?\(', line))
         executions.extend(line for line in calls if re.match(r'\d+\s+execve(?:at)?\(', line))
         network.extend(line for line in calls if re.match(r'\d+\s+(?:connect|sendto|socketpair)\(', line))
         files.extend(line for line in calls if re.match(r'\d+\s+(?:openat|readlink)\(', line))
         # This fixed native fixture has no supported in-process code generator.
         executable_memory.extend(line for line in calls if "PROT_EXEC" in line and
             ("MAP_ANONYMOUS" in line or re.match(r'\d+\s+mprotect\(', line)))
-    observer.audit_executions(executions, python_scripts=scripts)
+    aliases = observer.bound_sandbox_aliases(symlinks)
+    observer.audit_executions(executions, python_scripts=scripts, sandbox_aliases=aliases)
     assert any('execve("/inputs/host/codex-resources/bwrap"' in line for line in executions), "No actual nested packaged sandbox helper"
     assert any('execve("/inputs/host/codex-path/rg"' in line for line in executions), "No actual packaged rg execution"
     ports = set()
@@ -574,6 +606,7 @@ def observe(directory, evidence):
     assert not executable_memory, "Unclassified runtime code generation: " + repr(executable_memory)
     assert files, "File-load observer produced no records"
     return {"status": "pass", "executions": executions, "network": network, "kernel_route_sockets": sorted(routes),
+        "sandbox_aliases": [{"path": path, "target": "/inputs/host/bin/codex"} for path in sorted(aliases)],
         "file_load_count": len(files), "trace_files": [path.name for path in sorted(directory.glob("syscalls.*"))],
         "compiler_linker_jit_build_service_calls": 0, "unclassified_executable_memory": executable_memory,
         "boundary": "fixed audited native fixtures; not a generic malicious-native JIT detector",
@@ -658,7 +691,7 @@ def consume():
             trusted.mkdir()
             stage = "actual isolated matrix"
             trace = ["strace", "-ff", "-qq", "-yy", "-s", "1024", "-e",
-                "trace=execve,execveat,socket,connect,sendto,recvfrom,socketpair,openat,readlink,mmap,mprotect,memfd_create",
+                "trace=execve,execveat,socket,connect,sendto,recvfrom,socketpair,symlink,symlinkat,openat,readlink,mmap,mprotect,memfd_create",
                 "-o", str(trusted / "syscalls"), "--"]
             write(logs / "consumer-command.json", {"command": [*trace, *base, "--", *driver, "matrix"],
                 "cache_mode": "none", "producer_input_manifest_sha256": manifest["sha256"], "provenance": provenance()})
