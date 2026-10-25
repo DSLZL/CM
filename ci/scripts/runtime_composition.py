@@ -260,7 +260,9 @@ def audit_network(lines, directory, ports, kernel_routes=()):
         if address:
             if "sa_family=AF_UNIX" in address[1]:
                 scoped = 'sun_path="' + str(directory) + '/' in address[1]
-                assert scoped or ("nscd/socket" in address[1] and "ENOENT" in line), line
+                denied_nscd = (call[2] == "connect" and address[1] == '{sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}' and
+                               line.endswith((' = -1 ENOENT (No such file or directory)', ' = -1 EPERM (Operation not permitted)')))
+                assert scoped or denied_nscd, line
                 if scoped:
                     inode = re.fullmatch(r'UNIX(?:-[A-Z]+)?:\[(\d+)[^\]]*\]', descriptor)
                     assert inode, "Missing Unix socket identity: " + line
@@ -328,9 +330,13 @@ def audit_executions(executions, python_scripts=("fixtures/native-loader/tool_ba
     for line in executions:
         match = re.search(r'execve\("([^"]+)"', line)
         assert match, "Unclassified execveat: " + line
+        # The upstream sandbox probe searches for true, absent from the minimal rootfs.
+        missing_probe = (', ["true"], ' in line and line.endswith(' = -1 ENOENT (No such file or directory)') and (
+            match[1] in ("/inputs/host/codex-path/true", "/usr/bin/true", "/bin/true") or
+            re.fullmatch(r'(?:/profile|/work(?:/[A-Za-z0-9_-]+)*)/tmp/arg0-linux/codex-arg0[A-Za-z0-9]+/true', match[1])))
         helper = (match[1] == "/proc/self/exe" and '"--codex-run-as-process-setup"' in line) or (
             match[1] in sandbox_aliases and '"--sandbox-policy-cwd"' in line and '"--permission-profile"' in line) or line in bwrap_executions
-        assert Path(match[1]).name in allowed or helper, "Unclassified executable: " + line
+        assert Path(match[1]).name in allowed or helper or missing_probe, "Unclassified executable: " + line
         if Path(match[1]).name.startswith("python"):
             assert any(script in line for script in python_scripts), line
 
@@ -355,6 +361,8 @@ def check_network_audit():
     assert "observer-canary" not in sanitized and "<payload redacted>" in sanitized
     assert sanitized.endswith(', 25, MSG_NOSIGNAL, NULL, 0) = 25')
     audit_network([connect, send, tcp, *complete_syscalls(split), sanitized], directory, {"8080"})
+    nscd = '3 connect(8<UNIX-STREAM:[51]>, {sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}, 110) = -1 ENOENT (No such file or directory)'
+    audit_network([nscd, nscd.replace('ENOENT (No such file or directory)', 'EPERM (Operation not permitted)')], directory, set())
     route = '4 socket(AF_NETLINK, SOCK_RAW|SOCK_CLOEXEC, NETLINK_ROUTE) = 5<NETLINK:[123]>'
     tail = ', 40, 0, {sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, 12) = 40'
     structured = '4 sendto(5<NETLINK:[123]>, [{nlmsg_type=RTM_NEWLINK}, ["observer-secret]", "escaped\\\"quote"]]' + tail
@@ -383,6 +391,10 @@ def check_network_audit():
             continue
         raise AssertionError("Network audit accepted an unknown Netlink peer")
     for unknown in ([send], [connect, send.replace("41->42", "43->42")],
+                    [nscd.replace(' = -1 ENOENT (No such file or directory)', ' = 0')],
+                    [nscd.replace('/var/run/nscd/socket', '/outside/nscd/socket')],
+                    [nscd.replace('ENOENT (No such file or directory)', 'EACCES (Permission denied)')],
+                    [nscd, ipc],
                     [connect, send.replace("<UNIX-STREAM:[41->42]>", "")],
                     [tcp.replace(":8080]", ":8081]")], [tcp.replace("->127.0.0.1", "->198.51.100.1")],
                     [connect.replace("/fixture/", "/outside/")], [ipc],
@@ -394,6 +406,10 @@ def check_network_audit():
         raise AssertionError("Network audit accepted an unknown peer: " + repr(unknown))
     helper = '4 execve("/proc/self/exe", ["/proc/self/exe", "--codex-run-as-process-setup"], 0x1 /* 0 vars */) = 0'
     audit_executions([helper, '4 execve("/usr/bin/lsb_release", ["lsb_release", "-a"], 0x1) = 0'])
+    missing_probe = '4 execve("/usr/bin/true", ["true"], 0x1 /* 27 vars */) = -1 ENOENT (No such file or directory)'
+    for path in ("/inputs/host/codex-path/true", "/usr/bin/true", "/bin/true",
+                 "/profile/tmp/arg0-linux/codex-arg0ABC123/true", "/work/zero-0/tmp/arg0-linux/codex-arg0ABC123/true"):
+        audit_executions([missing_probe.replace("/usr/bin/true", path)])
     alias = "/profile/tmp/arg0-linux/codex-arg0ABC123/codex-linux-sandbox"
     creation = '4 symlink("/inputs/host/bin/codex", "' + alias + '") = 0'
     bindings = bound_sandbox_aliases([creation])
@@ -435,6 +451,11 @@ def check_network_audit():
         raise AssertionError("Unknown sandbox alias accepted")
     for unknown in ('4 execve("/usr/bin/cargo", ["cargo"], 0x1) = 0',
                     '4 execve("/tmp/codex-tools/unknown", ["unknown"], 0x1) = 0',
+                    missing_probe.replace(' = -1 ENOENT (No such file or directory)', ' = 0'),
+                    missing_probe.replace('ENOENT (No such file or directory)', 'EACCES (Permission denied)'),
+                    missing_probe.replace('["true"]', '["true", "--unexpected"]'),
+                    missing_probe.replace('/usr/bin/true', '/outside/true'),
+                    missing_probe.replace('/usr/bin/true', '/usr/bin/cargo'),
                     sandbox,
                     fd_exec,
                     helper.replace('"--codex-run-as-process-setup"', '"--unknown"')):
