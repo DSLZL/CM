@@ -25,6 +25,14 @@ struct Entry {
     sha256: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DevelopmentPackage {
+    version: String,
+    target: String,
+    entrypoint: String,
+}
+
 fn relative(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 512
@@ -45,22 +53,51 @@ fn same_build_inode(executable: &Path, original: &Path) -> bool {
     }
 }
 
+fn same_development_copy(executable: &Path, root: &Path, original: &Path) -> bool {
+    if !original.is_file() {
+        return false;
+    }
+    let Ok(file) = fs::File::open(root.join("codex-package.json")) else {
+        return false;
+    };
+    let mut bytes = Vec::new();
+    if file.take(4097).read_to_end(&mut bytes).is_err() || bytes.len() > 4096 {
+        return false;
+    }
+    let Ok(package) = serde_json::from_slice::<DevelopmentPackage>(&bytes) else {
+        return false;
+    };
+    if package.version != "0.0.0"
+        || package.target != "x86_64-unknown-linux-gnu"
+        || package.entrypoint != "bin/codex"
+    {
+        return false;
+    }
+    matches!(
+        (
+            loader::executable_hash(executable),
+            loader::executable_hash(original)
+        ),
+        (Ok(actual), Ok(built)) if actual == built
+    )
+}
+
 pub fn preflight() -> Result<(), LoadError> {
     let result = (|| -> Result<(), String> {
         let executable = fs::canonicalize("/proc/self/exe").map_err(|error| error.to_string())?;
-        // Cargo integration tests run the unpackaged build inode, including hard links.
-        if let Some(target) = option_env!("CARGO_TARGET_DIR")
-            && same_build_inode(
-                &executable,
-                &Path::new(target).join("x86_64-unknown-linux-gnu/dev-small/codex"),
-            )
-        {
-            return Ok(());
-        }
         let root = executable
             .parent()
             .and_then(Path::parent)
             .ok_or("missing package root")?;
+        // Upstream integration tests install copies of the 0.0.0 development CLI.
+        if let Some(target) = option_env!("CARGO_TARGET_DIR") {
+            let original = Path::new(target).join("x86_64-unknown-linux-gnu/dev-small/codex");
+            if same_build_inode(&executable, &original)
+                || same_development_copy(&executable, root, &original)
+            {
+                return Ok(());
+            }
+        }
         let mut bytes = Vec::new();
         fs::File::open(root.join("cm-runtime-files.json"))
             .map_err(|error| error.to_string())?
@@ -140,6 +177,35 @@ mod tests {
 
     use super::relative;
     use super::same_build_inode;
+    use super::same_development_copy;
+
+    #[test]
+    fn copied_development_cli_requires_original_bytes_and_development_metadata() {
+        let root = std::env::temp_dir().join(format!("cm-package-copy-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let original = root.join("original");
+        let copied = root.join("copied");
+        let manifest = root.join("codex-package.json");
+        fs::write(&original, b"same Host bytes").unwrap();
+        fs::copy(&original, &copied).unwrap();
+        assert!(!same_development_copy(&copied, &root, &original));
+        let mut package = serde_json::json!({
+            "version": "0.0.0", "target": "x86_64-unknown-linux-gnu", "entrypoint": "bin/codex"
+        });
+        fs::write(&manifest, serde_json::to_vec(&package).unwrap()).unwrap();
+        assert!(same_development_copy(&copied, &root, &original));
+        package["version"] = "0.3.0-p04".into();
+        fs::write(&manifest, serde_json::to_vec(&package).unwrap()).unwrap();
+        assert!(!same_development_copy(&copied, &root, &original));
+        package["version"] = "0.0.0".into();
+        fs::write(&manifest, serde_json::to_vec(&package).unwrap()).unwrap();
+        fs::write(&copied, b"changed CLI").unwrap();
+        assert!(!same_development_copy(&copied, &root, &original));
+        fs::copy(&original, &copied).unwrap();
+        fs::remove_file(&original).unwrap();
+        assert!(!same_development_copy(&copied, &root, &original));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn unpackaged_exception_requires_original_inode() {
