@@ -250,6 +250,17 @@ def dpkg_owners(output, path):
     return sorted(owners)
 
 
+def system_package_owners(path):
+    for candidate in dict.fromkeys((str(path), str(path.resolve()), str(path.resolve()).removeprefix("/usr"))):
+        query = subprocess.run(["dpkg-query", "-S", candidate], capture_output=True, text=True,
+                               env=os.environ | {"LC_ALL": "C.UTF-8", "LANGUAGE": "C"})
+        if query.returncode == 0:
+            owners = dpkg_owners(query.stdout, candidate)
+            if owners:
+                return owners
+    raise RuntimeError("Unowned runtime input: " + str(path) + " -> " + str(path.resolve()))
+
+
 def rootfs(inputs, root):
     root.mkdir()
     packages = {}
@@ -266,16 +277,7 @@ def rootfs(inputs, root):
         # Dereference package-owned symlinks; no rootfs link can escape its root.
         shutil.copyfile(path, destination)
         destination.chmod(stat.S_IMODE(path.stat().st_mode))
-        owners = []
-        for candidate in dict.fromkeys((str(path), str(path.resolve()), str(path.resolve()).removeprefix("/usr"))):
-            query = subprocess.run(["dpkg-query", "-S", candidate], capture_output=True, text=True,
-                                   env=os.environ | {"LC_ALL": "C.UTF-8", "LANGUAGE": "C"})
-            if query.returncode == 0:
-                owners = dpkg_owners(query.stdout, candidate)
-                if owners:
-                    break
-        assert owners, "Unowned runtime input: " + str(path)
-        for owner in owners:
+        for owner in system_package_owners(path):
             packages[owner] = subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", owner], text=True)
         for dependency in elf_dependencies(path):
             system(dependency)
@@ -339,8 +341,7 @@ def self_check():
     for invalid in (diversions, "not a package: " + loader, "-invalid: " + loader,
                     "libc6:amd64: " + loader + ".other", ""):
         assert dpkg_owners(invalid, loader) == []
-    actual_owners = dpkg_owners(subprocess.check_output(["dpkg-query", "-S", loader], text=True,
-                               env=os.environ | {"LC_ALL": "C.UTF-8", "LANGUAGE": "C"}), loader)
+    actual_owners = system_package_owners(Path(loader))
     assert "libc6:amd64" in actual_owners, actual_owners
     for owner in actual_owners:
         assert subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", owner], text=True).strip()
