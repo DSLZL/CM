@@ -9,6 +9,7 @@ use cm_abi::Bytes;
 use cm_abi::Header;
 use cm_abi::PolicyInput;
 use cm_abi::v2;
+use cm_abi::v21;
 use serde_json::json;
 
 use super::Kind;
@@ -69,7 +70,7 @@ impl RegistrationSet {
             let module = match loaded {
                 Ok(module) => module,
                 Err(error) => {
-                    let error = error.owner(&owner, None);
+                    let error = crate::runtime_plan::resource_error(error.owner(&owner, None), &hooks);
                     if let Err(cleanup) = staged.release() {
                         event("release-failed", json!(cleanup));
                     }
@@ -90,8 +91,10 @@ impl RegistrationSet {
             }
             staged.modules.push((owner.clone(), module));
             if crate::tool_policy::NEXT_VIOLATION.load(std::sync::atomic::Ordering::Acquire) {
-                let error =
-                    LoadError::native("init", "Next used outside a dispatch").owner(&owner, None);
+                let error = crate::runtime_plan::resource_error(
+                    LoadError::native("init", "Next used outside a dispatch").owner(&owner, None),
+                    &staged.plan.mods[&owner].contributions,
+                );
                 if let Err(cleanup) = staged.release() {
                     event("release-failed", json!(cleanup));
                 }
@@ -142,6 +145,26 @@ impl RegistrationSet {
         }
     }
 
+    pub(crate) fn limit(
+        &self,
+        key: &str,
+        input: &v21::Input,
+    ) -> Result<(v21::Output, bool), LoadError> {
+        let binding = &self.bindings[key];
+        let result = match &self.modules[binding.module].1 {
+            Module::Composition(module) => module.limit(binding.callback, input),
+            _ => Err(LoadError::native(
+                "output_limit",
+                "internal limiter binding mismatch",
+            )),
+        };
+        result.map_err(|error| {
+            let mut error = error.owner(&binding.owner, Some(&binding.local_id));
+            error.resource = Some(v21::CAPABILITY.into());
+            error
+        })
+    }
+
     pub(crate) fn release(&mut self) -> Result<(), LoadError> {
         let mut first = None;
         for (owner, module) in self.modules.iter_mut().rev() {
@@ -151,7 +174,10 @@ impl RegistrationSet {
                 Module::Composition(module) => module.release(),
             };
             if let Err(error) = result {
-                let error = error.owner(owner, None);
+                let error = crate::runtime_plan::resource_error(
+                    error.owner(owner, None),
+                    &self.plan.mods[owner.as_str()].contributions,
+                );
                 event("release-failed", json!(error));
                 if first.is_none() {
                     first = Some(error);
@@ -163,8 +189,15 @@ impl RegistrationSet {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Callback {
+    Eligibility(v2::Hook),
+    Limit(v21::Hook),
+}
+
 struct CompositionMod {
-    callbacks: Vec<v2::Hook>,
+    owner: String,
+    callbacks: Vec<Callback>,
     release: Option<cm_abi::Release>,
     userdata: *mut c_void,
 }
@@ -197,15 +230,28 @@ impl CompositionMod {
         let library = native::open(&manifest, snapshot, &needed)?;
         let entry = unsafe { library.get::<v2::Entry>(b"cm_mod_entry_v2\0") }
             .map_err(|e| LoadError::native("entry", &e.to_string()))?;
-        let host = v2::HostApi {
+        let base = v2::HostApi {
             header: v2::header::<v2::HostApi>(),
             capability: Bytes::from_static(v2::CAPABILITY),
             host_build_id: Bytes::borrowed(build_id),
             next: Some(crate::tool_policy::next),
             reserved: 0,
         };
+        let capabilities = [
+            Bytes::from_static(v2::CAPABILITY),
+            Bytes::from_static(v21::CAPABILITY),
+        ];
+        let mut host = v21::HostApi {
+            base,
+            capabilities: capabilities.as_ptr(),
+            capability_count: capabilities.len() as u64,
+            reserved: 0,
+        };
+        if manifest.abi_minor == 1 {
+            host.base.header = v21::header::<v21::HostApi>();
+        }
         let mut table: *const Header = ptr::null();
-        native::invoke("entry", |error| unsafe { entry(&host, &mut table, error) })?;
+        native::invoke("entry", |error| unsafe { entry(&host.base, &mut table, error) })?;
         if crate::tool_policy::NEXT_VIOLATION.load(std::sync::atomic::Ordering::Acquire) {
             return Err(LoadError::native(
                 "entry",
@@ -221,7 +267,19 @@ impl CompositionMod {
         if unsafe { table.cast::<u32>().read() } < size_of::<Header>() as u32 {
             return Err(LoadError::native("negotiate", "short v2 header prefix"));
         }
-        header(unsafe { table.read() }, size_of::<v2::ModApi>())?;
+        let prefix = unsafe { table.read() };
+        let minimum = if manifest.abi_minor == 1 {
+            size_of::<v21::ModApi>()
+        } else {
+            size_of::<v2::ModApi>()
+        };
+        if prefix.major != 2
+            || prefix.minor != manifest.abi_minor
+            || prefix.struct_size < minimum as u32
+            || prefix.struct_size > 4096
+        {
+            return Err(LoadError::native("negotiate", "unsupported table size/version"));
+        }
         if !(table as usize).is_multiple_of(align_of::<v2::ModApi>()) {
             return Err(LoadError::native("negotiate", "misaligned v2 table"));
         }
@@ -229,10 +287,14 @@ impl CompositionMod {
         if api.reserved != 0
             || api.init.is_none()
             || unsafe { native::text(api.mod_id, 128)? } != manifest.id
-            || api.contribution_count != manifest.contributions.len() as u64
-            || api.contribution_count == 0
+            || api.contribution_count
+                != manifest
+                    .contributions
+                    .iter()
+                    .filter(|hook| hook.kind != Kind::OutputLimit)
+                    .count() as u64
             || api.contribution_count > 128
-            || api.contributions.is_null()
+            || (api.contribution_count != 0 && api.contributions.is_null())
             || !(api.contributions as usize).is_multiple_of(align_of::<v2::Contribution>())
         {
             return Err(LoadError::native(
@@ -263,7 +325,7 @@ impl CompositionMod {
                         capability,
                         resource,
                         descriptor.kind,
-                        descriptor.callback.unwrap(),
+                        Callback::Eligibility(descriptor.callback.unwrap()),
                     ),
                 )
                 .is_some()
@@ -272,6 +334,58 @@ impl CompositionMod {
                     "negotiate",
                     "duplicate actual contribution",
                 ));
+            }
+        }
+        if manifest.abi_minor == 1 {
+            // Prefix size/version/alignment were checked before touching the optional tail.
+            let tail = unsafe { table.cast::<v21::ModApi>().read() };
+            let expected = manifest
+                .contributions
+                .iter()
+                .filter(|hook| hook.kind == Kind::OutputLimit)
+                .count();
+            if tail.reserved != 0
+                || tail.limiter_count != expected as u64
+                || tail.limiter_count > 128
+                || tail.limiter_stride != size_of::<v21::Limiter>() as u64
+                || (tail.limiter_count != 0 && tail.limiters.is_null())
+                || !(tail.limiters as usize).is_multiple_of(align_of::<v21::Limiter>())
+            {
+                return Err(LoadError::native(
+                    "negotiate",
+                    "invalid limiter count/stride/pointer",
+                ));
+            }
+            for index in 0..tail.limiter_count as usize {
+                let descriptor = unsafe { tail.limiters.add(index).read() };
+                if descriptor.header.struct_size != size_of::<v21::Limiter>() as u32
+                    || descriptor.header.major != 2
+                    || descriptor.header.minor != 1
+                    || descriptor.reserved != 0
+                    || descriptor.callback.is_none()
+                {
+                    return Err(LoadError::native("negotiate", "invalid limiter descriptor"));
+                }
+                let id = unsafe { native::text(descriptor.id, 128)? };
+                let capability = unsafe { native::text(descriptor.capability, 128)? };
+                let resource = unsafe { native::text(descriptor.resource, 128)? };
+                if descriptors
+                    .insert(
+                        id,
+                        (
+                            capability,
+                            resource,
+                            Kind::OutputLimit.abi(),
+                            Callback::Limit(descriptor.callback.unwrap()),
+                        ),
+                    )
+                    .is_some()
+                {
+                    return Err(LoadError::native(
+                        "negotiate",
+                        "duplicate actual contribution",
+                    ));
+                }
             }
         }
         let mut callbacks = Vec::new();
@@ -299,7 +413,7 @@ impl CompositionMod {
         }
         event(
             "negotiated",
-            json!({"mod": manifest.id, "abi_major": 2, "abi_minor": 0}),
+            json!({"mod": manifest.id, "abi_major": 2, "abi_minor": manifest.abi_minor}),
         );
         // Exposed snapshots stay pinned even if native code violates the borrow contract.
         let resources = Box::leak(resources.into_boxed_slice());
@@ -325,6 +439,7 @@ impl CompositionMod {
             reserved: 0,
         };
         let mut loaded = Self {
+            owner: manifest.id.clone(),
             callbacks,
             release: api.release,
             userdata: ptr::null_mut(),
@@ -340,7 +455,13 @@ impl CompositionMod {
         }
         if let Err(error) = result {
             if let Err(cleanup) = loaded.release() {
-                event("release-failed", json!(cleanup.owner(&manifest.id, None)));
+                event(
+                    "release-failed",
+                    json!(crate::runtime_plan::resource_error(
+                        cleanup.owner(&manifest.id, None),
+                        &manifest.hooks(),
+                    )),
+                );
             }
             return Err(error);
         }
@@ -364,11 +485,17 @@ impl CompositionMod {
             after: [0xa5; 16],
         };
         let mut cancelled = false;
+        let Callback::Eligibility(callback) = self.callbacks[callback] else {
+            return Err(LoadError::native("policy", "internal typed callback mismatch"));
+        };
         let result = native::invoke("policy", |error| unsafe {
-            let status =
-                (self.callbacks[callback])(self.userdata, input, &mut output.decision, error);
+            let status = callback(self.userdata, input, &mut output.decision, error);
             cancelled = status == v2::CANCELLED;
-            if cancelled { cm_abi::OK } else { status }
+            if cancelled {
+                cm_abi::OK
+            } else {
+                status
+            }
         });
         result?;
         let value = output.decision;
@@ -388,6 +515,46 @@ impl CompositionMod {
         Ok((value.decision, cancelled))
     }
 
+    fn limit(&self, callback: usize, input: &v21::Input) -> Result<(v21::Output, bool), LoadError> {
+        #[repr(C)]
+        struct Guarded {
+            before: [u8; 16],
+            output: v21::Output,
+            after: [u8; 16],
+        }
+        let Callback::Limit(callback) = self.callbacks[callback] else {
+            return Err(LoadError::native(
+                "output_limit",
+                "internal typed callback mismatch",
+            ));
+        };
+        let mut guarded = Guarded {
+            before: [0x5a; 16],
+            output: v21::Output {
+                header: v21::header::<v21::Output>(),
+                decision: v21::KEEP,
+                limit: 0,
+                reserved: 0,
+            },
+            after: [0xa5; 16],
+        };
+        let mut cancelled = false;
+        native::invoke("output_limit", |error| unsafe {
+            let status = callback(self.userdata, input, &mut guarded.output, error);
+            cancelled = status == v2::CANCELLED;
+            if cancelled {
+                cm_abi::OK
+            } else {
+                status
+            }
+        })?;
+        if guarded.before != [0x5a; 16] || guarded.after != [0xa5; 16] {
+            return Err(LoadError::native("output_limit", "invalid output canary"));
+        }
+        crate::output_limit::validate(&guarded.output, input.original_limit)?;
+        Ok((guarded.output, cancelled))
+    }
+
     fn release(&mut self) -> Result<(), LoadError> {
         let userdata = std::mem::take(&mut self.userdata);
         if !userdata.is_null() {
@@ -395,7 +562,7 @@ impl CompositionMod {
                 .release
                 .ok_or_else(|| LoadError::native("release", "missing v2 release"))?;
             native::invoke("release", |error| unsafe { release(userdata, error) })?;
-            event("userdata-released", json!({"count": 1}));
+            event("userdata-released", json!({"mod": self.owner, "count": 1}));
         }
         Ok(())
     }

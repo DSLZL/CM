@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Trusted CM dispatcher. Executes only in Actions; never runs requested source."""
 import json
+import base64
 import os
 from pathlib import Path
 import re
@@ -123,6 +124,18 @@ def main():
         return found[0]
     receipt_record = exact(receipt_name)
     artifact = exact(artifact_name)
+    source_config = api("repos/" + source + "/contents/.github/cm-ci.json?ref=" + source_sha)
+    consumer_required = json.loads(base64.b64decode(source_config["content"]))["task_id"] == "CM-P04"
+    consumer_artifact = exact("cm-linux-x64-consumer-artifacts-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
+    input_artifact = exact("cm-linux-x64-runtime-inputs-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
+    jobs = get_run(run_path + "/attempts/" + str(run["run_attempt"]) + "/jobs?per_page=100")["jobs"]
+    producer_jobs = [job for job in jobs if job["name"] in ("build-read / linux-x64", "build-write / linux-x64") and job["conclusion"] == "success"]
+    if len(producer_jobs) != 1:
+        raise RuntimeError("An exact successful producer job is required")
+    if consumer_required:
+        consumer_jobs = [job for job in jobs if job["name"] == "runtime-consumer"]
+        if len(consumer_jobs) != 1 or consumer_jobs[0]["conclusion"] != "success":
+            raise RuntimeError("P04 consumer was missing, skipped or failed")
     receipt_dir = out / "worker-receipt"
     env = dict(os.environ)
     env["GH_TOKEN"] = os.environ["CM_BUILD_FANOUT_TOKEN"]
@@ -133,15 +146,31 @@ def main():
     expected = {"repository": worker, "source_repository": source, "source_sha": source_sha, "head_sha": source_sha,
                 "workflow_sha": worker_sha, "execution_role": "platform_builder", "cache_repository": worker,
                 "request_id": request_id, "target": TARGET, "run_id": run_id, "run_url": run_url,
-                "run_attempt": run["run_attempt"], "artifact_id": artifact["id"], "artifact_name": artifact_name}
+                "run_attempt": run["run_attempt"], "artifact_id": artifact["id"], "artifact_name": artifact_name,
+                "job": producer_jobs[0]["name"], "job_id": producer_jobs[0]["id"], "job_conclusion": "success"}
     if any(ci.get(key) != value for key, value in expected.items()):
         raise RuntimeError("Worker receipt does not match the requested source and exact GitHub run/artifact")
     digest = str(artifact.get("digest", "")).removeprefix("sha256:")
     if not re.fullmatch(r"[0-9a-f]{64}", digest) or ci.get("artifact_sha256") != digest:
         raise RuntimeError("Actual upload digest and remote artifact digest differ")
+    if consumer_required:
+        consumer = receipt.get("consumer") or {}
+        expected_consumer = {"execution_role": "runtime_consumer", "cache_mode": "none", "job": "runtime-consumer",
+            "job_conclusion": "success", "producer_job_id": producer_jobs[0]["id"],
+            "job_id": consumer_jobs[0]["id"], "artifact_id": consumer_artifact["id"], "artifact_name": consumer_artifact["name"],
+            "artifact_sha256": str(consumer_artifact["digest"]).removeprefix("sha256:"), "source_sha": source_sha,
+            "workflow_sha": worker_sha, "run_id": run_id, "run_attempt": run["run_attempt"], "request_id": request_id}
+        if any(consumer.get(key) != value for key, value in expected_consumer.items()):
+            raise RuntimeError("Consumer receipt differs from exact source/workflow/run/job/artifact")
+        expected_input = {"artifact_id": input_artifact["id"], "artifact_name": input_artifact["name"],
+                          "artifact_sha256": str(input_artifact["digest"]).removeprefix("sha256:")}
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_input["artifact_sha256"]) or consumer.get("input_artifact") != expected_input:
+            raise RuntimeError("Consumer receipt does not bind its exact producer input artifact")
     ci["conclusion"] = run["conclusion"]
     write(out, "verified-worker-result.json", {"schema_version": 1, "implementation_commit": source_sha,
-          "ci": ci, "artifact": artifact, "receipt_artifact": receipt_record,
+          "ci": ci, "artifact": artifact, "consumer_artifact": consumer_artifact, "input_artifact": input_artifact,
+          "consumer": receipt.get("consumer"),
+          "jobs": jobs, "receipt_artifact": receipt_record,
           "parent_run_url": "https://github.com/" + source + "/actions/runs/" + os.environ["GITHUB_RUN_ID"],
           "note": "CI provenance only. Review actual acceptance evidence before treating a task as complete."})
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:

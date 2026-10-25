@@ -68,7 +68,9 @@ jobs:
           assert len(worker["files"]) == 6
           assert all(row["source"] in paths for row in worker["files"]), "Worker inputs must be published"
 
-          for script in Path("ci/scripts").glob("*.py"):
+          scripts = [*Path("ci/scripts").glob("*.py"), *Path("fixtures/runtime-consumer").glob("*.py"),
+                     *Path("fixtures/native-loader").glob("*.py")]
+          for script in scripts:
               py_compile.compile(str(script), cfile=str(Path(os.environ["RUNNER_TEMP"]) / (script.stem + ".pyc")),
                                  doraise=True)
           with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as directory:

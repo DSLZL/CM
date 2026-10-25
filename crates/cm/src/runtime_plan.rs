@@ -52,7 +52,7 @@ impl HostIdentity {
             target: loader::TARGET.into(),
             api_version: field("host_api_version")?,
             capabilities,
-            abis: vec!["1.0".into(), "2.0".into()],
+            abis: vec!["1.0".into(), "2.0".into(), "2.1".into()],
         })
     }
 }
@@ -168,6 +168,21 @@ fn failure(code: &str, id: &str, contribution: Option<&str>, message: &str) -> L
     LoadError::input(code, id, message).owner(id, contribution)
 }
 
+pub(crate) fn resource_error(mut error: LoadError, hooks: &[Contribution]) -> LoadError {
+    let limiter = if let Some(id) = error.contribution.as_deref() {
+        hooks
+            .iter()
+            .find(|hook| Some(hook.id.as_str()) == id.rsplit("::").next())
+            .is_some_and(|hook| hook.kind == Kind::OutputLimit)
+    } else {
+        !hooks.is_empty() && hooks.iter().all(|hook| hook.kind == Kind::OutputLimit)
+    };
+    if limiter {
+        error.resource = Some(cm_abi::v21::CAPABILITY.into());
+    }
+    error
+}
+
 fn stable_order(
     nodes: BTreeSet<String>,
     edges: &BTreeSet<(String, String)>,
@@ -215,6 +230,7 @@ fn phase(kind: &Kind) -> &'static str {
         Kind::Around | Kind::Replacement => "body",
         Kind::LegacyFilter => "legacy_filter",
         Kind::After => "after",
+        Kind::OutputLimit => "output_limit",
     }
 }
 
@@ -353,10 +369,26 @@ fn resolve(
             } else {
                 v2::CAPABILITY
             };
-            if contribution.resource != cm_abi::CAPABILITY
-                || contribution.capability != capability
-                || !(-1_000_000..=1_000_000).contains(&contribution.priority)
-            {
+            let limiter = contribution.kind == Kind::OutputLimit;
+            let contract = if limiter {
+                manifest.abi_major == 2
+                    && manifest.abi_minor == 1
+                    && contribution.resource == cm_abi::v21::CAPABILITY
+                    && contribution.capability == cm_abi::v21::CAPABILITY
+                    && manifest
+                        .required_capabilities
+                        .contains(&contribution.capability)
+                    && contribution.priority == 0
+                    && contribution.order_before.is_empty()
+                    && contribution.order_after.is_empty()
+            } else {
+                contribution.resource == cm_abi::CAPABILITY
+                    && contribution.capability == capability
+                    && manifest
+                        .required_capabilities
+                        .contains(&contribution.capability)
+            };
+            if !contract || !(-1_000_000..=1_000_000).contains(&contribution.priority) {
                 return Err(failure(
                     "contribution_contract",
                     id,
@@ -485,7 +517,7 @@ fn resolve(
         "dependency_cycle",
     )?;
     let mut phases = BTreeMap::new();
-    for name in ["before", "body", "legacy_filter", "after"] {
+    for name in ["before", "body", "legacy_filter", "after", "output_limit"] {
         let nodes: BTreeSet<_> = hooks
             .iter()
             .filter(|(_, (_, hook))| phase(&hook.kind) == name)
@@ -503,7 +535,9 @@ fn resolve(
             order.retain(|key| key != replacement);
             order.push(replacement.clone());
         }
-        phases.insert(name.into(), order);
+        if name != "output_limit" || !order.is_empty() {
+            phases.insert(name.into(), order);
+        }
     }
     Ok(RuntimePlan {
         schema_version: 1,
@@ -601,12 +635,19 @@ pub fn prepare_for_executable(home: &Path, executable: &Path) -> Result<Prepared
             sha256: config_sha,
         },
         candidate_manifests,
-    )?;
+    )
+    .map_err(|error| {
+        if let Some((manifest, _)) = error.mod_id.as_ref().and_then(|id| selected.get(id)) {
+            resource_error(error, &manifest.hooks())
+        } else {
+            error
+        }
+    })?;
     let mut modules = BTreeMap::new();
     for id in &plan.initialization_order {
         let (package, manifest, _) = candidates.remove(id).unwrap();
-        let (module, inputs) = loader::prepare_package(&package, manifest)
-            .map_err(|e| failure("package_input", id, None, &e))?;
+        let (module, inputs) = loader::prepare_package(&package, manifest.clone())
+            .map_err(|e| resource_error(failure("package_input", id, None, &e), &manifest.hooks()))?;
         pins.extend(inputs.into_iter().map(|pin| (id.clone(), pin)));
         modules.insert(id.clone(), module);
     }

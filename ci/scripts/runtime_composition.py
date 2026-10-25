@@ -174,7 +174,9 @@ def prefix(directory):
 
 
 def redact_syscalls(text):
-    return re.sub(r'(^\d+\s+sendto\(\d+(?:<.*?>)?, )"(?:[^"\\]|\\.)*"(\.\.\.)?',
+    text = re.sub(r'(^\d+\s+(?:sendto|recvfrom)\(\d+(?:<.*?>)?, )"(?:[^"\\]|\\.)*"(\.\.\.)?',
+                  r'\1"<payload redacted>"', text, flags=re.MULTILINE)
+    return re.sub(r'(^\d+\s+<\.\.\. (?:sendto|recvfrom) resumed>\s*)"(?:[^"\\]|\\.)*"(\.\.\.)?',
                   r'\1"<payload redacted>"', text, flags=re.MULTILINE)
 
 
@@ -234,7 +236,7 @@ def audit_network(lines, directory, ports):
                     or (tcp and tcp[1] in ports)), "Unknown socket peer: " + line
 
 
-def audit_executions(executions):
+def audit_executions(executions, python_scripts=("fixtures/native-loader/tool_barrier.py",)):
     assert executions, "Observer missed the initial exec"
     forbidden = re.compile(r'/(?:cargo|rustc|rustdoc|cc|gcc(?:-[0-9]+)?|g\+\+(?:-[0-9]+)?|c\+\+|clang(?:\+\+)?|ld(?:\.[a-z]+)?|lld|collect2|as|ar|make|cmake|ninja|sccache|node|bun|deno|java)(?=[" ])')
     assert not any(forbidden.search(line) for line in executions), executions
@@ -247,7 +249,7 @@ def audit_executions(executions):
         helper = match[1] == "/proc/self/exe" and '"--codex-run-as-process-setup"' in line
         assert Path(match[1]).name in allowed or helper, "Unclassified executable: " + line
         if Path(match[1]).name.startswith("python"):
-            assert "fixtures/native-loader/tool_barrier.py" in line, line
+            assert any(script in line for script in python_scripts), line
 
 
 def check_network_audit():

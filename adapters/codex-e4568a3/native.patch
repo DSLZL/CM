@@ -346,3 +346,37 @@ diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.
  }
  
  fn assign_missing_streamed_response_item_id(
+diff --git a/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs b/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs
+--- a/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs
++++ b/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs
+@@ -312,6 +312,30 @@
+         } = args;
++        let cm_thread_id = session.thread_id.to_string();
++        let cm_turn_id = turn.sub_id.to_string();
++        let max_output_tokens = match cm_runtime::output_limit::evaluate(
++            cm_runtime::tool_policy::Context {
++                namespace: "functions",
++                tool: "exec_command",
++                call_id: &call_id,
++                thread_id: &cm_thread_id,
++                turn_id: &cm_turn_id,
++            },
++            crate::unified_exec::resolve_max_tokens(max_output_tokens) as u64,
++            || context.cancellation_token.is_cancelled(),
++        ) {
++            Ok(None) => max_output_tokens,
++            Ok(Some(limit)) => Some(usize::try_from(limit).map_err(|_| {
++                FunctionCallError::Fatal("CM output limit exceeds target size".into())
++            })?),
++            Err(cm_runtime::tool_policy::PolicyError::Cancelled) => {
++                return Err(FunctionCallError::RespondToModel("tool call cancelled".into()));
++            }
++            Err(cm_runtime::tool_policy::PolicyError::Failed(message)) => {
++                return Err(FunctionCallError::Fatal(message));
++            }
++        };
+         let completion_timeout = match self.lifetime {
+             ExecCommandLifetime::Interactive => None,
+             ExecCommandLifetime::OneShot => {
+                 tty = false;
+                 Some(Duration::from_millis(

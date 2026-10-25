@@ -14,6 +14,7 @@ ci/scripts/linux_ci.py
 ci/scripts/native_mod.py
 ci/scripts/record_run.py
 ci/scripts/runtime_composition.py
+ci/scripts/runtime_consumer.py
 ci/scripts/worker_policy.py
 ci/source-files.txt
 ci/worker-files.json
@@ -24,8 +25,10 @@ ci/worker/linux-recipe.yml
 crates/cm-abi/Cargo.toml
 crates/cm-abi/include/cm_mod_v1.h
 crates/cm-abi/include/cm_mod_v2.h
+crates/cm-abi/include/cm_mod_v21.h
 crates/cm-abi/src/lib.rs
 crates/cm-abi/src/v2.rs
+crates/cm-abi/src/v21.rs
 crates/cm/Cargo.toml
 crates/cm/examples/native_probe.rs
 crates/cm/src/host_identity.rs
@@ -34,6 +37,8 @@ crates/cm/src/loader/elf.rs
 crates/cm/src/loader/mod.rs
 crates/cm/src/loader/native.rs
 crates/cm/src/loader/registration.rs
+crates/cm/src/output_limit.rs
+crates/cm/src/package.rs
 crates/cm/src/runtime_plan.rs
 crates/cm/src/tool_policy.rs
 fixtures/host-baseline/acceptance.sh
@@ -45,6 +50,9 @@ fixtures/mods/composition-b/Cargo.lock
 fixtures/mods/composition-b/Cargo.toml
 fixtures/mods/composition-b/src/lib.rs
 fixtures/mods/composition-common.rs
+fixtures/mods/output-limit/Cargo.lock
+fixtures/mods/output-limit/Cargo.toml
+fixtures/mods/output-limit/src/lib.rs
 fixtures/mods/serial-eligibility/Cargo.lock
 fixtures/mods/serial-eligibility/Cargo.toml
 fixtures/mods/serial-eligibility/src/lib.rs
@@ -55,3 +63,6 @@ fixtures/native-loader/replacement.c
 fixtures/native-loader/tool_barrier.py
 fixtures/runtime-composition/acceptance.sh
 fixtures/runtime-composition/layout.c
+fixtures/runtime-consumer/acceptance.sh
+fixtures/runtime-consumer/driver.py
+fixtures/runtime-consumer/layout.c

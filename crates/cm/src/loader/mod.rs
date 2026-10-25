@@ -42,6 +42,7 @@ pub(crate) enum Kind {
     Replacement,
     After,
     LegacyFilter,
+    OutputLimit,
 }
 
 impl Kind {
@@ -52,6 +53,7 @@ impl Kind {
             Self::Replacement => v2::REPLACEMENT,
             Self::After => v2::AFTER,
             Self::LegacyFilter => 0,
+            Self::OutputLimit => 5,
         }
     }
 }
@@ -399,6 +401,22 @@ pub(crate) fn check_manifest(manifest: &Manifest) -> Result<(), String> {
             && manifest.abi_minor == v2::ABI_MINOR
             && manifest.contribution.is_empty()
             && manifest.required_capabilities == [v2::CAPABILITY]
+            && !manifest.contributions.is_empty()
+            && manifest.contributions.len() <= MAX_CONTRIBUTIONS => {}
+        2 if manifest.abi_major == 2
+            && manifest.abi_minor == 1
+            && manifest.contribution.is_empty()
+            && !manifest.required_capabilities.is_empty()
+            && manifest.required_capabilities.len() <= 2
+            && manifest.required_capabilities.iter().all(|cap| {
+                [v2::CAPABILITY, cm_abi::v21::CAPABILITY].contains(&cap.as_str())
+            })
+            && manifest
+                .required_capabilities
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                == manifest.required_capabilities.len()
             && !manifest.contributions.is_empty()
             && manifest.contributions.len() <= MAX_CONTRIBUTIONS => {}
         _ => return Err("unsupported manifest format/ABI/capability/contribution".into()),

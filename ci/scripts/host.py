@@ -423,7 +423,7 @@ def acceptance(root, logs, report_name="acceptance.json"):
     helper = Path(os.environ["CARGO_TARGET_DIR"]) / "helper" / TARGET / cfg["build_profile"] / "bwrap"
     execute(root, logs, "host-package", [
         "python3", "-B", str(host / "scripts/build_codex_package.py"), "--target", TARGET,
-        "--package-dir", str(package), "--package-version", "0.2.0-p03", "--strip", "none",
+        "--package-dir", str(package), "--package-version", "0.3.0-p04", "--strip", "none",
         "--entrypoint-bin", str(executable), "--code-mode-host-bin", str(binaries / "codex-code-mode-host"),
         "--bwrap-bin", str(helper),
     ])
@@ -448,6 +448,19 @@ def acceptance(root, logs, report_name="acceptance.json"):
             "native": read(root / ADAPTER / "inputs/native.json"),
             "note": "Resolved dependency and license declarations; not a license-compliance certification."}
     write(package / "dependency-inventory.json", sbom)
+    system_files = set()
+    for component in (package / "bin/codex", package / "bin/codex-code-mode-host",
+                      package / "codex-resources/bwrap", package / "codex-path/rg"):
+        dynamic = subprocess.run(["ldd", str(component)], capture_output=True, text=True)
+        if "not found" in dynamic.stdout:
+            raise RuntimeError("Unresolved packaged runtime dependency: " + str(component))
+        if dynamic.returncode and "not a dynamic executable" not in dynamic.stderr + dynamic.stdout:
+            raise RuntimeError("Unable to inspect component dependencies: " + str(component))
+        for token in dynamic.stdout.split():
+            if token.startswith("/"):
+                system_files.add(token)
+    write(package / "cm-runtime-files.json", {"schema_version": 1, "files": manifest(package),
+                                              "system_files": sorted(system_files)})
     package_before = manifest_digest(manifest(package))
     with tempfile.TemporaryDirectory(prefix="cm-no-mod-", dir=os.environ["RUNNER_TEMP"]) as tmp:
         fixture = Path(tmp)

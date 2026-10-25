@@ -1,5 +1,6 @@
 """Packaged CLI -> real Core -> builtin exec_command. Actions worker only."""
 import gzip
+import hashlib
 import http.server
 import json
 import os
@@ -11,8 +12,14 @@ import subprocess
 import threading
 import time
 
-from host import sha, write
-from record_run import require_hosted_linux
+def sha(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def write(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
 def trace_rows(path):
@@ -112,7 +119,7 @@ def decode_request(handler):
     return json.loads(body)
 
 
-def cli_arguments(binary, cwd, endpoint):
+def cli_arguments(binary, cwd, endpoint, sandboxed=False):
     return [str(binary), "-c", 'model_provider="cm_fixture"',
             "-c", 'model_providers.cm_fixture.name="CM local fixture"',
             "-c", "model_providers.cm_fixture.base_url=" + json.dumps(endpoint + "/v1"),
@@ -123,13 +130,15 @@ def cli_arguments(binary, cwd, endpoint):
             "-c", "features.unified_exec=true", "-c", "features.shell_snapshot=false",
             "-c", "features.plugins=false", "-c", "features.apps=false", "-c", "analytics.enabled=false",
             "exec", "--skip-git-repo-check", "--ephemeral", "--json",
-            "--dangerously-bypass-approvals-and-sandbox", "-C", str(cwd),
+            *(["--sandbox", "workspace-write", "-c", 'approval_policy="never"'] if sandboxed else
+              ["--dangerously-bypass-approvals-and-sandbox"]), "-C", str(cwd),
             "-m", "gpt-5.4", "CM deterministic local acceptance"]
 
 
 def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mode="",
-             extra_env=None, command_prefix=(), expected_releases=1, restrictive=None):
-    require_hosted_linux()
+             extra_env=None, command_prefix=(), expected_releases=1, restrictive=None,
+             sandboxed=False, long_output=False, requested_limit=None):
+    assert os.uname().sysname == "Linux" and os.uname().machine == "x86_64"
     restrictive = mod_loaded if restrictive is None else restrictive
     directory.mkdir(parents=True)
     trace = directory / "core-trace.jsonl"
@@ -141,11 +150,12 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
 
     def call(label):
         command = shlex.join(["python3", "-B", str(root / "fixtures/native-loader/tool_barrier.py"),
-                              str(tools.path), label])
+                              str(tools.path), label, *(["long"] if long_output else [])])
         return {"type": "response.output_item.done", "item": {
             "type": "function_call", "call_id": "cm-" + label.lower(),
             "name": "exec_command", "arguments": json.dumps({
                 "cmd": command, "login": False, "yield_time_ms": 30000, "timeout_ms": 60000,
+                **({"max_output_tokens": requested_limit} if requested_limit is not None else {}),
             })}}
 
     class Provider(http.server.BaseHTTPRequestHandler):
@@ -185,7 +195,7 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
                     if not expected <= {item["call_id"] for item in outputs}:
                         raise AssertionError("Real Core tool results did not reach the next provider request")
                     encoded = json.dumps(outputs)
-                    if not all("cm-real-tool-" + label + "-ok" in encoded for label in ("A", "B")):
+                    if (requested_limit is None or requested_limit > 32) and not all("cm-real-tool-" + label + "-ok" in encoded for label in ("A", "B")):
                         raise AssertionError("Expected actual tool outputs are missing")
                     send({"type": "response.output_item.done", "item": {
                         "type": "message", "id": "cm-final", "role": "assistant",
@@ -214,7 +224,7 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
            **(extra_env or {})}
     Path(env["HOME"]).mkdir()
     assert not any(key.startswith(("ACTIONS_", "GITHUB_", "GH_")) for key in env)
-    args = [*command_prefix, *cli_arguments(binary, directory, endpoint)]
+    args = [*command_prefix, *cli_arguments(binary, directory, endpoint, sandboxed=sandboxed)]
     stdout = directory / "stdout.jsonl"
     stderr = directory / "stderr.log"
     return_code = None
@@ -223,7 +233,7 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
             process = subprocess.Popen(args, cwd=directory, env=env, stdout=out, stderr=err,
                                        stdin=subprocess.DEVNULL, start_new_session=True)
             process_ref.append(process)
-            if scenario == "callback-failure":
+            if scenario in ("callback-failure", "output-limit-failure"):
                 return_code = process.wait(timeout=40)
                 assert return_code != 0, "Required policy failure must fail the real Core invocation"
             else:
@@ -255,10 +265,12 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
                     assert "stopped" in [row["event"] for row in trace_rows(trace)], "Cancellation did not drain runtime"
         rows = trace_rows(trace)
         decisions = {row["detail"]["call_id"]: row for row in rows if row["event"] == "policy-decision"}
-        if scenario == "callback-failure":
-            assert any(row["event"] == "policy-failed" for row in rows)
-            assert not any(row["event"] == "handler-started" for row in rows)
-            assert not tools.has("A:entered")
+        if scenario in ("callback-failure", "output-limit-failure"):
+            failure_event = "policy-failed" if scenario == "callback-failure" else "output-limit-failed"
+            assert any(row["event"] == failure_event for row in rows)
+            if scenario == "callback-failure":
+                assert not any(row["event"] == "handler-started" for row in rows)
+            assert not any(tools.has(label + ":entered") for label in ("A", "B"))
             assert len(requests) == 1, "Fatal policy error must not retry the model"
             assert sum(row["event"] == "userdata-released" for row in rows) == expected_releases
             assert sum(row["event"] == "stopped" for row in rows) == 1
