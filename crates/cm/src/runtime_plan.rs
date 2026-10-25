@@ -646,8 +646,10 @@ pub fn prepare_for_executable(home: &Path, executable: &Path) -> Result<Prepared
     let mut modules = BTreeMap::new();
     for id in &plan.initialization_order {
         let (package, manifest, _) = candidates.remove(id).unwrap();
-        let (module, inputs) = loader::prepare_package(&package, manifest.clone())
-            .map_err(|e| resource_error(failure("package_input", id, None, &e), &manifest.hooks()))?;
+        let (module, inputs) =
+            loader::prepare_package(&package, manifest.clone()).map_err(|e| {
+                resource_error(failure("package_input", id, None, &e), &manifest.hooks())
+            })?;
         pins.extend(inputs.into_iter().map(|pin| (id.clone(), pin)));
         modules.insert(id.clone(), module);
     }

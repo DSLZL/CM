@@ -50,7 +50,8 @@ pub fn preflight() -> Result<(), LoadError> {
         if bytes.len() > 4 * 1024 * 1024 {
             return Err("package inventory exceeds limit".into());
         }
-        let inventory: Inventory = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+        let inventory: Inventory =
+            serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
         if inventory.schema_version != 1
             || inventory.files.len() > 4096
             || inventory.system_files.len() > 256

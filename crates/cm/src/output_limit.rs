@@ -53,7 +53,9 @@ pub fn evaluate(
         .lock()
         .map_err(|_| PolicyError::Failed("poisoned CM runtime".into()))?;
     if runtime.stopping.load(Ordering::Acquire) || state.stopping || state.failed.is_some() {
-        return Err(PolicyError::Failed("CM runtime is stopping or failed".into()));
+        return Err(PolicyError::Failed(
+            "CM runtime is stopping or failed".into(),
+        ));
     }
     let registration = state.registration.as_ref().expect("ready collection");
     let result = (|| {
@@ -97,7 +99,10 @@ pub fn evaluate(
                 let result = registration.limit(key, &input);
                 let observed_cancel = cancelled();
                 let (output, reported_cancel) = result.map_err(|error| {
-                    event("output-limit-failed", json!({"context":detail,"error":error}));
+                    event(
+                        "output-limit-failed",
+                        json!({"context":detail,"error":error}),
+                    );
                     PolicyError::Failed(error.to_string())
                 })?;
                 if NEXT_VIOLATION.load(Ordering::Acquire) || (reported_cancel && !observed_cancel) {
@@ -107,7 +112,10 @@ pub fn evaluate(
                     )
                     .owner(&binding.owner, Some(&binding.local_id));
                     error.resource = Some(v21::CAPABILITY.into());
-                    event("output-limit-failed", json!({"context":detail,"error":error}));
+                    event(
+                        "output-limit-failed",
+                        json!({"context":detail,"error":error}),
+                    );
                     return Err(PolicyError::Failed(error.to_string()));
                 }
                 event(
@@ -119,7 +127,9 @@ pub fn evaluate(
                     return Err(PolicyError::Cancelled);
                 }
                 if output.decision == v21::LIMIT {
-                    limit = Some(limit.map_or(output.limit, |previous: u64| previous.min(output.limit)));
+                    limit = Some(
+                        limit.map_or(output.limit, |previous: u64| previous.min(output.limit)),
+                    );
                 }
             }
         }

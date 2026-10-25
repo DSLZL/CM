@@ -70,7 +70,8 @@ impl RegistrationSet {
             let module = match loaded {
                 Ok(module) => module,
                 Err(error) => {
-                    let error = crate::runtime_plan::resource_error(error.owner(&owner, None), &hooks);
+                    let error =
+                        crate::runtime_plan::resource_error(error.owner(&owner, None), &hooks);
                     if let Err(cleanup) = staged.release() {
                         event("release-failed", json!(cleanup));
                     }
@@ -251,7 +252,9 @@ impl CompositionMod {
             host.base.header = v21::header::<v21::HostApi>();
         }
         let mut table: *const Header = ptr::null();
-        native::invoke("entry", |error| unsafe { entry(&host.base, &mut table, error) })?;
+        native::invoke("entry", |error| unsafe {
+            entry(&host.base, &mut table, error)
+        })?;
         if crate::tool_policy::NEXT_VIOLATION.load(std::sync::atomic::Ordering::Acquire) {
             return Err(LoadError::native(
                 "entry",
@@ -278,7 +281,10 @@ impl CompositionMod {
             || prefix.struct_size < minimum as u32
             || prefix.struct_size > 4096
         {
-            return Err(LoadError::native("negotiate", "unsupported table size/version"));
+            return Err(LoadError::native(
+                "negotiate",
+                "unsupported table size/version",
+            ));
         }
         if !(table as usize).is_multiple_of(align_of::<v2::ModApi>()) {
             return Err(LoadError::native("negotiate", "misaligned v2 table"));
@@ -486,16 +492,15 @@ impl CompositionMod {
         };
         let mut cancelled = false;
         let Callback::Eligibility(callback) = self.callbacks[callback] else {
-            return Err(LoadError::native("policy", "internal typed callback mismatch"));
+            return Err(LoadError::native(
+                "policy",
+                "internal typed callback mismatch",
+            ));
         };
         let result = native::invoke("policy", |error| unsafe {
             let status = callback(self.userdata, input, &mut output.decision, error);
             cancelled = status == v2::CANCELLED;
-            if cancelled {
-                cm_abi::OK
-            } else {
-                status
-            }
+            if cancelled { cm_abi::OK } else { status }
         });
         result?;
         let value = output.decision;
@@ -542,11 +547,7 @@ impl CompositionMod {
         native::invoke("output_limit", |error| unsafe {
             let status = callback(self.userdata, input, &mut guarded.output, error);
             cancelled = status == v2::CANCELLED;
-            if cancelled {
-                cm_abi::OK
-            } else {
-                status
-            }
+            if cancelled { cm_abi::OK } else { status }
         })?;
         if guarded.before != [0x5a; 16] || guarded.after != [0xa5; 16] {
             return Err(LoadError::native("output_limit", "invalid output canary"));

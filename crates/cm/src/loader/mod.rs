@@ -408,9 +408,10 @@ pub(crate) fn check_manifest(manifest: &Manifest) -> Result<(), String> {
             && manifest.contribution.is_empty()
             && !manifest.required_capabilities.is_empty()
             && manifest.required_capabilities.len() <= 2
-            && manifest.required_capabilities.iter().all(|cap| {
-                [v2::CAPABILITY, cm_abi::v21::CAPABILITY].contains(&cap.as_str())
-            })
+            && manifest
+                .required_capabilities
+                .iter()
+                .all(|cap| [v2::CAPABILITY, cm_abi::v21::CAPABILITY].contains(&cap.as_str()))
             && manifest
                 .required_capabilities
                 .iter()
