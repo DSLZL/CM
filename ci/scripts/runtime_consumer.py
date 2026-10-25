@@ -89,10 +89,32 @@ def hosted():
     assert os.environ["GITHUB_REPOSITORY"] == "DSLZL/CM-build-linux-x64"
 
 
+def relocate_profile_links(profile, original, copied):
+    original = original.resolve(strict=True)
+    copied = copied.resolve(strict=True)
+    executable_sha256 = sha(original)
+    if sha(copied) != executable_sha256:
+        raise RuntimeError("Official fixture copy differs from its original executable")
+    relocated = []
+    for path in sorted(profile.rglob("*")):
+        if not path.is_symlink():
+            continue
+        if path.resolve(strict=True) != original:
+            raise RuntimeError("Unexpected official profile alias: " + str(path))
+        previous = os.readlink(path)
+        link = os.path.relpath(copied, path.parent)
+        path.unlink()
+        path.symlink_to(link)
+        relocated.append({"path": path.relative_to(profile).as_posix(), "original_link": previous,
+                          "link": link, "executable_sha256": executable_sha256})
+    return relocated
+
+
 def produce():
     import host
     import runtime_composition as composition
     from linux_ci import cargo_args, execute, load_config
+    from worker_policy import archive_members
 
     hosted()
     root = Path(os.environ["CM_SOURCE_DIR"])
@@ -171,18 +193,29 @@ def produce():
     subprocess.run([str(official), "--version"], env={"PATH": "/usr/bin:/bin", "HOME": str(profile), "CODEX_HOME": str(profile)}, check=True)
     shutil.copytree(installation, inputs / "official/install", symlinks=True)
     shutil.copytree(profile, inputs / "official/profile", symlinks=True)
+    original_profile = inventory(profile)
+    # Startup aliases use current_exe; relocate only the fixture copy before freezing it.
+    relocations = relocate_profile_links(inputs / "official/profile", official,
+        inputs / "official/install" / official.relative_to(installation))
+    assert inventory(profile) == original_profile
+    official_setup = {"original_profile": original_profile, "relocations": relocations,
+                      "prepared_profile": inventory(inputs / "official/profile")}
+    write(logs / "official-profile-setup.json", official_setup)
     write(inputs / "producer.json", {"schema_version": 1, "task_id": "CM-P04", "target": TARGET,
         "provenance": provenance(), "producer_job": os.environ["GITHUB_JOB"], "host": frozen, "authors": authors,
         "entry_invalid": ENTRY_INVALID, "call_invalid": CALL_INVALID,
         "regressions": {task: read(artifact / (task + "-baseline-acceptance.json")) for task in ("p01", "p02", "p03")},
         "maintained_source": read(logs / "host-source-provenance.json"), "official": host.manifest(inputs / "official"),
-        "c_layout": read(logs / "output-limit-c-layout.log")})
+        "official_profile_setup": official_setup, "c_layout": read(logs / "output-limit-c-layout.log")})
     entries = inventory(inputs)
     write(inputs / "input-manifest.json", {"files": entries, "sha256": digest(entries)})
+    write(logs / "consumer-input-links.json", [entry for entry in entries if "link" in entry])
     transfer = Path(os.environ["CM_CONSUMER_TRANSFER_DIR"])
     transfer.mkdir()
     with tarfile.open(transfer / "runtime-inputs.tar", "w") as archive:
         archive.add(inputs, arcname="runtime-inputs")
+    with tarfile.open(transfer / "runtime-inputs.tar", "r:") as archive:
+        archive_members(archive.getmembers(), "runtime-inputs")
     assert host.manifest_digest(host.manifest(package)) == frozen["package_manifest_sha256"]
     write(artifact / "producer-inputs.json", {"status": "pass", "task_id": "CM-P04", "input_manifest_sha256": digest(entries),
         "provenance": provenance(), "consumer_acceptance": "not_run"})
@@ -341,6 +374,36 @@ def self_check():
             pass
         else:
             raise AssertionError("Escaping runtime link was accepted")
+        original_profile = root / "official-profile"
+        original_profile.mkdir()
+        (original_profile / "apply_patch").symlink_to(payload.resolve())
+        copied = root / "official-install/codex"
+        copied.parent.mkdir()
+        shutil.copyfile(payload, copied)
+        prepared = root / "prepared-profile"
+        shutil.copytree(original_profile, prepared, symlinks=True)
+        relocated = relocate_profile_links(prepared, payload, copied)
+        assert len(relocated) == 1 and not Path(relocated[0]["link"]).is_absolute()
+        assert (prepared / "apply_patch").resolve(strict=True) == copied.resolve()
+        assert os.readlink(original_profile / "apply_patch") == str(payload.resolve())
+        unexpected = root / "unexpected-official-target"
+        unexpected.write_bytes(payload.read_bytes())
+        invalid_profile = root / "invalid-profile"
+        invalid_profile.mkdir()
+        (invalid_profile / "apply_patch").symlink_to(unexpected)
+        try:
+            relocate_profile_links(invalid_profile, payload, copied)
+        except RuntimeError as error:
+            assert "Unexpected official profile alias" in str(error)
+        else:
+            raise AssertionError("Unknown official alias target was accepted")
+        copied.write_bytes(b"changed")
+        try:
+            relocate_profile_links(prepared, payload, copied)
+        except RuntimeError as error:
+            assert "Official fixture copy differs" in str(error)
+        else:
+            raise AssertionError("Changed official executable copy was accepted")
 
 
 def observe(directory, evidence):

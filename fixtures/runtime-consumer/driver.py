@@ -384,6 +384,7 @@ def matrix():
             "active_pointer": "absent in current runtime; candidates never overwrite known selection", "recovery": recovery},
         "empty-host-independent-install.json": {"empty_states": [states[0], states[5]], "official_before": official_before,
             "official_after": tree(INPUTS / "official"), "official_producer_manifest": producer["official"],
+            "official_profile_setup": producer["official_profile_setup"],
             "maintained_source": producer["maintained_source"],
             "cm_inputs_unchanged": baseline == tree(INPUTS)},
     }
