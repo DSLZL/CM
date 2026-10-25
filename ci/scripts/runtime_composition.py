@@ -282,9 +282,9 @@ def bound_sandbox_aliases(lines):
     aliases = set()
     for line in lines:
         match = re.fullmatch(r'\d+\s+symlink(?:at)?\("([^"]+)", (?:AT_FDCWD(?:<[^>]*>)?, )?"([^"]+)"\) = 0', line)
-        if not match or Path(match[2]).name != "codex-linux-sandbox":
+        # Rejected package copies can create unused aliases; bind only the frozen Host.
+        if not match or Path(match[2]).name != "codex-linux-sandbox" or match[1] != "/inputs/host/bin/codex":
             continue
-        assert match[1] == "/inputs/host/bin/codex", "Sandbox alias is not the frozen Host: " + line
         assert re.fullmatch(r'(?:/profile|/work(?:/[A-Za-z0-9_-]+)*)/tmp/arg0-linux/codex-arg0[A-Za-z0-9]+/codex-linux-sandbox', match[2]), line
         aliases.add(match[2])
     return aliases
@@ -424,10 +424,12 @@ def check_network_audit():
         except AssertionError:
             continue
         raise AssertionError("Unknown or stale packaged helper FD accepted")
-    for invalid in (creation.replace("/inputs/host/bin/codex", "/tmp/codex"),
+    unused = creation.replace("/inputs/host/bin/codex", "/work/packages/missing-helper/bin/codex")
+    assert not bound_sandbox_aliases([unused])
+    for invalid in (creation.replace("/inputs/host/bin/codex", "/tmp/codex"), unused,
                     creation.replace("/profile/tmp/", "/outside/tmp/")):
         try:
-            bound_sandbox_aliases([invalid])
+            audit_executions([sandbox], sandbox_aliases=bound_sandbox_aliases([invalid]))
         except AssertionError:
             continue
         raise AssertionError("Unknown sandbox alias accepted")
