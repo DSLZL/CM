@@ -22,12 +22,14 @@ def write(path, value):
     path.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
-def trace_rows(path):
+def trace_rows(path, *, waiting=False):
     if not path.exists():
         return []
-    # Ignore only the last incomplete append while waiting for a named barrier.
-    lines = path.read_text().splitlines()
-    return [json.loads(line) for line in lines if line.endswith("}")]
+    # Only a newline completes a record; a nested object can end with a brace.
+    lines = path.read_bytes().split(b"\n")
+    if lines[-1] and not waiting:
+        raise ValueError("Unterminated runtime trace record: " + str(path))
+    return [json.loads(line) for line in lines[:-1]]
 
 
 def await_barrier(predicate, process, label, timeout=30):
@@ -243,7 +245,7 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
                     process.send_signal(signal.SIGINT)
                 elif restrictive:
                     await_barrier(lambda: any(row["event"] == "write-gate-blocked"
-                        and row["detail"]["call_id"] == "cm-b" for row in trace_rows(trace)),
+                        and row["detail"]["call_id"] == "cm-b" for row in trace_rows(trace, waiting=True)),
                         process, "actual B write-gate blocked")
                     assert not tools.has("B:entered"), "B entered while A still owns the execution gate"
                     if scenario == "cancel-waiting":

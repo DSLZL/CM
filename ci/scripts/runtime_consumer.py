@@ -280,6 +280,9 @@ def rootfs(inputs, root):
 
 def self_check():
     import runtime_composition as observer
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "fixtures/native-loader"))
+    from core_acceptance import trace_rows
+
     observer.check_network_audit()
     for source in ('1 recvfrom(4<UNIX-STREAM:[1->2]>, "observer-secret", 15, 0, NULL, NULL) = 15',
                    '1 <... recvfrom resumed>"observer-secret", 15, 0, NULL, NULL) = 15'):
@@ -287,6 +290,28 @@ def self_check():
         assert "observer-secret" not in sanitized and "payload redacted" in sanitized
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        trace = root / "trace.jsonl"
+        row = {"event": "ready", "detail": {"text": "\u00e9"}}
+        record = json.dumps(row, ensure_ascii=False).encode() + b"\n"
+        assert trace_rows(trace, waiting=True) == []
+        for boundary in range(len(record)):
+            trace.write_bytes(record[:boundary])
+            assert trace_rows(trace, waiting=True) == []
+        trace.write_bytes(record)
+        assert trace_rows(trace) == [row]
+        trace.write_bytes(record + record[:-1])
+        assert trace_rows(trace, waiting=True) == [row]
+        trace.write_bytes(record + record)
+        assert trace_rows(trace) == [row, row]
+        for data, waiting in ((record[:-1], False), (b'{"event":}\n', False),
+                              (b'{"event":}\n', True), (b'{"event":"\xff"}\n', True)):
+            trace.write_bytes(data)
+            try:
+                trace_rows(trace, waiting=waiting)
+            except ValueError:
+                continue
+            raise AssertionError("Malformed or truncated trace record was accepted")
+        trace.unlink()
         payload = root / "cli"
         payload.write_bytes(b"frozen")
         payload.chmod(0o755)
