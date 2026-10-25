@@ -238,6 +238,18 @@ def elf_dependencies(path):
     return result
 
 
+def dpkg_owners(output, path):
+    owners = set()
+    for line in output.splitlines():
+        names, separator, filename = line.partition(": ")
+        candidates = names.split(", ")
+        if separator and filename == str(path) and all(
+            re.fullmatch(r"[a-z0-9][a-z0-9+.-]*(?::[a-z0-9][a-z0-9-]*)?", name) for name in candidates
+        ):
+            owners.update(candidates)
+    return sorted(owners)
+
+
 def rootfs(inputs, root):
     root.mkdir()
     packages = {}
@@ -254,14 +266,17 @@ def rootfs(inputs, root):
         # Dereference package-owned symlinks; no rootfs link can escape its root.
         shutil.copyfile(path, destination)
         destination.chmod(stat.S_IMODE(path.stat().st_mode))
-        owner = None
+        owners = []
         for candidate in dict.fromkeys((str(path), str(path.resolve()), str(path.resolve()).removeprefix("/usr"))):
-            query = subprocess.run(["dpkg-query", "-S", candidate], capture_output=True, text=True)
+            query = subprocess.run(["dpkg-query", "-S", candidate], capture_output=True, text=True,
+                                   env=os.environ | {"LC_ALL": "C.UTF-8", "LANGUAGE": "C"})
             if query.returncode == 0:
-                owner = query.stdout.split(": ")[0].splitlines()[0]
-                break
-        assert owner, "Unowned runtime input: " + str(path)
-        packages[owner] = subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", owner], text=True)
+                owners = dpkg_owners(query.stdout, candidate)
+                if owners:
+                    break
+        assert owners, "Unowned runtime input: " + str(path)
+        for owner in owners:
+            packages[owner] = subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", owner], text=True)
         for dependency in elf_dependencies(path):
             system(dependency)
 
@@ -315,6 +330,21 @@ def self_check():
     import runtime_composition as observer
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "fixtures/native-loader"))
     from core_acceptance import trace_rows
+
+    loader = "/lib64/ld-linux-x86-64.so.2"
+    diversions = "diversion by libc6 from: " + loader + "\ndiversion by libc6 to: " + loader + ".usr-is-merged\n"
+    assert dpkg_owners(diversions + "libc6:amd64: " + loader + "\n", loader) == ["libc6:amd64"]
+    assert dpkg_owners("libc6:amd64, libc6-compat:amd64: " + loader, loader) == ["libc6-compat:amd64", "libc6:amd64"]
+    assert dpkg_owners("bash: /bin/bash\n", "/bin/bash") == ["bash"]
+    for invalid in (diversions, "not a package: " + loader, "-invalid: " + loader,
+                    "libc6:amd64: " + loader + ".other", ""):
+        assert dpkg_owners(invalid, loader) == []
+    actual_owners = dpkg_owners(subprocess.check_output(["dpkg-query", "-S", loader], text=True,
+                               env=os.environ | {"LC_ALL": "C.UTF-8", "LANGUAGE": "C"}), loader)
+    assert "libc6:amd64" in actual_owners, actual_owners
+    for owner in actual_owners:
+        assert subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", owner], text=True).strip()
+    print(json.dumps({"dpkg_query_loader_owners": actual_owners}))
 
     observer.check_network_audit()
     for source in ('1 recvfrom(4<UNIX-STREAM:[1->2]>, "observer-secret", 15, 0, NULL, NULL) = 15',
