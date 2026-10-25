@@ -32,11 +32,7 @@ unsafe extern "C" fn init(
             return FAILED;
         }
         unsafe { *userdata = Box::into_raw(Box::new(0_u64)).cast() };
-        if VARIANT == "init-fail" {
-            FAILED
-        } else {
-            OK
-        }
+        if VARIANT == "init-fail" { FAILED } else { OK }
     })
 }
 
@@ -111,18 +107,14 @@ unsafe extern "C" fn limit(
             "decision" => output.decision = u64::MAX,
             "output-header" => output.header.minor = 0,
             "output-reserved" => output.reserved = 1,
-            "output-canary" => unsafe {
-                (output as *mut v21::Output).add(1).cast::<u8>().write(0)
-            },
+            "output-canary" => unsafe { (output as *mut v21::Output).add(1).cast::<u8>().write(0) },
             "error-length" => unsafe { (*error).len = u64::MAX },
             "error-null" => unsafe { (*error).data = ptr::null_mut() },
             "error-utf8" => unsafe {
                 (*error).data.write(0xff);
                 (*error).len = 1;
             },
-            "error-canary" => unsafe {
-                (*error).data.add(cm_abi::ERROR_CAPACITY).write(0)
-            },
+            "error-canary" => unsafe { (*error).data.add(cm_abi::ERROR_CAPACITY).write(0) },
             _ => {}
         }
         OK
@@ -203,15 +195,19 @@ pub unsafe extern "C" fn cm_mod_entry_v2(
             "descriptor-minor" => descriptor.header.minor = 99,
             "descriptor-reserved" => descriptor.reserved = 1,
             "null-callback" => descriptor.callback = None,
-            "null-view" => descriptor.id = Bytes {
-                data: ptr::null(),
-                len: 1,
-            },
+            "null-view" => {
+                descriptor.id = Bytes {
+                    data: ptr::null(),
+                    len: 1,
+                }
+            }
             "huge-view" => descriptor.id.len = u64::MAX,
-            "utf8" => descriptor.id = Bytes {
-                data: b"\xff".as_ptr(),
-                len: 1,
-            },
+            "utf8" => {
+                descriptor.id = Bytes {
+                    data: b"\xff".as_ptr(),
+                    len: 1,
+                }
+            }
             _ => {}
         }
         let count = if VARIANT == "two-limiters" { 2 } else { 1 };
