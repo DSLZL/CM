@@ -42,6 +42,31 @@ def tree(root):
     return result
 
 
+def check_mounts(mounts, bind_roots):
+    pseudo = {"/proc": "proc", "/dev": "tmpfs", "/tmp": "tmpfs", "/dev/pts": "devpts",
+              **{"/dev/" + name: "devtmpfs" for name in ("null", "zero", "full", "random", "urandom", "tty")}}
+    assert set(bind_roots) == {"/", "/profile", "/work", "/evidence"}
+    seen = set()
+    for mount in mounts:
+        record, separator, filesystem = mount.partition(" - ")
+        fields = record.split()
+        assert separator and len(fields) >= 6 and filesystem.split(), mount
+        decode = lambda value: re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), value)
+        # The filesystem root identifies the backing bind; the mount point is the visible path.
+        origin, point = map(decode, fields[3:5])
+        options = set(fields[5].split(","))
+        assert point not in seen, "Stacked consumer mount: " + point
+        seen.add(point)
+        if point in bind_roots:
+            assert origin == bind_roots[point], "Unexpected bind source: " + mount
+        else:
+            kind = filesystem.split()[0]
+            assert pseudo.get(point) == kind, "Unexpected consumer mount: " + mount
+            assert origin == ("/" + Path(point).name if kind == "devtmpfs" else "/"), mount
+        assert options.intersection({"ro", "rw"}) == ({"ro"} if point == "/" else {"rw"}), mount
+    assert set(bind_roots) | {"/proc", "/dev", "/tmp"} <= seen
+
+
 def environment(label):
     context = read(Path("/fixture/context.json"))
     namespaces = {name: os.readlink("/proc/self/ns/" + name) for name in context["outer_namespaces"]}
@@ -61,7 +86,8 @@ def environment(label):
     snapshot = {"namespaces": namespaces, "outer_namespaces": context["outer_namespaces"],
         "capabilities": capabilities, "fd": descriptors, "mountinfo": mounts, "routes": routes,
         "interfaces": interfaces, "process_roots": process_roots, "environment_keys": sorted(os.environ),
-        "pid": os.getpid(), "root": os.readlink("/proc/self/root"), "cache_mode": context["cache_mode"]}
+        "pid": os.getpid(), "root": os.readlink("/proc/self/root"), "cache_mode": context["cache_mode"],
+        "expected_bind_roots": context["bind_roots"]}
     write(EVIDENCE / (label + "-environment.json"), snapshot)
     assert all(namespaces[name] != context["outer_namespaces"][name] for name in namespaces)
     assert os.getuid() == 1000 and os.getgid() == 1000
@@ -71,15 +97,7 @@ def environment(label):
     assert not any(line.split()[1] == "00000000" for line in routes.splitlines()[1:])
     assert set(interfaces) == {"lo"}
     assert set(os.environ) <= {"PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "HOME", "PYTHONNOUSERSITE", "PYTHONDONTWRITEBYTECODE"}
-    writable = []
-    for mount in mounts:
-        fields = mount.split()
-        point, options = fields[4], fields[5].split(",")
-        if "rw" in options:
-            writable.append(point)
-            assert point in ("/profile", "/work", "/evidence", "/tmp", "/proc", "/dev") or point.startswith(("/proc/", "/dev/")), point
-        assert not any(value in mount for value in ("/docker.sock", "/.ssh", "/.cargo", "/.rustup", "/target/", "/home/runner", "/__w/"))
-    assert all(point in writable for point in ("/profile", "/work", "/evidence", "/tmp"))
+    check_mounts(mounts, context["bind_roots"])
     for forbidden in ("/var/run/docker.sock", "/run/docker.sock", "/run/host", "/sys", "/etc/resolv.conf",
                       "/usr/bin/cargo", "/usr/bin/gcc", "/usr/bin/cc", "/usr/bin/ld", "/usr/bin/ssh"):
         assert not Path(forbidden).exists(), forbidden

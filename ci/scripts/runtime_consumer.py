@@ -333,6 +333,33 @@ def self_check():
     import runtime_composition as observer
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "fixtures/native-loader"))
     from core_acceptance import trace_rows
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "fixtures/runtime-consumer"))
+    from driver import check_mounts
+
+    prefix = "/home/runner/work/_temp/cm-runtime-consumer"
+    binds = {point: prefix + "/" + name for point, name in
+             (("/", "rootfs"), ("/profile", "profile"), ("/work", "work"), ("/evidence", "evidence"))}
+    mounts = [f"1 0 259:1 {source} {point} {'ro' if point == '/' else 'rw'},nosuid - ext4 /dev/root rw"
+              for point, source in binds.items()]
+    mounts += [f"2 1 0:1 / {point} rw,nosuid - {kind} {kind} rw"
+               for point, kind in (("/proc", "proc"), ("/dev", "tmpfs"), ("/tmp", "tmpfs"))]
+    mounts += ["3 2 0:6 /null /dev/null rw,nosuid - devtmpfs devtmpfs rw"]
+    check_mounts(mounts, binds)
+    escaped = {point: source.replace("/work/", "/work space/") for point, source in binds.items()}
+    check_mounts([line.replace("/work/", r"/work\040space/") for line in mounts], escaped)
+    for invalid in ([mounts[0].replace("ro,nosuid", "rw,nosuid"), *mounts[1:]],
+                    [mounts[0], mounts[1].replace(binds["/profile"], "/home/runner"), *mounts[2:]],
+                    [*mounts, "4 1 259:1 /home/runner /source ro - ext4 /dev/root rw"],
+                    [*mounts, "4 1 0:6 /docker.sock /dev/docker.sock rw - devtmpfs devtmpfs rw"],
+                    [*mounts, mounts[0]], mounts[1:],
+                    [line.replace("/profile rw,", "/profile ro,") for line in mounts],
+                    [line.replace("- tmpfs tmpfs", "- ext4 /dev/root") for line in mounts]):
+        try:
+            check_mounts(invalid, binds)
+        except AssertionError:
+            continue
+        raise AssertionError("Unexpected runtime mount was accepted: " + repr(invalid))
+    print(json.dumps({"consumer_mount_validation": "pass"}))
 
     loader = "/lib64/ld-linux-x86-64.so.2"
     diversions = "diversion by libc6 from: " + loader + "\ndiversion by libc6 to: " + loader + ".usr-is-merged\n"
@@ -534,7 +561,9 @@ def consume():
         thread.start()
         context = {"outer_namespaces": {name: os.readlink("/proc/self/ns/" + name) for name in ("user", "mnt", "pid", "ipc", "uts", "net")},
                    "canary_port": listener.getsockname()[1], "provenance": provenance(), "cache_mode": "none",
-                   "input_manifest_sha256": manifest["sha256"]}
+                   "input_manifest_sha256": manifest["sha256"],
+                   "bind_roots": {point: str((temp / name).resolve()) for point, name in
+                       (("/", "rootfs"), ("/profile", "profile"), ("/work", "work"), ("/evidence", "evidence"))}}
         write(root / "fixture/context.json", context)
         closure["files"] = inventory(root)
         closure["sha256"] = digest(closure["files"])
