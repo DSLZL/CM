@@ -131,8 +131,9 @@ def cli_arguments(binary, cwd, endpoint, sandboxed=False):
             "-c", "features.code_mode=false", "-c", "features.code_mode_only=false",
             "-c", "features.unified_exec=true", "-c", "features.shell_snapshot=false",
             "-c", "features.plugins=false", "-c", "features.apps=false", "-c", "analytics.enabled=false",
+            *(["-c", 'approval_policy="never"'] if sandboxed else []),
             "exec", "--skip-git-repo-check", "--ephemeral", "--json",
-            *(["--sandbox", "workspace-write", "-c", 'approval_policy="never"'] if sandboxed else
+            *(["--sandbox", "workspace-write"] if sandboxed else
               ["--dangerously-bypass-approvals-and-sandbox"]), "-C", str(cwd),
             "-m", "gpt-5.4", "CM deterministic local acceptance"]
 

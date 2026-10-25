@@ -174,6 +174,35 @@ def prefix(directory):
 
 
 def redact_syscalls(text):
+    lines = text.split("\n")
+    for index, line in enumerate(lines):
+        prefix = re.match(r'^(?:\d+\s+(?:sendto|recvfrom)\(\d+(?:<.*?>)?, |\d+\s+<\.\.\. (?:sendto|recvfrom) resumed>\s*)\[', line)
+        if not prefix:
+            continue
+        start = prefix.end() - 1
+        depth, quoted, escaped = 0, False, False
+        for end in range(start, len(line)):
+            char = line[end]
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    quoted = False
+            elif char == '"':
+                quoted = True
+            elif char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    tail = line[end + 1:]
+                    lines[index] = line[:start] + '"<payload redacted>"' + tail.removeprefix("...")
+                    break
+        else:
+            raise AssertionError("Truncated structured syscall payload")
+    text = "\n".join(lines)
     text = re.sub(r'(^\d+\s+(?:sendto|recvfrom)\(\d+(?:<.*?>)?, )"(?:[^"\\]|\\.)*"(\.\.\.)?',
                   r'\1"<payload redacted>"', text, flags=re.MULTILINE)
     return re.sub(r'(^\d+\s+<\.\.\. (?:sendto|recvfrom) resumed>\s*)"(?:[^"\\]|\\.)*"(\.\.\.)?',
@@ -199,7 +228,16 @@ def complete_syscalls(lines):
     return complete
 
 
-def audit_network(lines, directory, ports):
+def kernel_route_sockets(lines):
+    sockets = set()
+    for line in lines:
+        match = re.fullmatch(r'(\d+)\s+socket\(AF_NETLINK, SOCK_RAW(?:\|SOCK_CLOEXEC)?, NETLINK_ROUTE\) = (\d+)<(NETLINK:\[[^\]]+\])>', line)
+        if match:
+            sockets.add((match[1], match[2], match[3]))
+    return sockets
+
+
+def audit_network(lines, directory, ports, kernel_routes=()):
     unix_connections = set()
     unix_pairs = set()
     for line in lines:
@@ -211,9 +249,13 @@ def audit_network(lines, directory, ports):
             assert pair[2] in (None, pair[3]) and pair[4] in (None, pair[1]), line
             unix_pairs.update(((pair[1], pair[3]), (pair[3], pair[1])))
             continue
-        call = re.match(r'\d+\s+(connect|sendto)\(\d+(?:<(.*?)>)?, ', line)
+        call = re.match(r'(\d+)\s+(connect|sendto)\((\d+)(?:<(.*?)>)?, ', line)
         assert call, "Unclassified network syscall: " + line
-        descriptor = call[2] or ""
+        descriptor = call[4] or ""
+        if descriptor.startswith("NETLINK:"):
+            assert call[2] == "sendto" and (call[1], call[3], descriptor) in kernel_routes, line
+            assert re.search(r', \{sa_family=AF_NETLINK, nl_pid=0, nl_groups=0+\}, \d+\) = \d+$', line), line
+            continue
         address = re.search(r', (\{sa_family=(?:AF_UNIX|AF_INET6?), [^}]*\}), \d+\)?(?: = [^"]*| <unfinished \.\.\.>)$', line)
         if address:
             if "sa_family=AF_UNIX" in address[1]:
@@ -228,7 +270,7 @@ def audit_network(lines, directory, ports):
                 local = 'inet_addr("127.0.0.1")' in address[1] or 'inet_pton(AF_INET6, "::1",' in address[1]
                 assert local and port and port[1] in ports, "Unexpected runtime network: " + line
         else:
-            assert call[1] == "sendto" and re.search(r', NULL, 0\)?(?: = [^"]*| <unfinished \.\.\.>)$', line), line
+            assert call[2] == "sendto" and re.search(r', NULL, 0\)?(?: = [^"]*| <unfinished \.\.\.>)$', line), line
             # Decoded socket identity ties address-less sends to the observed fixture connection.
             unix = re.fullmatch(r'UNIX(?:-[A-Z]+)?:\[(\d+)->(\d+)(?:,[^\]]*)?\]', descriptor)
             tcp = re.fullmatch(r'TCP:\[127[.]0[.]0[.]1:\d+->127[.]0[.]0[.]1:(\d+)\]', descriptor)
@@ -272,6 +314,33 @@ def check_network_audit():
     assert "observer-canary" not in sanitized and "<payload redacted>" in sanitized
     assert sanitized.endswith(', 25, MSG_NOSIGNAL, NULL, 0) = 25')
     audit_network([connect, send, tcp, *complete_syscalls(split), sanitized], directory, {"8080"})
+    route = '4 socket(AF_NETLINK, SOCK_RAW|SOCK_CLOEXEC, NETLINK_ROUTE) = 5<NETLINK:[123]>'
+    tail = ', 40, 0, {sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, 12) = 40'
+    structured = '4 sendto(5<NETLINK:[123]>, [{nlmsg_type=RTM_NEWLINK}, ["observer-secret]", "escaped\\\"quote"]]' + tail
+    packet = redact_syscalls(structured)
+    assert packet == '4 sendto(5<NETLINK:[123]>, "<payload redacted>"' + tail
+    assert redact_syscalls(packet) == packet
+    for prefix in ('4 recvfrom(5<NETLINK:[123]>, ', '4 <... recvfrom resumed>', '4 <... sendto resumed>'):
+        assert redact_syscalls(prefix + '["observer-secret"]' + tail) == prefix + '"<payload redacted>"' + tail
+    try:
+        redact_syscalls('4 sendto(5<NETLINK:[123]>, ["observer-secret"')
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("Unterminated structured payload accepted")
+    routes = kernel_route_sockets([route])
+    assert routes == {("4", "5", "NETLINK:[123]")}
+    audit_network([packet], directory, set(), routes)
+    for invalid, observed_routes in ((packet, set()), (packet.replace('4 sendto', '5 sendto'), routes),
+                                    (packet.replace('[123]', '[124]'), routes),
+                                    (packet.replace('nl_pid=0', 'nl_pid=9'), routes),
+                                    (packet.replace('nl_groups=00000000', 'nl_groups=00000001'), routes),
+                                    (packet, kernel_route_sockets([route.replace('NETLINK_ROUTE', 'NETLINK_USERSOCK')]))):
+        try:
+            audit_network([invalid], directory, set(), observed_routes)
+        except AssertionError:
+            continue
+        raise AssertionError("Network audit accepted an unknown Netlink peer")
     for unknown in ([send], [connect, send.replace("41->42", "43->42")],
                     [connect, send.replace("<UNIX-STREAM:[41->42]>", "")],
                     [tcp.replace(":8080]", ":8081]")], [tcp.replace("->127.0.0.1", "->198.51.100.1")],

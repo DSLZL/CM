@@ -183,7 +183,7 @@ def produce():
         shutil.copyfile(root / relative, destination)
     # Only runtime parser functions are handed to the outer observer, not build modules.
     observer = "import json\nimport re\nfrom pathlib import Path\n\n" + "\n\n".join(inspect.getsource(getattr(composition, name))
-        for name in ("redact_syscalls", "complete_syscalls", "audit_network", "audit_executions", "check_network_audit"))
+        for name in ("redact_syscalls", "complete_syscalls", "kernel_route_sockets", "audit_network", "audit_executions", "check_network_audit"))
     (inputs / "observer.py").write_text(observer, encoding="utf-8")
     shutil.copyfile(Path(__file__), inputs / "runtime_consumer.py")
     official_root = Path(os.environ["RUNNER_TEMP"]) / "cm-p04-official"
@@ -329,12 +329,35 @@ def rootfs(inputs, root):
             "kind": "canonical runtime rootfs content, not an OCI digest"}
 
 
+def copy_evidence(source, destination):
+    for path in source.rglob("*"):
+        if not stat.S_ISREG(path.lstat().st_mode) or not (path.suffix in {".json", ".jsonl", ".log"} or path.name.startswith("syscalls.")):
+            continue
+        data = path.read_bytes()
+        data.decode("utf-8")
+        assert b"\0" not in data and len(data) <= 16 * 1024 * 1024, path
+        target = destination / path.relative_to(source)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+
+
 def self_check():
     import runtime_composition as observer
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "fixtures/native-loader"))
-    from core_acceptance import trace_rows
+    from core_acceptance import cli_arguments, trace_rows
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "fixtures/runtime-consumer"))
     from driver import check_mounts
+
+    for sandboxed in (False, True):
+        command = cli_arguments(Path("/host/codex"), Path("/work"), "http://127.0.0.1:8080", sandboxed=sandboxed)
+        split = command.index("exec")
+        assert "-c" not in command[split:]
+        settings = [command[index + 1] for index in range(1, split) if command[index] == "-c"]
+        assert 'model_provider="cm_fixture"' in settings
+        assert 'model_providers.cm_fixture.base_url="http://127.0.0.1:8080/v1"' in settings
+        assert ("--sandbox" in command) is sandboxed
+        assert ('approval_policy="never"' in settings) is sandboxed
+    print(json.dumps({"consumer_cli_overrides": "pass"}))
 
     prefix = "/home/runner/work/_temp/cm-runtime-consumer"
     binds = {point: prefix + "/" + name for point, name in
@@ -382,10 +405,47 @@ def self_check():
     print(json.dumps({"consumer_pwd_cleanup": "pass"}))
 
     observer.check_network_audit()
+    helper = read(Path(os.environ["CM_CI_LOG_DIR"]) / "host-helper.json")
+    binary = Path(os.environ["CARGO_TARGET_DIR"]) / "helper" / TARGET / helper["profile"] / "bwrap"
+    assert sha(binary) == helper["sha256"]
+    with tempfile.TemporaryDirectory() as directory:
+        trace = Path(directory) / "helper-syscalls.log"
+        subprocess.run(["strace", "-f", "-qq", "-yy", "-s", "1024", "-e", "trace=socket,sendto,recvfrom",
+            "-o", str(trace), "--", str(binary), "--unshare-user", "--unshare-net", "--cap-drop", "ALL",
+            "--ro-bind", "/", "/", "--clearenv", "--", "/usr/bin/env"],
+            check=True, stdout=subprocess.DEVNULL, close_fds=True, timeout=30)
+        calls = observer.complete_syscalls(observer.redact_syscalls(trace.read_text()).splitlines())
+        routes = observer.kernel_route_sockets(calls)
+        packets = [line for line in calls if re.match(r'\d+\s+sendto\(', line)]
+        assert routes and packets, "Actual sandbox loopback setup was not observed"
+        observer.audit_network(packets, Path(directory), set(), routes)
+        print(json.dumps({"actual_helper_kernel_route_audit": "pass", "socket_count": len(routes), "packet_count": len(packets)}))
     for source in ('1 recvfrom(4<UNIX-STREAM:[1->2]>, "observer-secret", 15, 0, NULL, NULL) = 15',
                    '1 <... recvfrom resumed>"observer-secret", 15, 0, NULL, NULL) = 15'):
         sanitized = observer.redact_syscalls(source)
         assert "observer-secret" not in sanitized and "payload redacted" in sanitized
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        evidence = root / "evidence"
+        evidence.mkdir()
+        (evidence / "result.json").write_text('{"status":"pass"}\n')
+        (evidence / "syscalls.123").write_text("redacted syscall\n")
+        (evidence / "payload.so").write_bytes(b"\x7fELF\0")
+        (evidence / "linked.json").symlink_to(evidence / "result.json")
+        os.mkfifo(evidence / "pipe.log")
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.bind(str(evidence / "tools.log"))
+            copy_evidence(evidence, root / "copied")
+        assert sorted(path.name for path in (root / "copied").iterdir()) == ["result.json", "syscalls.123"]
+        for invalid in (b"\xff", b"text\0"):
+            (evidence / "invalid.log").write_bytes(invalid)
+            try:
+                copy_evidence(evidence, root / "invalid-copy")
+            except (AssertionError, UnicodeError):
+                continue
+            raise AssertionError("Non-text evidence accepted")
+        (evidence / "invalid.log").unlink()
+        print(json.dumps({"consumer_text_evidence": "pass"}))
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         trace = root / "trace.jsonl"
@@ -476,6 +536,7 @@ def observe(directory, evidence):
     observer.check_network_audit()
     scripts = ("fixtures/native-loader/tool_barrier.py", "fixtures/runtime-consumer/driver.py")
     network = []
+    sockets = []
     executions = []
     files = []
     executable_memory = []
@@ -486,6 +547,7 @@ def observe(directory, evidence):
         path.write_text(text, encoding="utf-8")
         assert not re.search(r'\b(?:sendto|recvfrom)\([^\n]*?, "(?!<payload redacted>)', text)
         calls = observer.complete_syscalls(text.splitlines())
+        sockets.extend(line for line in calls if re.match(r'\d+\s+socket\(', line))
         executions.extend(line for line in calls if re.match(r'\d+\s+execve(?:at)?\(', line))
         network.extend(line for line in calls if re.match(r'\d+\s+(?:connect|sendto|socketpair)\(', line))
         files.extend(line for line in calls if re.match(r'\d+\s+(?:openat|readlink)\(', line))
@@ -506,11 +568,12 @@ def observe(directory, evidence):
         if peer and peer[1] in ports:
             line = line[:peer.start()] + '<TCP:[127.0.0.1:' + peer[2] + '->127.0.0.1:' + peer[1] + ']>' + line[peer.end():]
         normalized.append(line)
-    observer.audit_network(normalized, Path("/evidence"), ports)
+    routes = observer.kernel_route_sockets(sockets)
+    observer.audit_network(normalized, Path("/evidence"), ports, routes)
     # Writable executable mappings are unsupported, even if no compiler was exec'd.
     assert not executable_memory, "Unclassified runtime code generation: " + repr(executable_memory)
     assert files, "File-load observer produced no records"
-    return {"status": "pass", "executions": executions, "network": network,
+    return {"status": "pass", "executions": executions, "network": network, "kernel_route_sockets": sorted(routes),
         "file_load_count": len(files), "trace_files": [path.name for path in sorted(directory.glob("syscalls.*"))],
         "compiler_linker_jit_build_service_calls": 0, "unclassified_executable_memory": executable_memory,
         "boundary": "fixed audited native fixtures; not a generic malicious-native JIT detector",
@@ -595,7 +658,7 @@ def consume():
             trusted.mkdir()
             stage = "actual isolated matrix"
             trace = ["strace", "-ff", "-qq", "-yy", "-s", "1024", "-e",
-                "trace=execve,execveat,connect,sendto,recvfrom,socketpair,openat,readlink,mmap,mprotect,memfd_create",
+                "trace=execve,execveat,socket,connect,sendto,recvfrom,socketpair,openat,readlink,mmap,mprotect,memfd_create",
                 "-o", str(trusted / "syscalls"), "--"]
             write(logs / "consumer-command.json", {"command": [*trace, *base, "--", *driver, "matrix"],
                 "cache_mode": "none", "producer_input_manifest_sha256": manifest["sha256"], "provenance": provenance()})
@@ -665,21 +728,14 @@ def consume():
                         text = "\n".join(path.suffix[1:] + " " + line for line in text.splitlines()) + "\n"
                     path.write_text(observer.redact_syscalls(text), encoding="utf-8")
                     shutil.copyfile(path, evidence / path.name)
-            shutil.copytree(evidence, artifact / "evidence", dirs_exist_ok=True)
+            copy_evidence(evidence, artifact / "evidence")
     except BaseException as error:
         acceptance.update(status="failed", failed_stage=stage, error=repr(error))
         raise
     finally:
         write(artifact / "acceptance.json", acceptance)
         shutil.copyfile(artifact / "acceptance.json", logs / "acceptance.json")
-        for path in (artifact / "evidence").rglob("*"):
-            if path.is_file() and path.suffix in {".json", ".jsonl", ".log"} or (path.is_file() and path.name.startswith("syscalls.")):
-                data = path.read_bytes()
-                data.decode("utf-8")
-                assert b"\0" not in data and len(data) <= 16 * 1024 * 1024, path
-                destination = logs / "acceptance-evidence" / path.relative_to(artifact / "evidence")
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(path, destination)
+        copy_evidence(artifact / "evidence", logs / "acceptance-evidence")
 
 
 if __name__ == "__main__":
