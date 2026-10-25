@@ -34,9 +34,29 @@ fn relative(value: &str) -> bool {
             .all(|part| matches!(part, Component::Normal(_)))
 }
 
+fn same_build_inode(executable: &Path, original: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    match (fs::metadata(executable), fs::metadata(original)) {
+        (Ok(actual), Ok(built)) => {
+            actual.is_file() && (actual.dev(), actual.ino()) == (built.dev(), built.ino())
+        }
+        _ => false,
+    }
+}
+
 pub fn preflight() -> Result<(), LoadError> {
     let result = (|| -> Result<(), String> {
         let executable = fs::canonicalize("/proc/self/exe").map_err(|error| error.to_string())?;
+        // Cargo integration tests run the unpackaged build inode, including hard links.
+        if let Some(target) = option_env!("CARGO_TARGET_DIR")
+            && same_build_inode(
+                &executable,
+                &Path::new(target).join("x86_64-unknown-linux-gnu/dev-small/codex"),
+            )
+        {
+            return Ok(());
+        }
         let root = executable
             .parent()
             .and_then(Path::parent)
@@ -116,7 +136,27 @@ pub fn preflight() -> Result<(), LoadError> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::relative;
+    use super::same_build_inode;
+
+    #[test]
+    fn unpackaged_exception_requires_original_inode() {
+        let root = std::env::temp_dir().join(format!("cm-package-inode-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let original = root.join("original");
+        let linked = root.join("linked");
+        let copied = root.join("copied");
+        fs::write(&original, b"same Host bytes").unwrap();
+        fs::hard_link(&original, &linked).unwrap();
+        fs::copy(&original, &copied).unwrap();
+        assert!(same_build_inode(&original, &original));
+        assert!(same_build_inode(&linked, &original));
+        assert!(!same_build_inode(&copied, &original));
+        assert!(!same_build_inode(&original, &root.join("missing")));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn inventory_paths_cannot_escape_package() {

@@ -328,11 +328,13 @@ def matrix():
         assert tree(PROFILE / "mods") == known_success and (PROFILE / "cm-runtime.toml").read_bytes() == selection
         assert tree(data) == retained and tree(INPUTS) == baseline
         business("recoveries/startup-" + kind, PROFILE, ())
-    for kind in ("missing-helper", "damaged-package"):
+    for kind in ("missing-helper", "damaged-package", "missing-inventory"):
         candidate = WORK / "packages" / kind
         shutil.copytree(INPUTS / "host", candidate)
         if kind == "missing-helper":
             (candidate / "codex-resources/bwrap").unlink()
+        elif kind == "missing-inventory":
+            (candidate / "cm-runtime-files.json").unlink()
         else:
             with (candidate / "codex-path/rg").open("r+b") as stream:
                 stream.write(b"damaged")
