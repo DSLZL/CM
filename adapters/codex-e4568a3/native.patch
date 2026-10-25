@@ -349,7 +349,7 @@ diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.
 diff --git a/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs b/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs
 --- a/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs
 +++ b/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs
-@@ -312,6 +312,30 @@
+@@ -312,6 +312,32 @@
          } = args;
 +        let cm_thread_id = session.thread_id.to_string();
 +        let cm_turn_id = turn.sub_id.to_string();
@@ -369,7 +369,9 @@ diff --git a/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs b/cod
 +                FunctionCallError::Fatal("CM output limit exceeds target size".into())
 +            })?),
 +            Err(cm_runtime::tool_policy::PolicyError::Cancelled) => {
-+                return Err(FunctionCallError::RespondToModel("tool call cancelled".into()));
++                return Err(FunctionCallError::RespondToModel(
++                    "tool call cancelled".into(),
++                ));
 +            }
 +            Err(cm_runtime::tool_policy::PolicyError::Failed(message)) => {
 +                return Err(FunctionCallError::Fatal(message));
