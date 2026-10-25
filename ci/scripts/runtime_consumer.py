@@ -183,7 +183,7 @@ def produce():
         shutil.copyfile(root / relative, destination)
     # Only runtime parser functions are handed to the outer observer, not build modules.
     observer = "import json\nimport re\nfrom pathlib import Path\n\n" + "\n\n".join(inspect.getsource(getattr(composition, name))
-        for name in ("redact_syscalls", "complete_syscalls", "kernel_route_sockets", "audit_network", "bound_sandbox_aliases", "audit_executions", "check_network_audit"))
+        for name in ("redact_syscalls", "complete_syscalls", "kernel_route_sockets", "audit_network", "bound_sandbox_aliases", "bound_bwrap_executions", "audit_executions", "check_network_audit"))
     (inputs / "observer.py").write_text(observer, encoding="utf-8")
     shutil.copyfile(Path(__file__), inputs / "runtime_consumer.py")
     official_root = Path(os.environ["RUNNER_TEMP"]) / "cm-p04-official"
@@ -410,8 +410,11 @@ def self_check():
     assert sha(binary) == helper["sha256"]
     with tempfile.TemporaryDirectory() as directory:
         trace = Path(directory) / "helper-syscalls.log"
-        subprocess.run(["strace", "-f", "-qq", "-yy", "-s", "1024", "-e", "trace=socket,sendto,recvfrom",
-            "-o", str(trace), "--", str(binary), "--unshare-user", "--unshare-net", "--cap-drop", "ALL",
+        subprocess.run(["strace", "-f", "-qq", "-yy", "-s", "1024", "-e",
+            "trace=socket,sendto,recvfrom,execve,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl",
+            "-o", str(trace), "--", "/usr/bin/python3", "-B", "-c",
+            "import os,sys; fd=os.open(sys.argv[1], os.O_RDONLY|os.O_CLOEXEC); os.execv('/proc/self/fd/'+str(fd), ['bwrap', *sys.argv[2:]])",
+            str(binary), "--unshare-user", "--unshare-net", "--cap-drop", "ALL",
             "--ro-bind", "/", "/", "--clearenv", "--", "/usr/bin/env"],
             check=True, stdout=subprocess.DEVNULL, close_fds=True, timeout=30)
         calls = observer.complete_syscalls(observer.redact_syscalls(trace.read_text()).splitlines())
@@ -419,6 +422,10 @@ def self_check():
         packets = [line for line in calls if re.match(r'\d+\s+sendto\(', line)]
         assert routes and packets, "Actual sandbox loopback setup was not observed"
         observer.audit_network(packets, Path(directory), set(), routes)
+        fd_executions = observer.bound_bwrap_executions(calls, str(binary))
+        assert len(fd_executions) == 1, "Actual packaged helper FD launch was not observed"
+        observer.audit_executions(fd_executions, bwrap_executions=fd_executions)
+        print(json.dumps({"actual_helper_fd_execution": "pass"}))
         print(json.dumps({"actual_helper_kernel_route_audit": "pass", "socket_count": len(routes), "packet_count": len(packets)}))
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -567,6 +574,7 @@ def observe(directory, evidence):
     network = []
     sockets = []
     symlinks = []
+    bwrap_executions = set()
     executions = []
     files = []
     executable_memory = []
@@ -577,6 +585,7 @@ def observe(directory, evidence):
         path.write_text(text, encoding="utf-8")
         assert not re.search(r'\b(?:sendto|recvfrom)\([^\n]*?, "(?!<payload redacted>)', text)
         calls = observer.complete_syscalls(text.splitlines())
+        bwrap_executions.update(observer.bound_bwrap_executions(calls, "/inputs/host/codex-resources/bwrap"))
         sockets.extend(line for line in calls if re.match(r'\d+\s+socket\(', line))
         symlinks.extend(line for line in calls if re.match(r'\d+\s+symlink(?:at)?\(', line))
         executions.extend(line for line in calls if re.match(r'\d+\s+execve(?:at)?\(', line))
@@ -586,8 +595,8 @@ def observe(directory, evidence):
         executable_memory.extend(line for line in calls if "PROT_EXEC" in line and
             ("MAP_ANONYMOUS" in line or re.match(r'\d+\s+mprotect\(', line)))
     aliases = observer.bound_sandbox_aliases(symlinks)
-    observer.audit_executions(executions, python_scripts=scripts, sandbox_aliases=aliases)
-    assert any('execve("/inputs/host/codex-resources/bwrap"' in line for line in executions), "No actual nested packaged sandbox helper"
+    observer.audit_executions(executions, python_scripts=scripts, sandbox_aliases=aliases, bwrap_executions=bwrap_executions)
+    assert bwrap_executions, "No actual nested packaged sandbox helper"
     assert any('execve("/inputs/host/codex-path/rg"' in line for line in executions), "No actual packaged rg execution"
     ports = set()
     for path in evidence.rglob("result.json"):
@@ -607,6 +616,7 @@ def observe(directory, evidence):
     assert files, "File-load observer produced no records"
     return {"status": "pass", "executions": executions, "network": network, "kernel_route_sockets": sorted(routes),
         "sandbox_aliases": [{"path": path, "target": "/inputs/host/bin/codex"} for path in sorted(aliases)],
+        "packaged_bwrap_fd_executions": sorted(bwrap_executions),
         "file_load_count": len(files), "trace_files": [path.name for path in sorted(directory.glob("syscalls.*"))],
         "compiler_linker_jit_build_service_calls": 0, "unclassified_executable_memory": executable_memory,
         "boundary": "fixed audited native fixtures; not a generic malicious-native JIT detector",
@@ -691,7 +701,7 @@ def consume():
             trusted.mkdir()
             stage = "actual isolated matrix"
             trace = ["strace", "-ff", "-qq", "-yy", "-s", "1024", "-e",
-                "trace=execve,execveat,socket,connect,sendto,recvfrom,socketpair,symlink,symlinkat,openat,readlink,mmap,mprotect,memfd_create",
+                "trace=execve,execveat,socket,connect,sendto,recvfrom,socketpair,symlink,symlinkat,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl,readlink,mmap,mprotect,memfd_create",
                 "-o", str(trusted / "syscalls"), "--"]
             write(logs / "consumer-command.json", {"command": [*trace, *base, "--", *driver, "matrix"],
                 "cache_mode": "none", "producer_input_manifest_sha256": manifest["sha256"], "provenance": provenance()})

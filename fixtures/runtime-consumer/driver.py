@@ -19,7 +19,7 @@ EVIDENCE = Path("/evidence")
 WORK = Path("/work")
 PROFILE = Path("/profile")
 BINARY = INPUTS / "host/bin/codex"
-BODY = "0123456789abcdef" * 1024
+BODY = "0123456789abcdef" * 256
 LIMIT_CAP = "core.exec_output_limit.v1"
 
 

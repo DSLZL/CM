@@ -21,5 +21,6 @@ if len(sys.argv) > 3 and sys.argv[3] == "long":
     text.write_text("CM-RG-REAL-HELPER\n", encoding="utf-8")
     subprocess.run(["/inputs/host/codex-path/rg", "CM-RG-REAL-HELPER", str(text)], check=True)
     (fixture / ("completed-" + sys.argv[2])).write_text("real-command-exit-0\n")
-    print("0123456789abcdef" * 1024)
+    # Fit the upstream model cap while exceeding the fixture Mod's 256-token budget.
+    print("0123456789abcdef" * 256)
     print("cm-real-tool-" + sys.argv[2] + "-ok")

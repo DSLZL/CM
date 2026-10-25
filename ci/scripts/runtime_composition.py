@@ -290,7 +290,35 @@ def bound_sandbox_aliases(lines):
     return aliases
 
 
-def audit_executions(executions, python_scripts=("fixtures/native-loader/tool_barrier.py",), sandbox_aliases=()):
+def bound_bwrap_executions(calls, helper):
+    descriptors = set()
+    executions = set()
+    for line in calls:
+        pid, _, call = line.partition(" ")
+        allocated = re.search(r'\) = (\d+)(?:<[^>]*>)?$', call)
+        if allocated and (re.match(r'(?:open(?:at2?)?|dup[23]?)\(', call) or
+                          (call.startswith("fcntl(") and ", F_DUPFD" in call)):
+            descriptors.discard((pid, allocated[1]))
+        opened = re.fullmatch(r'openat\(AT_FDCWD(?:<[^>]*>)?, "([^"]+)", O_RDONLY\|O_CLOEXEC\) = (\d+)<([^>]+)>', call)
+        if opened and opened[1] == opened[3] == helper:
+            descriptors.add((pid, opened[2]))
+        closed = re.match(r'close\((\d+)(?:<[^>]*>)?\) =', call)
+        if closed:
+            descriptors.discard((pid, closed[1]))
+        closed_range = re.match(r'close_range\((\d+), (\d+|~0U), [^)]*\) =', call)
+        if closed_range:
+            first, last = int(closed_range[1]), 2**32 - 1 if closed_range[2] == "~0U" else int(closed_range[2])
+            descriptors = {item for item in descriptors if item[0] != pid or not first <= int(item[1]) <= last}
+        execution = re.match(r'execve\("/proc/self/fd/(\d+)", \["bwrap",', call)
+        if execution:
+            assert (pid, execution[1]) in descriptors and call.endswith(" = 0"), "Unbound packaged helper FD: " + line
+            executions.add(line)
+        if re.match(r'execve(?:at)?\(', call) and call.endswith(" = 0"):
+            descriptors = {item for item in descriptors if item[0] != pid}
+    return executions
+
+
+def audit_executions(executions, python_scripts=("fixtures/native-loader/tool_barrier.py",), sandbox_aliases=(), bwrap_executions=()):
     assert executions, "Observer missed the initial exec"
     forbidden = re.compile(r'/(?:cargo|rustc|rustdoc|cc|gcc(?:-[0-9]+)?|g\+\+(?:-[0-9]+)?|c\+\+|clang(?:\+\+)?|ld(?:\.[a-z]+)?|lld|collect2|as|ar|make|cmake|ninja|sccache|node|bun|deno|java)(?=[" ])')
     assert not any(forbidden.search(line) for line in executions), executions
@@ -301,7 +329,7 @@ def audit_executions(executions, python_scripts=("fixtures/native-loader/tool_ba
         match = re.search(r'execve\("([^"]+)"', line)
         assert match, "Unclassified execveat: " + line
         helper = (match[1] == "/proc/self/exe" and '"--codex-run-as-process-setup"' in line) or (
-            match[1] in sandbox_aliases and '"--sandbox-policy-cwd"' in line and '"--permission-profile"' in line)
+            match[1] in sandbox_aliases and '"--sandbox-policy-cwd"' in line and '"--permission-profile"' in line) or line in bwrap_executions
         assert Path(match[1]).name in allowed or helper, "Unclassified executable: " + line
         if Path(match[1]).name.startswith("python"):
             assert any(script in line for script in python_scripts), line
@@ -373,6 +401,27 @@ def check_network_audit():
     assert bound_sandbox_aliases([creation.replace('symlink(', 'symlinkat(').replace(', "' + alias, ', AT_FDCWD</work>, "' + alias)]) == bindings
     sandbox = '4 execve("' + alias + '", ["' + alias + '", "--sandbox-policy-cwd", "/work", "--permission-profile", "{}"], 0x1) = 0'
     audit_executions([sandbox], sandbox_aliases=bindings)
+    packaged = "/inputs/host/codex-resources/bwrap"
+    opened = '4 openat(AT_FDCWD</work>, "' + packaged + '", O_RDONLY|O_CLOEXEC) = 3<' + packaged + '>'
+    fd_exec = '4 execve("/proc/self/fd/3", ["bwrap", "--unshare-user", "--unshare-net", "--", "true"], 0x1) = 0'
+    fd_bindings = bound_bwrap_executions([opened, fd_exec], packaged)
+    assert fd_bindings == {fd_exec}
+    audit_executions([fd_exec], bwrap_executions=fd_bindings)
+    assert bound_bwrap_executions([opened, '4 close(4<' + packaged + '>) = 0', fd_exec], packaged) == fd_bindings
+    for invalid in ([fd_exec], [opened.replace(packaged, "/tmp/bwrap"), fd_exec],
+                    [opened, fd_exec.replace("4 execve", "5 execve")],
+                    [opened, fd_exec.replace("/fd/3", "/fd/4")],
+                    [opened, '4 close(3<' + packaged + '>) = 0', fd_exec],
+                    [opened, '4 close(3<' + packaged + '>) = -1 EINTR (Interrupted)', fd_exec],
+                    [opened, '4 close_range(3, 4294967295, 0) = 0', fd_exec],
+                    [opened, '4 dup2(5</tmp/unknown>, 3<' + packaged + '>) = 3</tmp/unknown>', fd_exec],
+                    [opened, '4 openat(AT_FDCWD, "/tmp/unknown", O_RDONLY) = 3</tmp/unknown>', fd_exec],
+                    [opened, fd_exec, fd_exec]):
+        try:
+            bound_bwrap_executions(invalid, packaged)
+        except AssertionError:
+            continue
+        raise AssertionError("Unknown or stale packaged helper FD accepted")
     for invalid in (creation.replace("/inputs/host/bin/codex", "/tmp/codex"),
                     creation.replace("/profile/tmp/", "/outside/tmp/")):
         try:
@@ -383,6 +432,7 @@ def check_network_audit():
     for unknown in ('4 execve("/usr/bin/cargo", ["cargo"], 0x1) = 0',
                     '4 execve("/tmp/codex-tools/unknown", ["unknown"], 0x1) = 0',
                     sandbox,
+                    fd_exec,
                     helper.replace('"--codex-run-as-process-setup"', '"--unknown"')):
         try:
             audit_executions([unknown])
