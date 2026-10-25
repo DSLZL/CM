@@ -417,7 +417,9 @@ def self_check():
             str(binary), "--unshare-user", "--unshare-net", "--cap-drop", "ALL",
             "--ro-bind", "/", "/", "--clearenv", "--", "/usr/bin/env"],
             check=True, stdout=subprocess.DEVNULL, close_fds=True, timeout=30)
-        calls = observer.complete_syscalls(observer.redact_syscalls(trace.read_text()).splitlines())
+        sanitized = observer.redact_syscalls(trace.read_text())
+        (Path(os.environ["CM_CI_LOG_DIR"]) / "consumer-helper-syscalls.log").write_text(sanitized, encoding="utf-8")
+        calls = observer.complete_syscalls(sanitized.splitlines())
         routes = observer.kernel_route_sockets(calls)
         packets = [line for line in calls if re.match(r'\d+\s+sendto\(', line)]
         assert routes and packets, "Actual sandbox loopback setup was not observed"

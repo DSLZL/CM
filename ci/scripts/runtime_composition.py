@@ -294,7 +294,7 @@ def bound_bwrap_executions(calls, helper):
     descriptors = set()
     executions = set()
     for line in calls:
-        pid, _, call = line.partition(" ")
+        pid, call = line.split(None, 1)
         allocated = re.search(r'\) = (\d+)(?:<[^>]*>)?$', call)
         if allocated and (re.match(r'(?:open(?:at2?)?|dup[23]?)\(', call) or
                           (call.startswith("fcntl(") and ", F_DUPFD" in call)):
@@ -406,6 +406,8 @@ def check_network_audit():
     fd_exec = '4 execve("/proc/self/fd/3", ["bwrap", "--unshare-user", "--unshare-net", "--", "true"], 0x1) = 0'
     fd_bindings = bound_bwrap_executions([opened, fd_exec], packaged)
     assert fd_bindings == {fd_exec}
+    aligned_exec = fd_exec.replace("4 ", "4\t ", 1)
+    assert bound_bwrap_executions([opened.replace("4 ", "4     ", 1), aligned_exec], packaged) == {aligned_exec}
     audit_executions([fd_exec], bwrap_executions=fd_bindings)
     assert bound_bwrap_executions([opened, '4 close(4<' + packaged + '>) = 0', fd_exec], packaged) == fd_bindings
     for invalid in ([fd_exec], [opened.replace(packaged, "/tmp/bwrap"), fd_exec],
