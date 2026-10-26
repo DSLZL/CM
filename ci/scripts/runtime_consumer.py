@@ -14,6 +14,7 @@ import sysconfig
 import tarfile
 import tempfile
 import threading
+import types
 
 TARGET = "x86_64-unknown-linux-gnu"
 CAPABILITY = "core.exec_output_limit.v1"
@@ -111,6 +112,12 @@ def relocate_profile_links(profile, original, copied):
     return relocated
 
 
+def runtime_observer_source(composition):
+    # The early check and handoff must use the same runtime-only module.
+    return "import json\nimport re\nfrom pathlib import Path\n\n" + "\n\n".join(inspect.getsource(getattr(composition, name))
+        for name in ("redact_syscalls", "complete_syscalls", "kernel_route_sockets", "provider_tcp_connections", "audit_network", "bound_sandbox_aliases", "bound_bwrap_executions", "audit_executions", "check_network_audit"))
+
+
 def produce():
     import host
     import runtime_composition as composition
@@ -181,10 +188,7 @@ def produce():
         destination = inputs / "fixture" / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(root / relative, destination)
-    # Only runtime parser functions are handed to the outer observer, not build modules.
-    observer = "import json\nimport re\nfrom pathlib import Path\n\n" + "\n\n".join(inspect.getsource(getattr(composition, name))
-        for name in ("redact_syscalls", "complete_syscalls", "kernel_route_sockets", "audit_network", "bound_sandbox_aliases", "bound_bwrap_executions", "audit_executions", "check_network_audit"))
-    (inputs / "observer.py").write_text(observer, encoding="utf-8")
+    (inputs / "observer.py").write_text(runtime_observer_source(composition), encoding="utf-8")
     shutil.copyfile(Path(__file__), inputs / "runtime_consumer.py")
     official_root = Path(os.environ["RUNNER_TEMP"]) / "cm-p04-official"
     official_root.mkdir()
@@ -342,7 +346,11 @@ def copy_evidence(source, destination):
 
 
 def self_check():
-    import runtime_composition as observer
+    import runtime_composition as composition
+    observer_text = runtime_observer_source(composition)
+    observer = types.ModuleType("observer")
+    exec(observer_text, observer.__dict__)
+    assert {"host", "native_mod", "linux_ci"}.isdisjoint(observer.__dict__)
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "fixtures/native-loader"))
     from core_acceptance import Tools, await_barrier, cli_arguments, trace_rows
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "fixtures/runtime-consumer"))
@@ -405,6 +413,9 @@ def self_check():
     print(json.dumps({"consumer_pwd_cleanup": "pass"}))
 
     observer.check_network_audit()
+    write(Path(os.environ["CM_CI_LOG_DIR"]) / "consumer-observer-self-check.json",
+          {"status": "pass", "source_sha256": hashlib.sha256(observer_text.encode()).hexdigest(),
+           "module": "same runtime-only source as consumer handoff"})
     helper = read(Path(os.environ["CM_CI_LOG_DIR"]) / "host-helper.json")
     binary = Path(os.environ["CARGO_TARGET_DIR"]) / "helper" / TARGET / helper["profile"] / "bwrap"
     assert sha(binary) == helper["sha256"]
