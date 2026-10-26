@@ -9,6 +9,8 @@ use serde_json::json;
 
 use crate::loader;
 
+type Resolution = (BTreeMap<String, Vec<u8>>, BTreeMap<String, Identity>);
+
 fn failure(owner: &str, message: &str) -> crate::LoadError {
     crate::LoadError::input("configuration", owner, message)
 }
@@ -400,7 +402,7 @@ impl Selection {
         options: &Options,
         manifests: &BTreeMap<String, loader::Manifest>,
         original: &[u8],
-    ) -> Result<(BTreeMap<String, Vec<u8>>, BTreeMap<String, Identity>), crate::LoadError> {
+    ) -> Result<Resolution, crate::LoadError> {
         for id in self
             .mods
             .keys()

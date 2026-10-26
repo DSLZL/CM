@@ -103,6 +103,8 @@ impl RuntimePlan {
     }
 }
 
+type CommittedPlan = (RuntimePlan, Vec<Preflighted>, BTreeMap<String, Vec<u8>>);
+
 /// Opaque, process-owned inputs. A serialized RuntimePlan cannot construct this.
 pub struct PreparedPlan {
     home: PathBuf,
@@ -146,9 +148,7 @@ impl PreparedPlan {
         Ok(())
     }
 
-    pub(crate) fn commit(
-        self,
-    ) -> Result<(RuntimePlan, Vec<Preflighted>, BTreeMap<String, Vec<u8>>), LoadError> {
+    pub(crate) fn commit(self) -> Result<CommittedPlan, LoadError> {
         self.revalidate()?;
         // Input linearization: only owned snapshots are consumed after this point.
         let mut modules = self.modules;
