@@ -105,7 +105,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
          .take_auto_review_config_overrides(&mut root_config_overrides);
      reject_root_strict_config_for_subcommand(root_strict_config, &subcommand)?;
      if let Some(subcommand) = subcommand.as_ref() {
-@@ -1096,7 +1156,28 @@
+@@ -1096,7 +1156,32 @@
          profile_v2_for_subcommand(&interactive, subcommand)?;
      }
  
@@ -126,7 +126,11 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 +        cm_runtime::package::preflight()?;
 +        let embedded_exec = matches!(&subcommand, Some(Subcommand::Exec(command)) if command.command.is_none())
 +            && root_remote.is_none();
-+        Some(cm_runtime::initialize_options(&find_codex_home()?, embedded_exec, &cm_options)?)
++        Some(cm_runtime::initialize_options(
++            &find_codex_home()?,
++            embedded_exec,
++            &cm_options,
++        )?)
 +    } else {
 +        None
 +    };
@@ -135,12 +139,14 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
      match subcommand {
          None | Some(Subcommand::Agents(_)) => {
              prepend_config_flags(
-@@ -1886,7 +1967,16 @@
+@@ -1886,7 +1971,18 @@
              cmd.strict_config |= root_strict_config;
              cmd.run(&arg0_paths, &root_config_overrides).await?;
          }
 -        Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
-+        Some(Subcommand::Cm(_)) => unreachable!("CM metadata was dispatched before native initialization"),
++        Some(Subcommand::Cm(_)) => {
++            unreachable!("CM metadata was dispatched before native initialization")
++        }
 +        Some(Subcommand::CmHostIdentity) => {
 +            reject_remote_mode_for_subcommand(
 +                root_remote.as_deref(),
@@ -153,7 +159,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
              FeaturesSubcommand::List => {
                  reject_remote_mode_for_subcommand(
                      root_remote.as_deref(),
-@@ -2352,7 +2442,9 @@
+@@ -2352,7 +2448,9 @@
          Some(Subcommand::Apply(_)) => Some("apply"),
          Some(Subcommand::ResponsesApiProxy(_)) => Some("responses-api-proxy"),
          Some(Subcommand::StdioToUds(_)) => Some("stdio-to-uds"),

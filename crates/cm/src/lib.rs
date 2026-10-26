@@ -17,8 +17,8 @@ use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
 
-mod loader;
 pub mod config;
+mod loader;
 mod manifest;
 pub mod metadata;
 pub mod mod_lock;
@@ -62,15 +62,41 @@ impl LoadError {
     pub(crate) fn input(code: &str, owner: &str, message: &str) -> Self {
         let mut error = Self::new("preflight", false, message);
         error.code = code.into();
-        error.field = Some(message.split_once(':').map(|(field, _)| field)
-            .filter(|field| ["config", "compat", "binary", "dependencies", "state", "provenance"].iter().any(|prefix| field.starts_with(prefix))
-                && field.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)))
-            .unwrap_or(code).into());
-        error.graph = if code.starts_with("dependency") || code == "missing_dependency" || code == "unsupported_version" {
+        error.field = Some(
+            message
+                .split_once(':')
+                .map(|(field, _)| field)
+                .filter(|field| {
+                    [
+                        "config",
+                        "compat",
+                        "binary",
+                        "dependencies",
+                        "state",
+                        "provenance",
+                    ]
+                    .iter()
+                    .any(|prefix| field.starts_with(prefix))
+                        && field
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+                })
+                .unwrap_or(code)
+                .into(),
+        );
+        error.graph = if code.starts_with("dependency")
+            || code == "missing_dependency"
+            || code == "unsupported_version"
+        {
             Some("initialization".into())
-        } else if code.contains("hook") || code.starts_with("contribution") || code == "exclusive_conflict" {
+        } else if code.contains("hook")
+            || code.starts_with("contribution")
+            || code == "exclusive_conflict"
+        {
             Some("contribution".into())
-        } else { None };
+        } else {
+            None
+        };
         error.owner(owner, None)
     }
 
@@ -176,8 +202,14 @@ pub fn initialize(home: &Path, embedded_exec: bool) -> Result<ShutdownGuard, Loa
     initialize_with(embedded_exec, || runtime_plan::prepare(home))
 }
 
-pub fn initialize_options(home: &Path, embedded_exec: bool, options: &config::Options) -> Result<ShutdownGuard, LoadError> {
-    initialize_with(embedded_exec, || runtime_plan::prepare_options(home, options))
+pub fn initialize_options(
+    home: &Path,
+    embedded_exec: bool,
+    options: &config::Options,
+) -> Result<ShutdownGuard, LoadError> {
+    initialize_with(embedded_exec, || {
+        runtime_plan::prepare_options(home, options)
+    })
 }
 
 /// Actions probe seam: only an owned, previously prepared snapshot can be committed.
