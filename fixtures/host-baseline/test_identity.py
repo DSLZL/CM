@@ -106,7 +106,8 @@ class IdentityTests(unittest.TestCase):
 
     def test_cache_requires_exact_bytes_identity_origin_and_successful_checks(self):
         with tempfile.TemporaryDirectory() as tmp:
-            cache = Path(tmp)
+            cache = Path(tmp) / "cache"
+            cache.mkdir()
             for name in host.HOST_CACHE_FILES:
                 (cache / name).write_text("frozen " + name)
                 if not name.endswith(".log"):
@@ -119,6 +120,15 @@ class IdentityTests(unittest.TestCase):
                             for phase, command in host.host_check_commands(self.sealed).items()]}
             host.write(cache / "build.json", receipt)
             self.assertEqual(receipt, host.verify_build_cache(cache, self.sealed))
+            metadata = cache / "build.json"
+            backing = Path(tmp) / "original-build.json"
+            backing.write_bytes(metadata.read_bytes())
+            metadata.unlink()
+            metadata.symlink_to(backing)
+            with self.assertRaises(RuntimeError):
+                host.verify_build_cache(cache, self.sealed)
+            metadata.unlink()
+            metadata.write_bytes(backing.read_bytes())
             changed_identity = {**self.sealed, "host_build_id": "sha256:" + "0" * 64}
             with self.assertRaises(RuntimeError):
                 host.verify_build_cache(cache, changed_identity)
