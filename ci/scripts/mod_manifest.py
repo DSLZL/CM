@@ -541,15 +541,15 @@ def producer_audit(inputs, package, destination):
             current = []
             for path in work.glob(prefix.name + ".*"):
                 text = path.read_text()
-                calls = re.findall(r'execve\("([^"\n]+)"', text)
-                assert all(Path(p).resolve() == (package / "bin/codex").resolve() for p in calls), calls
-                assert "execveat(" not in text
-                assert not re.search(r'\b(?:connect|sendto|socketpair)\(', text)
-                assert not re.search(r'mmap\(.*PROT_EXEC.*(?:/mods/|memfd:cm)', text)
-                assert "m01-state-sentinel.json" not in text
                 safe = composition.redact_syscalls(text)
                 for secret in CANARIES: safe = safe.replace(secret, "<redacted>")
                 target = destination / path.name; target.parent.mkdir(parents=True, exist_ok=True); target.write_text(safe)
+                calls = re.findall(r'execve\("([^"\n]+)"', text)
+                assert all(Path(p).resolve() == (package / "bin/codex").resolve() for p in calls), calls
+                assert "execveat(" not in text
+                assert not re.search(r'\b(?:connect|sendto|socketpair)\(', text), ("Metadata socket operation; see sanitized trace", path.name)
+                assert not re.search(r'mmap\(.*PROT_EXEC.*(?:/mods/|memfd:cm)', text)
+                assert "m01-state-sentinel.json" not in text
                 current.append({"file": path.name, "sha256": sha(target), "exec_count": len(calls)})
             assert current and sum(item["exec_count"] for item in current) == 1
             traces.extend(current)
