@@ -158,7 +158,7 @@ def build_mods(root, logs, package, frozen):
         "cc", "-std=c11", str(root / "fixtures/runtime-composition/layout.c"), "-o", str(native / "layout")])
     execute(root, logs, "composition-c-layout", [str(native / "layout")])
     assert json.loads((logs / "composition-c-layout.log").read_text())["v2_all_sizes_alignments_offsets"]
-    assert "linux_x64_composition_layout ... ok" in (logs / "host-test.log").read_text()
+    assert "linux_x64_composition_layout ... ok" in host.build_log(logs, "host-test").read_text()
     if shutil.which("strace") is None:
         execute(root, logs, "composition-observer-install", ["sudo", "apt-get", "update"])
         execute(root, logs, "composition-observer-package", ["sudo", "apt-get", "install", "-y", "strace"])
@@ -254,6 +254,7 @@ def audit_network(lines, directory, ports, kernel_routes=(), tcp_connections=())
     unix_connections = set()
     unix_pairs = set()
     connected_tcp = set(tcp_connections)
+    # Per-thread trace files do not preserve cross-thread creation/send order.
     for line in lines:
         if re.match(r'\d+\s+socketpair\(', line):
             fd = r'\d+<UNIX(?:-STREAM)?:\[(\d+)(?:->(\d+))?\]>'
@@ -262,6 +263,8 @@ def audit_network(lines, directory, ports, kernel_routes=(), tcp_connections=())
             assert pair and pair[1] != pair[3], "Unclassified socketpair: " + line
             assert pair[2] in (None, pair[3]) and pair[4] in (None, pair[1]), line
             unix_pairs.update(((pair[1], pair[3]), (pair[3], pair[1])))
+    for line in lines:
+        if re.match(r'\d+\s+socketpair\(', line):
             continue
         call = re.match(r'(\d+)\s+(connect|sendto)\((\d+)(?:<(.*?)>)?, ', line)
         assert call, "Unclassified network syscall: " + line
@@ -386,6 +389,9 @@ def check_network_audit():
     bare_pair = pair.replace("51->52", "51").replace("52->51", "52")
     bare_ipc = sanitized.replace("51->52", "51")
     audit_network([bare_pair, bare_ipc], directory, set())
+    other_thread = bare_ipc.replace("3 sendto", "2 sendto")
+    audit_network([other_thread, bare_pair], directory, set())
+    audit_network([sanitized.replace("3 sendto", "2 sendto"), pair], directory, set())
     tcp_connect = '4 connect(5<TCP:[71]>, {sa_family=AF_INET, sin_port=htons(8080), sin_addr=inet_addr("127.0.0.1")}, 16) = 0'
     bare_tcp = '4 sendto(5<TCP:[71]>, "<payload redacted>", 4, 0, NULL, 0) = 4'
     audit_network([tcp_connect, bare_tcp], directory, {"8080"})
@@ -432,6 +438,7 @@ def check_network_audit():
         raise AssertionError("Network audit accepted an unknown Netlink peer")
     for unknown in ([send], [connect, send.replace("41->42", "43->42")],
                     [bare_ipc], [bare_pair, bare_ipc.replace('[51]', '[53]')],
+                    [other_thread.replace('[51]', '[53]'), bare_pair],
                     [bare_pair, bare_ipc.replace('UNIX-STREAM', 'UNIX-DGRAM')],
                     [bare_tcp], [tcp_connect, bare_tcp.replace('[71]', '[72]')],
                     [tcp_connect.replace(' = 0', ' = -1 ECONNREFUSED (Connection refused)'), bare_tcp],
@@ -1220,7 +1227,7 @@ def main():
                   "runner": host.read(logs / "run-metadata.json")["context"],
                   "host": frozen, "mods": mods, "legacy_mod": legacy,
                   "c_layout": json.loads((logs / "composition-c-layout.log").read_text()),
-                  "rust_layout": "host-test.log: linux_x64_composition_layout",
+                  "rust_layout": host.build_log(logs, "host-test").relative_to(logs).as_posix() + ": linux_x64_composition_layout",
                   "selection_builds": 0, "release_ready": False}
         reports = {}
         stage = "determinism"

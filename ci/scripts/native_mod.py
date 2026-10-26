@@ -452,7 +452,7 @@ def acceptance(root, logs, report_name="acceptance.json"):
             "seam": "ToolCallRuntime::handle_tool_call_with_source -> original per-runtime RWLock -> builtin exec_command"},
         "native-abi-contract.json": {"entry_cases": entry, "callback_cases": callbacks, "lifetime_cases": lifetimes,
             "restriction_and_utf8_cases": restriction_cases,
-            "c_layout": json.loads((logs / "mod-c-layout.log").read_text()), "rust_layout": "host-test.log: linux_x64_layout",
+            "c_layout": json.loads((logs / "mod-c-layout.log").read_text()), "rust_layout": host.build_log(logs, "host-test").relative_to(logs).as_posix() + ": linux_x64_layout",
             "native_memory_safety": "valid allocations only; abort/segfault are process failures, not recovered"},
         "preload-rejection.json": {"positive_control": positive, "rejections": preflight,
             "snapshot": "mod-pinned-snapshot.log: actual sealed-snapshot load after path replacement and in-place edit",
