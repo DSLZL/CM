@@ -198,7 +198,10 @@ def produce():
         composition.install(inputs, legacy, directory="m01-legacy-v2")
         authors["legacy-v2"] = legacy
         binary_packages = mod_manifest.prepare_binary_packages(inputs)
-        mod_manifest.producer_audit(inputs, package, artifact / "evidence/m01-producer")
+        try:
+            mod_manifest.producer_audit(inputs, package, artifact / "evidence/m01-producer")
+        finally:
+            copy_evidence(artifact / "evidence/m01-producer", logs / "acceptance-evidence/m01-producer")
         metadata_audit = read(artifact / "evidence/m01-producer/metadata-source-attachments.json")
     (inputs / "observer.py").write_text(runtime_observer_source(composition), encoding="utf-8")
     shutil.copyfile(Path(__file__), inputs / "runtime_consumer.py")
@@ -506,13 +509,15 @@ def self_check():
         evidence.mkdir()
         (evidence / "result.json").write_text('{"status":"pass"}\n')
         (evidence / "syscalls.123").write_text("redacted syscall\n")
+        (evidence / "syscalls.directory.0.123").write_text(mod_manifest.CANARIES[0] + "\n")
         (evidence / "payload.so").write_bytes(b"\x7fELF\0")
         (evidence / "linked.json").symlink_to(evidence / "result.json")
         os.mkfifo(evidence / "pipe.log")
         with socket.socket(socket.AF_UNIX) as listener:
             listener.bind(str(evidence / "tools.log"))
             copy_evidence(evidence, root / "copied")
-        assert sorted(path.name for path in (root / "copied").iterdir()) == ["result.json", "syscalls.123"]
+        assert sorted(path.name for path in (root / "copied").iterdir()) == ["result.json", "syscalls.123", "syscalls.directory.0.123"]
+        assert (root / "copied/syscalls.directory.0.123").read_text() == "<configuration redacted>\n"
         for invalid in (b"\xff", b"text\0"):
             (evidence / "invalid.log").write_bytes(invalid)
             try:

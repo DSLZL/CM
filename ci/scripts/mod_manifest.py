@@ -528,7 +528,7 @@ def producer_audit(inputs, package, destination):
         before = {p.relative_to(home).as_posix(): sha(p) for p in watched}
         for index, action in enumerate((["list"], ["plan"], ["doctor"], ["lock"], ["lock", "--check"], ["doctor"])):
             lock_before = sha(home / "mod.lock") if (home / "mod.lock").exists() else None
-            prefix = work / ("syscalls-" + kind + "-" + str(index))
+            prefix = work / ("syscalls." + kind + "." + str(index))
             command = ["strace", "-ff", "-qq", "-yy", "-s", "1024", "-e", "trace=execve,execveat,network,open,openat,mmap,mprotect",
                 "-o", str(prefix), "--", str(package / "bin/codex"), *options, "cm", *action]
             result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=90)
