@@ -127,8 +127,9 @@ def identify(root, logs, cfg):
         real = Path(path).resolve()
         native[tool] = {"path": str(real), "sha256": digest(real.read_bytes()),
                         "version": subprocess.check_output([path, "--version"], text=True).strip()}
+    # Compiler entries already hash source bytes; source edits must not discard compatible dependencies.
     files = {p: digest(source_file(root, p).read_bytes()) for p in
-             cfg.get("native_identity_files", []) + cfg.get("cargo_config_files", []) +
+             cfg.get("cargo_config_files", []) +
              cfg.get("generated_native_identity_files", [])}
     profiles = {u["manifest"]: tomllib.loads(source_file(root, u["manifest"]).read_text(encoding="utf-8")).get("profile", {}) for u in cfg["units"]}
     flags = {key: value for key, value in os.environ.items() if key in {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CC", "CXX", "AR", "LD", "CFLAGS", "CXXFLAGS", "LDFLAGS"} or key.startswith(("CARGO_PROFILE_", "CARGO_TARGET_")) and key != "CARGO_TARGET_DIR"}
@@ -170,6 +171,19 @@ def cargo_args(unit, subcommand, cfg, profile=None):
     return args
 
 
+def build_commands(unit, cfg):
+    unit = {**unit, "packages": sorted(unit["packages"]), "features": sorted(unit.get("features", []))}
+    fmt = ["cargo", "fmt", "--manifest-path", unit["manifest"]]
+    for package in unit["packages"]:
+        fmt += ["--package", package]
+    return {
+        "fmt": fmt + ["--", "--check"],
+        "clippy": cargo_args(unit, "clippy", cfg, cfg["clippy_profile"]) + ["--all-targets", "--", "-D", "warnings"],
+        "test": cargo_args(unit, "test", cfg, cfg["test_profile"]),
+        "build": cargo_args(unit, "build", cfg, cfg["build_profile"]),
+    }
+
+
 def main():
     require_hosted_linux()
     root = Path(os.environ.get("CM_SOURCE_DIR", os.environ["GITHUB_WORKSPACE"])).resolve()
@@ -185,16 +199,18 @@ def main():
         for unit in cfg["units"]:
             execute(root, logs, unit["id"] + "-fetch", ["cargo", "fetch", "--locked", "--manifest-path", unit["manifest"], "--target", TARGET])
     elif phase == "build-test":
+        import host
+        reused = host.reused_build(root, logs)
         for unit in cfg["units"]:
             env = dict(os.environ)
             env["CARGO_TARGET_DIR"] = str(Path(os.environ["CARGO_TARGET_DIR"]) / unit["id"])
-            fmt = ["cargo", "fmt", "--manifest-path", unit["manifest"]]
-            for package in unit["packages"]:
-                fmt += ["--package", package]
-            execute(root, logs, unit["id"] + "-fmt", fmt + ["--", "--check"], env)
-            execute(root, logs, unit["id"] + "-clippy", cargo_args(unit, "clippy", cfg, cfg["clippy_profile"]) + ["--all-targets", "--", "-D", "warnings"], env)
-            execute(root, logs, unit["id"] + "-test", cargo_args(unit, "test", cfg, cfg["test_profile"]), env)
-            execute(root, logs, unit["id"] + "-build", cargo_args(unit, "build", cfg, cfg["build_profile"]), env)
+            commands = build_commands(unit, cfg)
+            execute(root, logs, unit["id"] + "-fmt", commands["fmt"], env)
+            if unit["id"] == "host" and reused is not None:
+                print("CM CI: reuse verified Host binaries and original Cargo checks from", json.dumps(reused["origin"]), flush=True)
+                continue
+            for name in ("clippy", "test", "build"):
+                execute(root, logs, unit["id"] + "-" + name, commands[name], env)
     elif phase == "acceptance":
         artifact_dir = Path(os.environ["CM_CI_ARTIFACT_DIR"])
         artifact_dir.mkdir(parents=True, exist_ok=True)

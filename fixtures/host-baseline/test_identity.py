@@ -13,6 +13,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "ci/scripts"))
 import host
+import linux_ci
 from linux_ci import execute
 
 
@@ -84,6 +85,133 @@ class IdentityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(RuntimeError):
             host.verify_binary(Path(tmp) / "missing-codex", self.sealed)
 
+    def test_fixture_changes_do_not_change_product_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pin = {"patches": ["cli.patch"], "overlay": {"crates/cm/src/host_identity.rs": "cli/identity.rs"}}
+            names = [host.ADAPTER + "/source.json", host.ADAPTER + "/cli.patch",
+                     "crates/cm/src/host_identity.rs", "fixtures/runtime-consumer/driver.py"]
+            for name in names:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(pin) if name.endswith("source.json") else "original input")
+            with patch.object(host, "cm_manifest", side_effect=lambda _: host.manifest(root, [root / name for name in names])):
+                baseline = host.manifest_digest(host.product_manifest(root))
+                (root / names[-1]).write_text("changed fixture only")
+                self.assertEqual(baseline, host.manifest_digest(host.product_manifest(root)))
+                (root / "crates/cm/src/host_identity.rs").write_text("changed compiled product")
+                self.assertNotEqual(baseline, host.manifest_digest(host.product_manifest(root)))
+            with patch.object(host, "cm_manifest", return_value=[]), self.assertRaises(RuntimeError):
+                host.product_manifest(root)
+
+    def test_cache_requires_exact_bytes_identity_origin_and_successful_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            for name in host.HOST_CACHE_FILES:
+                (cache / name).write_text("frozen " + name)
+                if not name.endswith(".log"):
+                    (cache / name).chmod(0o755)
+            receipt = {"schema_version": 1, "identity": self.sealed, "files": host.manifest(cache),
+                "origin": {"source_repository": os.environ["CM_SOURCE_REPOSITORY"],
+                    "workflow_repository": os.environ["GITHUB_REPOSITORY"], "source_sha": "1" * 40,
+                    "workflow_sha": "2" * 40, "run_id": "1", "run_attempt": "1", "job": "linux-x64"},
+                "quality": [{"phase": phase, "return_code": 0, "command": command}
+                            for phase, command in host.host_check_commands(self.sealed).items()]}
+            host.write(cache / "build.json", receipt)
+            self.assertEqual(receipt, host.verify_build_cache(cache, self.sealed))
+            changed_identity = {**self.sealed, "host_build_id": "sha256:" + "0" * 64}
+            with self.assertRaises(RuntimeError):
+                host.verify_build_cache(cache, changed_identity)
+            original = (cache / "codex").read_bytes()
+            (cache / "codex").write_bytes(b"damaged binary")
+            with self.assertRaises(RuntimeError):
+                host.verify_build_cache(cache, self.sealed)
+            (cache / "codex").write_bytes(original)
+            (cache / "unexpected").write_text("extra cache input")
+            with self.assertRaises(RuntimeError):
+                host.verify_build_cache(cache, self.sealed)
+            (cache / "unexpected").unlink()
+            for change in ("origin", "failed-check", "missing-check", "wrong-command", "malformed-phase"):
+                candidate = copy.deepcopy(receipt)
+                if change == "origin":
+                    candidate["origin"]["source_repository"] = "untrusted/source"
+                elif change == "failed-check":
+                    candidate["quality"][0]["return_code"] = 1
+                elif change == "wrong-command":
+                    candidate["quality"][0]["command"].append("--unchecked-option")
+                elif change == "malformed-phase":
+                    candidate["quality"][0]["phase"] = []
+                else:
+                    candidate["quality"].pop()
+                host.write(cache / "build.json", candidate)
+                with self.subTest(change=change), self.assertRaises(RuntimeError):
+                    host.verify_build_cache(cache, self.sealed)
+            host.write(cache / "build.json", receipt)
+            self.assertEqual(receipt, host.verify_build_cache(cache, self.sealed))
+            current = [{"phase": "helper-" + phase, "return_code": 0} for phase in ("fmt", "clippy", "test", "build", "sandbox")]
+            with self.assertRaises(RuntimeError):
+                host.require_build_success(current, receipt)
+            current.append({"phase": "host-fmt", "return_code": 0})
+            host.require_build_success(current, receipt)
+            with self.assertRaises(RuntimeError):
+                host.require_build_success([*current, {"phase": "host-test", "return_code": 1}], receipt)
+
+    def test_verified_cache_hit_skips_host_compile_but_reruns_formatting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = {"units": [{"id": "host", "manifest": "Cargo.toml", "packages": ["codex-cli"]}],
+                   "build_profile": "dev-small", "clippy_profile": "dev-small", "test_profile": "dev-small"}
+            with patch.dict(os.environ, {"CM_SOURCE_DIR": str(root), "GITHUB_WORKSPACE": str(root), "CM_CI_LOG_DIR": str(root)}), \
+                    patch.object(linux_ci, "require_hosted_linux"), patch.object(linux_ci, "load_config", return_value=cfg), \
+                    patch.object(host, "reused_build") as reused, patch.object(linux_ci, "execute") as run, \
+                    patch.object(sys, "argv", ["linux_ci.py", "build-test"]):
+                reused.return_value = {"origin": {"run_id": "original"}}
+                linux_ci.main()
+                self.assertEqual([call.args[2] for call in run.call_args_list], ["host-fmt"])
+                reused.return_value = None
+                run.reset_mock()
+                linux_ci.main()
+                self.assertEqual([call.args[2] for call in run.call_args_list], ["host-fmt", "host-clippy", "host-test", "host-build"])
+
+    def test_host_cache_round_trip_retains_original_quality_and_detects_restored_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            logs = root / "logs"
+            logs.mkdir()
+            cache = root / "cache"
+            binaries = root / "target/host" / host.TARGET / "dev-small"
+            binaries.mkdir(parents=True)
+            for name in ("codex", "codex-code-mode-host"):
+                (binaries / name).write_bytes(("original " + name).encode())
+                (binaries / name).chmod(0o755)
+            host.write(logs / "host-identity.json", self.sealed)
+            events = [{"phase": "helper-" + phase, "return_code": 0, "command": ["cargo", phase]}
+                      for phase in ("fmt", "clippy", "test", "build")]
+            events += [{"phase": phase, "return_code": 0, "command": command}
+                       for phase, command in host.host_check_commands(self.sealed).items()]
+            events += [{"phase": "helper-sandbox", "return_code": 0}, {"phase": "current-task-acceptance", "return_code": 0}]
+            (logs / "phase-results.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events))
+            for phase in host.HOST_BUILD_PHASES:
+                (logs / (phase + ".log")).write_text("original successful " + phase)
+            with patch.dict(os.environ, {"CM_HOST_BUILD_CACHE_DIR": str(cache), "CARGO_TARGET_DIR": str(root / "target"),
+                    "ACTIONS_CACHE_MODE": "write"}), patch.object(host, "load_config", return_value={"build_profile": "dev-small"}), \
+                    patch.object(host, "verify_binary") as verify:
+                host.restore_build(ROOT, logs)
+                self.assertEqual(host.read(logs / "host-build-cache.json")["status"], "miss")
+                host.save_build(ROOT, logs)
+                original = host.read(cache / "build.json")
+                for name in ("codex", "codex-code-mode-host"):
+                    (binaries / name).unlink()
+                binaries.rmdir()
+                host.restore_build(ROOT, logs)
+                verify.assert_called_once_with(cache / "codex", self.sealed)
+                self.assertEqual(host.reused_build(ROOT, logs), original)
+                self.assertEqual(host.build_log(logs, "host-test").read_text(), "original successful host-test")
+                self.assertEqual(host.read(logs / "host-build-cache.json")["origin"], original["origin"])
+                (binaries / "codex").write_bytes(b"changed after restore")
+                with self.assertRaises(RuntimeError):
+                    host.reused_build(ROOT, logs)
+
     def test_dirty_source_and_old_target_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -148,6 +276,9 @@ if __name__ == "__main__":
         "status": "pass", "unit_tests_run": result.testsRun,
         "input_classes": list(IdentityTests.sealed["inputs"]),
         "rejections": ["missing input", "path traversal", "duplicate path", "missing binary", "dirty CM checkout",
-                       "old target directory", "failed build", "incomplete build"],
+                       "old target directory", "failed build", "incomplete build", "cache identity/bytes/origin drift",
+                       "failed or incomplete cached checks", "changed check commands", "malformed cached phases",
+                       "missing current formatting", "restored binary drift"],
+        "host_reuse": "Product/fixture separation, immutable cache round trip and hit/miss compilation gates tested",
         "actual_executable_and_final_lock_rejection": "The acceptance caller must separately complete these real checks",
     })

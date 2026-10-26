@@ -183,7 +183,7 @@ def produce():
     execute(root, logs, "output-limit-c-layout-build", ["cc", "-std=c11", str(root / "fixtures/runtime-consumer/layout.c"), "-o", str(native)])
     execute(root, logs, "output-limit-c-layout", [str(native)])
     assert read(logs / "output-limit-c-layout.log")["v21_all_sizes_alignments_offsets"]
-    assert "linux_x64_additive_layout ... ok" in (logs / "host-test.log").read_text()
+    assert "linux_x64_additive_layout ... ok" in host.build_log(logs, "host-test").read_text()
     for relative in ("fixtures/runtime-consumer/driver.py", "fixtures/native-loader/core_acceptance.py", "fixtures/native-loader/tool_barrier.py"):
         destination = inputs / "fixture" / relative
         destination.parent.mkdir(parents=True, exist_ok=True)

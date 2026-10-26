@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -14,7 +15,7 @@ import tempfile
 import tomllib
 import urllib.request
 
-from linux_ci import TARGET, append_environment, digest, execute, load_config, source_file
+from linux_ci import TARGET, append_environment, build_commands, digest, execute, load_config, source_file
 from record_run import require_hosted_linux
 
 ADAPTER = "adapters/codex-e4568a3"
@@ -23,6 +24,8 @@ NATIVE_PACKAGES = (
     "gcc", "g++", "binutils", "libc6-dev", "libc6", "libcap-dev", "libcap2",
     "libasound2-dev", "libasound2t64", "libssl-dev", "libssl3t64", "pkg-config",
 )
+HOST_BUILD_PHASES = {"host-" + phase for phase in ("fmt", "clippy", "test", "build")}
+HOST_CACHE_FILES = {"codex", "codex-code-mode-host", *(phase + ".log" for phase in HOST_BUILD_PHASES)}
 
 
 def write(path, value):
@@ -83,6 +86,15 @@ def cm_manifest(root):
     if len(paths) != len(set(paths)) or set(paths) != tracked:
         raise RuntimeError("Host input list must cover exactly the reviewed tracked CM source")
     return manifest(root, [source_file(root, path) for path in paths])
+
+
+def product_manifest(root):
+    pin = read(root / ADAPTER / "source.json")
+    paths = {ADAPTER + "/source.json", *(ADAPTER + "/" + name for name in pin["patches"]), *pin["overlay"]}
+    published = {entry["path"]: entry for entry in cm_manifest(root)}
+    if not paths <= published.keys():
+        raise RuntimeError("Host product inputs must be reviewed publication inputs")
+    return [published[path] for path in sorted(paths)]
 
 
 def prepare(root, logs):
@@ -278,7 +290,7 @@ def identity_inputs(root, logs):
     native_tools = {name: {key: value for key, value in tool.items() if key != "path"}
                     for name, tool in compatibility["native"].items()}
     return {
-        "source": provenance["host_manifest_sha256"], "cm_inputs": manifest_digest(cm_manifest(root)),
+        "source": provenance["host_manifest_sha256"], "cm_inputs": manifest_digest(product_manifest(root)),
         "lock": provenance["host_lock_sha256"], "target": cfg["target"],
         "toolchain": {"declared": cfg["rust_toolchain"], "rustc": compatibility["rustc"], "cargo": compatibility["cargo"]},
         "profiles": {name: cfg[name] for name in ("build_profile", "test_profile", "clippy_profile")},
@@ -320,18 +332,137 @@ def seal(root, logs):
     identity_path = logs / "host-identity.json"
     write(identity_path, identity)
     write(logs / "host-cm-inputs.json", cm_manifest(root))
+    write(logs / "host-product-inputs.json", product_manifest(root))
     write(logs / "host-build-start.json", {"host_build_id": identity["host_build_id"], "target_was_absent": True})
     append_environment({"CM_HOST_IDENTITY_JSON": str(identity_path)})
+    key = ("cm-host-build-" + os.environ.get("CM_CACHE_EPOCH", "v1") + "-" + TARGET + "-"
+           + identity["host_build_id"].removeprefix("sha256:") + "-" + digest(host_check_commands(identity)))
+    with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+        stream.write("host_key=" + key + "\n")
 
 
-def require_build_success(events):
+def require_build_success(events, reused=None):
     required = {unit + "-" + phase for unit in ("helper", "host") for phase in ("fmt", "clippy", "test", "build")}
     required.add("helper-sandbox")
+    if reused is not None:
+        require_host_quality(reused["quality"], reused["identity"])
+        events = [*events, *(event for event in reused["quality"] if event["phase"] != "host-fmt")]
     successful = {event["phase"] for event in events if event["return_code"] == 0}
     if not required <= successful or any(
         event["return_code"] != 0 for event in events if event["phase"] in required
     ):
-        raise RuntimeError("No complete successful current Host build; stale outputs are forbidden")
+        raise RuntimeError("No complete validated Host build/check evidence; stale outputs are forbidden")
+
+
+def host_check_commands(identity):
+    inputs = identity["inputs"]
+    unit = next(unit for unit in inputs["units"] if unit["id"] == "host")
+    commands = {}
+    for phase, args in build_commands(unit, inputs["profiles"]).items():
+        args[args.index("--manifest-path") + 1] = Path(unit["manifest"]).name
+        commands["host-" + phase] = args
+    return commands
+
+
+def require_host_quality(events, identity):
+    commands = host_check_commands(identity)
+    if (not isinstance(events, list) or len(events) != len(HOST_BUILD_PHASES)
+            or any(not isinstance(event, dict) or not isinstance(event.get("phase"), str) for event in events)
+            or {event.get("phase") for event in events} != HOST_BUILD_PHASES
+            or any(event.get("return_code") != 0 or event.get("command") != commands[event["phase"]] for event in events)):
+        raise RuntimeError("Cached Host lacks its successful original build checks")
+
+
+def verify_build_cache(cache, identity):
+    if cache.is_symlink() or (cache / "build.json").is_symlink():
+        raise RuntimeError("Host cache metadata must not be a symlink")
+    receipt = read(cache / "build.json")
+    files = [entry for entry in manifest(cache) if entry["path"] != "build.json"]
+    if (not isinstance(receipt, dict) or receipt.get("schema_version") != 1 or receipt.get("identity") != identity
+            or {entry["path"] for entry in files} != HOST_CACHE_FILES
+            or any(entry["mode"] == "120000" for entry in files) or receipt.get("files") != files):
+        raise RuntimeError("Cached Host identity, files or digests differ from the sealed inputs")
+    origin = receipt.get("origin")
+    if (not isinstance(origin, dict) or origin.get("source_repository") != os.environ["CM_SOURCE_REPOSITORY"]
+            or origin.get("workflow_repository") != os.environ["GITHUB_REPOSITORY"]
+            or any(not isinstance(origin.get(key), str) or not re.fullmatch(r"[0-9a-f]{40}", origin[key])
+                   for key in ("source_sha", "workflow_sha"))
+            or any(not isinstance(origin.get(key), str) or not re.fullmatch(r"[1-9][0-9]*", origin[key])
+                   for key in ("run_id", "run_attempt"))
+            or not isinstance(origin.get("job"), str) or not origin["job"]):
+        raise RuntimeError("Cached Host has no attributable original producer")
+    require_host_quality(receipt.get("quality"), identity)
+    return receipt
+
+
+def restore_build(root, logs):
+    cache = Path(os.environ["CM_HOST_BUILD_CACHE_DIR"])
+    if cache.is_symlink():
+        raise RuntimeError("Host cache directory must not be a symlink")
+    if not cache.exists():
+        write(logs / "host-build-cache.json", {"status": "miss"})
+        return
+    identity = read(logs / "host-identity.json")
+    receipt = verify_build_cache(cache, identity)
+    verify_binary(cache / "codex", identity)
+    binaries = Path(os.environ["CARGO_TARGET_DIR"]) / "host" / TARGET / load_config(root)["build_profile"]
+    if binaries.exists():
+        raise RuntimeError("Host cache restore requires an empty destination")
+    binaries.mkdir(parents=True)
+    for name in ("codex", "codex-code-mode-host"):
+        shutil.copy2(cache / name, binaries / name)
+    retained = logs / "reused-host-build"
+    retained.mkdir()
+    for name in HOST_CACHE_FILES - {"codex", "codex-code-mode-host"} | {"build.json"}:
+        shutil.copyfile(cache / name, retained / name)
+    write(logs / "host-build-cache.json", {"status": "hit", "origin": receipt["origin"],
+          "host_build_id": identity["host_build_id"], "quality": receipt["quality"],
+          "files": receipt["files"], "note": "Original compilation and checks reused; current acceptance runs separately"})
+
+
+def reused_build(root, logs):
+    path = logs / "host-build-cache.json"
+    if not path.is_file() or read(path)["status"] == "miss":
+        return None
+    if read(path)["status"] != "hit":
+        raise RuntimeError("Invalid Host cache observation")
+    receipt = verify_build_cache(Path(os.environ["CM_HOST_BUILD_CACHE_DIR"]), read(logs / "host-identity.json"))
+    binaries = Path(os.environ["CARGO_TARGET_DIR"]) / "host" / TARGET / load_config(root)["build_profile"]
+    for name in ("codex", "codex-code-mode-host"):
+        if sha(binaries / name) != sha(Path(os.environ["CM_HOST_BUILD_CACHE_DIR"]) / name):
+            raise RuntimeError("Restored Host binary changed")
+    return receipt
+
+
+def build_log(logs, phase):
+    state = logs / "host-build-cache.json"
+    directory = logs / "reused-host-build" if state.is_file() and read(state)["status"] == "hit" else logs
+    return directory / (phase + ".log")
+
+
+def save_build(root, logs):
+    if os.environ["ACTIONS_CACHE_MODE"] != "write":
+        raise RuntimeError("Only the trusted write producer can prepare a Host cache")
+    if reused_build(root, logs) is not None:
+        return
+    events = [json.loads(line) for line in (logs / "phase-results.jsonl").read_text().splitlines()]
+    require_build_success(events)
+    if not any(event["phase"] == "current-task-acceptance" and event["return_code"] == 0 for event in events):
+        raise RuntimeError("Host cache preparation requires successful current acceptance")
+    cache = Path(os.environ["CM_HOST_BUILD_CACHE_DIR"])
+    cache.mkdir()
+    binaries = Path(os.environ["CARGO_TARGET_DIR"]) / "host" / TARGET / load_config(root)["build_profile"]
+    for name in ("codex", "codex-code-mode-host"):
+        shutil.copy2(binaries / name, cache / name)
+    for phase in HOST_BUILD_PHASES:
+        shutil.copyfile(logs / (phase + ".log"), cache / (phase + ".log"))
+    origin = {key: os.environ[env] for key, env in (
+        ("source_repository", "CM_SOURCE_REPOSITORY"), ("source_sha", "CM_SOURCE_SHA"),
+        ("workflow_repository", "GITHUB_REPOSITORY"), ("workflow_sha", "GITHUB_WORKFLOW_SHA"),
+        ("run_id", "GITHUB_RUN_ID"), ("run_attempt", "GITHUB_RUN_ATTEMPT"), ("job", "GITHUB_JOB"))}
+    write(cache / "build.json", {"schema_version": 1, "identity": read(logs / "host-identity.json"),
+          "origin": origin, "files": manifest(cache), "quality": [event for event in events if event["phase"] in HOST_BUILD_PHASES]})
+    verify_build_cache(cache, read(logs / "host-identity.json"))
 
 
 def verify_binary(path, expected, env=None):
@@ -372,7 +503,8 @@ def acceptance(root, logs, report_name="acceptance.json"):
     if identity["inputs"] != identity_inputs(root, logs):
         raise RuntimeError("Sealed inputs changed after compilation")
     events = [json.loads(line) for line in (logs / "phase-results.jsonl").read_text().splitlines()]
-    require_build_success(events)
+    reused = reused_build(root, logs)
+    require_build_success(events, reused)
     if read(logs / "host-build-start.json") != {"host_build_id": identity["host_build_id"], "target_was_absent": True}:
         raise RuntimeError("Missing clean build-start seal")
     cfg = load_config(root)
@@ -539,15 +671,23 @@ def acceptance(root, logs, report_name="acceptance.json"):
                "job": os.environ["GITHUB_JOB"], "target": TARGET,
                "sandbox_environment": read(logs / "host-sandbox-environment.json"),
                "cache_repository": os.environ["GITHUB_REPOSITORY"], "cache_mode": os.environ["ACTIONS_CACHE_MODE"],
-               "cache_evidence": "Worker cache observations and always-run sccache statistics accompany this artifact"}
+               "cache_evidence": "Worker cache observations and always-run sccache statistics accompany this artifact",
+               "compilation": {"mode": "reused" if reused else "built", "origin": reused["origin"] if reused else {
+                   "source_sha": git(root, "rev-parse", "HEAD"), "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"],
+                   "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+                   "job": os.environ["GITHUB_JOB"]}, "validation_source_sha": git(root, "rev-parse", "HEAD")}}
     write(evidence / "host-package-manifest.json", package_manifest)
     write(evidence / "host-baseline-build.json", receipt)
     write(evidence / "host-empty-baseline.json", baseline)
-    for name in ("host-source-provenance.json", "host-identity.json", "host-cm-inputs.json",
+    for name in ("host-source-provenance.json", "host-identity.json", "host-cm-inputs.json", "host-product-inputs.json",
                  "host-source-manifest.json", "original-source-manifest.json", "original-Cargo.lock", "host-Cargo.lock",
                  "host-input-identity.json", "host-identity-rejection.json", "host-helper.json",
                  "host-sandbox-environment.json", "official-fixture-before.json", "official-fixture-after.json"):
         shutil.copyfile(logs / name, evidence / name)
+    if (logs / "host-build-cache.json").is_file():
+        shutil.copyfile(logs / "host-build-cache.json", evidence / "host-build-cache.json")
+    if reused:
+        shutil.copytree(logs / "reused-host-build", evidence / "reused-host-build")
     checks = [
         ("CM-P01-AC01", "host-input-identity.json"), ("CM-P01-AC02", "host-source-provenance.json"),
         ("CM-P01-AC03", "host-identity-rejection.json"), ("CM-P01-AC04", "host-baseline-build.json"),
@@ -571,7 +711,8 @@ def main():
     root = Path(os.environ["CM_SOURCE_DIR"]).resolve()
     logs = Path(os.environ["CM_CI_LOG_DIR"]).resolve()
     logs.mkdir(parents=True, exist_ok=True)
-    {"prepare": prepare, "native": native, "helper": helper, "seal": seal, "acceptance": acceptance}[sys.argv[1]](root, logs)
+    {"prepare": prepare, "native": native, "helper": helper, "seal": seal, "acceptance": acceptance,
+     "cache-restore": restore_build, "cache-save": save_build}[sys.argv[1]](root, logs)
 
 
 if __name__ == "__main__":

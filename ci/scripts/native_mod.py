@@ -109,7 +109,7 @@ def build_fixtures(root, logs):
     execute(root, logs, "mod-c-layout", [str(native / "layout")])
     layout = json.loads((logs / "mod-c-layout.log").read_text())
     assert layout["mod"] == 72 and layout["policy_offset"] == 48
-    assert "linux_x64_layout ... ok" in (logs / "host-test.log").read_text()
+    assert "linux_x64_layout ... ok" in host.build_log(logs, "host-test").read_text()
     probe_unit = {**cfg["units"][0], "packages": ["cm-runtime"]}
     execute(root, logs, "mod-host-abi-probe-build",
             cargo_args(probe_unit, "build", cfg, cfg["build_profile"]) + ["--example", "native_probe"], host_env)
