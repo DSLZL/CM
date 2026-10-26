@@ -410,25 +410,34 @@ def self_check():
     assert sha(binary) == helper["sha256"]
     with tempfile.TemporaryDirectory() as directory:
         trace = Path(directory) / "helper-syscalls.log"
-        subprocess.run(["strace", "-f", "-qq", "-yy", "-s", "1024", "-e",
-            "trace=socket,sendto,recvfrom,execve,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl",
+        result = subprocess.run(["strace", "-f", "-qq", "-yy", "-s", "1024", "-e",
+            "trace=socket,getsockname,accept,accept4,connect,sendto,recvfrom,execve,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl",
             "-o", str(trace), "--", "/usr/bin/python3", "-B", "-c",
             "import os,sys; fd=os.open(sys.argv[1], os.O_RDONLY|os.O_CLOEXEC); os.execv('/proc/self/fd/'+str(fd), ['bwrap', *sys.argv[2:]])",
             str(binary), "--unshare-user", "--unshare-net", "--cap-drop", "ALL",
-            "--ro-bind", "/", "/", "--clearenv", "--", "/usr/bin/env"],
-            check=True, stdout=subprocess.DEVNULL, close_fds=True, timeout=30)
+            "--ro-bind", "/", "/", "--clearenv", "--", "/usr/bin/python3", "-B", "-c",
+            "import socket,json; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); port=s.getsockname()[1]; "
+            "c=socket.socket(); c.connect(('127.0.0.1',port)); p,_=s.accept(); c.sendall(b'ping'); "
+            "assert p.recv(4)==b'ping'; p.sendall(b'pong'); assert c.recv(4)==b'pong'; "
+            "p.close(); c.close(); s.close(); print(json.dumps({'port':port}))"],
+            check=True, stdout=subprocess.PIPE, text=True, close_fds=True, timeout=30)
         sanitized = observer.redact_syscalls(trace.read_text())
         (Path(os.environ["CM_CI_LOG_DIR"]) / "consumer-helper-syscalls.log").write_text(sanitized, encoding="utf-8")
         calls = observer.complete_syscalls(sanitized.splitlines())
         routes = observer.kernel_route_sockets(calls)
         packets = [line for line in calls if re.match(r'\d+\s+sendto\(', line)]
         assert routes and packets, "Actual sandbox loopback setup was not observed"
-        observer.audit_network(packets, Path(directory), set(), routes)
+        ports = {str(json.loads(result.stdout)["port"])}
+        connections = observer.provider_tcp_connections(calls, ports)
+        assert connections, "Actual provider listener/accept inode binding was not observed"
+        network = [line for line in calls if re.match(r'\d+\s+(?:connect|sendto)\(', line)]
+        observer.audit_network(network, Path(directory), ports, routes, connections)
         fd_executions = observer.bound_bwrap_executions(calls, str(binary))
         assert len(fd_executions) == 1, "Actual packaged helper FD launch was not observed"
         observer.audit_executions(fd_executions, bwrap_executions=fd_executions)
         print(json.dumps({"actual_helper_fd_execution": "pass"}))
         print(json.dumps({"actual_helper_kernel_route_audit": "pass", "socket_count": len(routes), "packet_count": len(packets)}))
+        print(json.dumps({"actual_provider_tcp_inode_audit": "pass", "connection_count": len(connections)}))
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         tools = Tools(root / "tool-barriers")
@@ -575,6 +584,7 @@ def observe(directory, evidence):
     scripts = ("fixtures/native-loader/tool_barrier.py", "fixtures/runtime-consumer/driver.py")
     network = []
     sockets = []
+    tcp_metadata = []
     symlinks = []
     bwrap_executions = set()
     executions = []
@@ -589,6 +599,7 @@ def observe(directory, evidence):
         calls = observer.complete_syscalls(text.splitlines())
         bwrap_executions.update(observer.bound_bwrap_executions(calls, "/inputs/host/codex-resources/bwrap"))
         sockets.extend(line for line in calls if re.match(r'\d+\s+socket\(', line))
+        tcp_metadata.extend(line for line in calls if re.match(r'\d+\s+(?:getsockname|accept|accept4)\(', line))
         symlinks.extend(line for line in calls if re.match(r'\d+\s+symlink(?:at)?\(', line))
         executions.extend(line for line in calls if re.match(r'\d+\s+execve(?:at)?\(', line))
         network.extend(line for line in calls if re.match(r'\d+\s+(?:connect|sendto|socketpair)\(', line))
@@ -612,11 +623,13 @@ def observe(directory, evidence):
             line = line[:peer.start()] + '<TCP:[127.0.0.1:' + peer[2] + '->127.0.0.1:' + peer[1] + ']>' + line[peer.end():]
         normalized.append(line)
     routes = observer.kernel_route_sockets(sockets)
-    observer.audit_network(normalized, Path("/evidence"), ports, routes)
+    tcp_connections = observer.provider_tcp_connections(tcp_metadata, ports)
+    observer.audit_network(normalized, Path("/evidence"), ports, routes, tcp_connections)
     # Writable executable mappings are unsupported, even if no compiler was exec'd.
     assert not executable_memory, "Unclassified runtime code generation: " + repr(executable_memory)
     assert files, "File-load observer produced no records"
     return {"status": "pass", "executions": executions, "network": network, "kernel_route_sockets": sorted(routes),
+        "provider_tcp_connections": sorted(tcp_connections), "provider_tcp_metadata": tcp_metadata,
         "sandbox_aliases": [{"path": path, "target": "/inputs/host/bin/codex"} for path in sorted(aliases)],
         "packaged_bwrap_fd_executions": sorted(bwrap_executions),
         "file_load_count": len(files), "trace_files": [path.name for path in sorted(directory.glob("syscalls.*"))],
@@ -703,7 +716,7 @@ def consume():
             trusted.mkdir()
             stage = "actual isolated matrix"
             trace = ["strace", "-ff", "-qq", "-yy", "-s", "1024", "-e",
-                "trace=execve,execveat,socket,connect,sendto,recvfrom,socketpair,symlink,symlinkat,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl,readlink,mmap,mprotect,memfd_create",
+                "trace=execve,execveat,socket,getsockname,accept,accept4,connect,sendto,recvfrom,socketpair,symlink,symlinkat,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl,readlink,mmap,mprotect,memfd_create",
                 "-o", str(trusted / "syscalls"), "--"]
             write(logs / "consumer-command.json", {"command": [*trace, *base, "--", *driver, "matrix"],
                 "cache_mode": "none", "producer_input_manifest_sha256": manifest["sha256"], "provenance": provenance()})

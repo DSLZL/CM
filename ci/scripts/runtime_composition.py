@@ -237,9 +237,23 @@ def kernel_route_sockets(lines):
     return sockets
 
 
-def audit_network(lines, directory, ports, kernel_routes=()):
+def provider_tcp_connections(lines, ports):
+    listeners = set()
+    connections = set()
+    for line in lines:
+        local = re.fullmatch(r'\d+\s+getsockname\(\d+<TCP:\[(\d+)\]>, \{sa_family=AF_INET, sin_port=htons\((\d+)\), sin_addr=inet_addr\("127\.0\.0\.1"\)\}, \[\d+\]\) = 0', line)
+        if local and local[2] in ports:
+            listeners.add(local[1])
+        accepted = re.fullmatch(r'\d+\s+accept4?\(\d+<TCP:\[(\d+)\]>, \{sa_family=AF_INET, sin_port=htons\(\d+\), sin_addr=inet_addr\("127\.0\.0\.1"\)\}, \[\d+\](?:, SOCK_CLOEXEC)?\) = \d+<TCP:\[(\d+)\]>', line)
+        if accepted and accepted[1] in listeners:
+            connections.add(accepted[2])
+    return connections
+
+
+def audit_network(lines, directory, ports, kernel_routes=(), tcp_connections=()):
     unix_connections = set()
     unix_pairs = set()
+    connected_tcp = set(tcp_connections)
     for line in lines:
         if re.match(r'\d+\s+socketpair\(', line):
             fd = r'\d+<UNIX(?:-STREAM)?:\[(\d+)(?:->(\d+))?\]>'
@@ -271,12 +285,20 @@ def audit_network(lines, directory, ports, kernel_routes=()):
                 port = re.search(r'sin6?_port=htons\(([0-9]+)\)', address[1])
                 local = 'inet_addr("127.0.0.1")' in address[1] or 'inet_pton(AF_INET6, "::1",' in address[1]
                 assert local and port and port[1] in ports, "Unexpected runtime network: " + line
+                inode = re.fullmatch(r'TCP:\[(\d+)\]', descriptor)
+                if call[2] == "connect" and inode and line.endswith((' = 0', ' = -1 EINPROGRESS (Operation now in progress)')):
+                    connected_tcp.add(inode[1])
         else:
             assert call[2] == "sendto" and re.search(r', NULL, 0\)?(?: = [^"]*| <unfinished \.\.\.>)$', line), line
             # Decoded socket identity ties address-less sends to the observed fixture connection.
             unix = re.fullmatch(r'UNIX(?:-[A-Z]+)?:\[(\d+)->(\d+)(?:,[^\]]*)?\]', descriptor)
             tcp = re.fullmatch(r'TCP:\[127[.]0[.]0[.]1:\d+->127[.]0[.]0[.]1:(\d+)\]', descriptor)
+            pair_end = re.fullmatch(r'UNIX(?:-STREAM)?:\[(\d+)\]', descriptor)
+            tcp_inode = re.fullmatch(r'TCP:\[(\d+)\]', descriptor)
+            # Cross-namespace decoding can retain only the observed socket inode.
             assert ((unix and (unix[1] in unix_connections or (unix[1], unix[2]) in unix_pairs))
+                    or (pair_end and any(pair_end[1] == inode for inode, _ in unix_pairs))
+                    or (tcp_inode and tcp_inode[1] in connected_tcp)
                     or (tcp and tcp[1] in ports)), "Unknown socket peer: " + line
 
 
@@ -361,6 +383,24 @@ def check_network_audit():
     assert "observer-canary" not in sanitized and "<payload redacted>" in sanitized
     assert sanitized.endswith(', 25, MSG_NOSIGNAL, NULL, 0) = 25')
     audit_network([connect, send, tcp, *complete_syscalls(split), sanitized], directory, {"8080"})
+    bare_pair = pair.replace("51->52", "51").replace("52->51", "52")
+    bare_ipc = sanitized.replace("51->52", "51")
+    audit_network([bare_pair, bare_ipc], directory, set())
+    tcp_connect = '4 connect(5<TCP:[71]>, {sa_family=AF_INET, sin_port=htons(8080), sin_addr=inet_addr("127.0.0.1")}, 16) = 0'
+    bare_tcp = '4 sendto(5<TCP:[71]>, "<payload redacted>", 4, 0, NULL, 0) = 4'
+    audit_network([tcp_connect, bare_tcp], directory, {"8080"})
+    audit_network([tcp_connect.replace(' = 0', ' = -1 EINPROGRESS (Operation now in progress)'), bare_tcp], directory, {"8080"})
+    listener = '4 getsockname(6<TCP:[81]>, {sa_family=AF_INET, sin_port=htons(8080), sin_addr=inet_addr("127.0.0.1")}, [16]) = 0'
+    accepted = '4 accept4(6<TCP:[81]>, {sa_family=AF_INET, sin_port=htons(1234), sin_addr=inet_addr("127.0.0.1")}, [16], SOCK_CLOEXEC) = 5<TCP:[71]>'
+    assert provider_tcp_connections([listener, accepted], {"8080"}) == {"71"}
+    assert provider_tcp_connections([listener, accepted.replace('accept4(', 'accept(').replace(', SOCK_CLOEXEC)', ')')], {"8080"}) == {"71"}
+    audit_network([bare_tcp], directory, {"8080"}, tcp_connections=provider_tcp_connections([listener, accepted], {"8080"}))
+    for invalid in ([accepted], [listener, accepted.replace('[81]', '[82]')],
+                    [listener.replace('htons(8080)', 'htons(8081)'), accepted],
+                    [listener.replace(' = 0', ' = -1 EBADF (Bad file descriptor)'), accepted],
+                    [listener, accepted.replace('127.0.0.1', '198.51.100.1')],
+                    [listener, accepted.replace(' = 5<TCP:[71]>', ' = -1 EAGAIN (Resource temporarily unavailable)')]):
+        assert not provider_tcp_connections(invalid, {"8080"}), invalid
     nscd = '3 connect(8<UNIX-STREAM:[51]>, {sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}, 110) = -1 ENOENT (No such file or directory)'
     audit_network([nscd, nscd.replace('ENOENT (No such file or directory)', 'EPERM (Operation not permitted)')], directory, set())
     route = '4 socket(AF_NETLINK, SOCK_RAW|SOCK_CLOEXEC, NETLINK_ROUTE) = 5<NETLINK:[123]>'
@@ -391,6 +431,10 @@ def check_network_audit():
             continue
         raise AssertionError("Network audit accepted an unknown Netlink peer")
     for unknown in ([send], [connect, send.replace("41->42", "43->42")],
+                    [bare_ipc], [bare_pair, bare_ipc.replace('[51]', '[53]')],
+                    [bare_pair, bare_ipc.replace('UNIX-STREAM', 'UNIX-DGRAM')],
+                    [bare_tcp], [tcp_connect, bare_tcp.replace('[71]', '[72]')],
+                    [tcp_connect.replace(' = 0', ' = -1 ECONNREFUSED (Connection refused)'), bare_tcp],
                     [nscd.replace(' = -1 ENOENT (No such file or directory)', ' = 0')],
                     [nscd.replace('/var/run/nscd/socket', '/outside/nscd/socket')],
                     [nscd.replace('ENOENT (No such file or directory)', 'EACCES (Permission denied)')],
