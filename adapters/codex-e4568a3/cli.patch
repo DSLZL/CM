@@ -170,6 +170,33 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
          Some(Subcommand::TcpTunnel(_)) => Some("tcp-tunnel"),
      }
  }
+@@ -2990,7 +3088,8 @@
+         let MultitoolCli {
+             mut interactive,
+             config_overrides: mut root_overrides,
+             subcommand,
+             feature_toggles: _,
+             remote: _,
++            ..
+         } = cli;
+@@ -3027,7 +3126,8 @@
+         let MultitoolCli {
+             mut interactive,
+             config_overrides: mut root_overrides,
+             subcommand,
+             feature_toggles: _,
+             remote: _,
++            ..
+         } = cli;
+@@ -3071,7 +3171,8 @@
+         let MultitoolCli {
+             interactive,
+             config_overrides: root_overrides,
+             subcommand,
+             feature_toggles: _,
+             remote: _,
++            ..
+         } = cli;
 diff --git a/codex-rs/app-server/src/message_processor.rs b/codex-rs/app-server/src/message_processor.rs
 --- a/codex-rs/app-server/src/message_processor.rs
 +++ b/codex-rs/app-server/src/message_processor.rs
