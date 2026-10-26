@@ -216,3 +216,52 @@ diff --git a/codex-rs/app-server/src/message_processor.rs b/codex-rs/app-server/
              );
              match code_mode_session_provider {
                  Some(provider) => manager.with_code_mode_session_provider(provider),
+diff --git a/codex-rs/cli/src/snapshots/codex__exec_server_args_tests__exec_server_help_documents_remote_options.snap b/codex-rs/cli/src/snapshots/codex__exec_server_args_tests__exec_server_help_documents_remote_options.snap
+--- a/codex-rs/cli/src/snapshots/codex__exec_server_args_tests__exec_server_help_documents_remote_options.snap
++++ b/codex-rs/cli/src/snapshots/codex__exec_server_args_tests__exec_server_help_documents_remote_options.snap
+@@ -22,16 +22,15 @@
+           shell_environment_policy.inherit=all`
+-
++
+-      --enable <FEATURE>
+-          Enable a feature (repeatable). Equivalent to `-c features.<name>=true`
++      --cm-profile <NAME>
++          Select a CM configuration profile from cm-runtime.toml
+-
++
+       --strict-config
+           Error out when config.toml contains fields that are not recognized by
+           this version of Codex
+-
++
+-      --disable <FEATURE>
+-          Disable a feature (repeatable). Equivalent to `-c
+-          features.<name>=false`
++      --cm-set <MOD.FIELD=TOML>
++          Override one CM Mod configuration field with a TOML value
+-
++
+       --linux-sandbox-pid-namespace <MODE>
+           Linux PID namespace: isolate (default) or inherit. Inherit allows
+           signals to other same-UID processes; enable only when provisioning a
+@@ -40,5 +39,8 @@
+           [default: isolate]
+-
++
++      --enable <FEATURE>
++          Enable a feature (repeatable). Equivalent to `-c features.<name>=true`
++
+       --proxy-private-ips-via-upstream
+           Allow permitted private IP destinations to use the configured upstream
+           proxy. If no valid upstream proxy applies to the request protocol,
+@@ -53,5 +55,9 @@
+           [default: 1]
+-
++
++      --disable <FEATURE>
++          Disable a feature (repeatable). Equivalent to `-c
++          features.<name>=false`
++
+       --listen <URL>
+           Transport endpoint URL. Supported values: `ws://IP:PORT` (default),
+           `stdio`, `stdio://`
