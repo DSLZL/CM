@@ -45,15 +45,14 @@ unsafe extern "C" fn init(
             if view != br#"{"labels":["parameter"],"limit":128,"token":"M01_OWN_SECRET"}"# {
                 return FAILED;
             }
-            if let Some(path) = std::env::var_os("CM_CONFIG_OBSERVATION") {
-                if std::fs::write(
+            if let Some(path) = std::env::var_os("CM_CONFIG_OBSERVATION")
+                && std::fs::write(
                     path,
                     br#"{"owner_view_only":true,"four_layer_result":true}"#,
                 )
                 .is_err()
-                {
-                    return FAILED;
-                }
+            {
+                return FAILED;
             }
             128_u64
         } else {
