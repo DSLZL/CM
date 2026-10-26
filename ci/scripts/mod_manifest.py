@@ -362,35 +362,42 @@ def lock_integrity(work, inputs, binary):
     return {"mutations": rows, "unsafe_targets_rejected": True, "atomic_recovery": True}
 
 
-def config_rejections(work, inputs, binary):
+def config_rejections(work, inputs, binary, evidence):
     cases = {
         "unknown-key": lambda m: m["config"]["defaults"].update(unknown=CANARIES[2]),
         "wrong-type": lambda m: m["config"]["defaults"].update(limit=CANARIES[2]),
         "unknown-schema": lambda m: m["config"]["schema"].update(**{"$ref": "https://example.invalid/schema"}),
         "required": lambda m: m["config"]["schema"]["required"].append("missing"),
-        "abi1-config": lambda m: m["compat"].update(abi_major=1, abi_minor_min=0, abi_minor_max=0),
+        "abi1-config": lambda m: m.update(config=tomllib.loads((inputs / "mods/m01-config/mod.toml").read_text())["config"]),
     }
     rows = []
     for name, change in cases.items():
         home = install(work / name, inputs, configured=True)
-        package = mutate(home, "output-fixture", change)
+        owner = "serial-fixture" if name == "abi1-config" else "output-fixture"
+        if name == "abi1-config":
+            assert tomllib.loads((home / "mods" / owner / "mod.toml").read_text())["compat"]["abi_major"] == 1
+            metadata(binary, home, ["plan"], evidence=evidence / "abi1-config-baseline.json")
+        package = mutate(home, owner, change)
         package.rename(home / "mods/opaque-slot")
-        result = metadata(binary, home, ["plan"], success=False)
-        assert result["output"]["mod_id"] == "output-fixture"
-        assert result["output"]["field"].startswith("compat" if name == "abi1-config" else "config")
+        result = metadata(binary, home, ["plan"], success=False, evidence=evidence / (name + ".json"))
+        assert result["output"]["mod_id"] == owner, (name, result["output"])
+        assert result["output"]["field"].startswith("compat.abi_major" if name == "abi1-config" else "config"), (name, result["output"])
         rows.append({"case": name, **result})
     home = install(work / "invalid-selection", inputs, configured=True)
     (home / "cm-runtime.toml").write_text("format_version=2\nenabled=[]\nsecret=" + CANARIES[2])
-    rows.append({"case": "invalid-selection", **metadata(binary, home, ["plan"], success=False)})
+    rows.append({"case": "invalid-selection", **metadata(binary, home, ["plan"], success=False,
+        evidence=evidence / "invalid-selection.json")})
     home = install(work / "missing-effective-required", inputs, configured=True)
     mutate(home, "output-fixture", lambda m: m["config"]["defaults"].pop("token"))
     fields = tomllib.loads((home / "cm-runtime.toml").read_text()); fields["mods"]["output-fixture"].pop("token")
     write_toml(home / "cm-runtime.toml", fields)
-    rows.append({"case": "missing-effective-required", **metadata(binary, home, ["plan"], success=False)})
+    rows.append({"case": "missing-effective-required", **metadata(binary, home, ["plan"], success=False,
+        evidence=evidence / "missing-effective-required.json")})
     home = install(work / "invalid-cli", inputs, configured=True)
-    for value in ("output-fixture.limit=" + json.dumps(CANARIES[2]), "output-fixture.unknown=" + json.dumps(CANARIES[2]),
-                  "output-fixture.limit=" + CANARIES[2], "missing.limit=2", "output-fixture.limit=nan", "output-fixture.limit=2020-01-01"):
-        rows.append({"case": "invalid-cli", **metadata(binary, home, ["plan"], options=["--cm-set", value], success=False)})
+    for index, value in enumerate(("output-fixture.limit=" + json.dumps(CANARIES[2]), "output-fixture.unknown=" + json.dumps(CANARIES[2]),
+                  "output-fixture.limit=" + CANARIES[2], "missing.limit=2", "output-fixture.limit=nan", "output-fixture.limit=2020-01-01")):
+        rows.append({"case": "invalid-cli", **metadata(binary, home, ["plan"], options=["--cm-set", value], success=False,
+            evidence=evidence / ("invalid-cli-" + str(index) + ".json"))})
     return rows
 
 
@@ -470,7 +477,7 @@ def matrix():
     rejection = rejection_cases(work / "rejections", inputs, binary, evidence / "rejections")
     rejection["zip"] = zip_rejections(work / "zip", inputs, binary)
     integrity = lock_integrity(work / "integrity", inputs, binary)
-    config = config_rejections(work / "config", inputs, binary)
+    config = config_rejections(work / "config", inputs, binary, evidence / "config-rejections")
     mixed = install(work / "mixed", inputs, configured=True)
     shutil.rmtree(mixed / "mods/serial-fixture")
     shutil.copytree(inputs / "mods/a", mixed / "mods/serial-fixture")
