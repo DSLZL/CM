@@ -11,7 +11,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
  mod daemon_install;
  mod daemon_telemetry;
  #[cfg(any(target_os = "macos", target_os = "windows"))]
-@@ -131,6 +132,14 @@
+@@ -131,5 +132,13 @@
      #[clap(flatten)]
      pub config_overrides: CliConfigOverrides,
 -
@@ -26,8 +26,6 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 +
      #[clap(flatten)]
      pub feature_toggles: FeatureToggles,
--
-+
 @@ -241,7 +250,13 @@
      ExecServer(ExecServerCommand),
  
@@ -43,9 +41,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
  }
  
  #[derive(Debug, Parser)]
-@@ -1002,5 +1017,22 @@
--
-+
+@@ -1003,4 +1018,21 @@
  #[derive(Debug, Parser)]
 +struct CmCli {
 +    #[command(subcommand)]
