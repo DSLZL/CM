@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::fs;
 use std::fs::File;
@@ -63,6 +64,12 @@ impl Kind {
 pub(crate) struct Dependency {
     pub id: String,
     pub version: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub optional: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -110,11 +117,13 @@ pub(crate) struct Manifest {
     pub contributions: Vec<Contribution>,
     #[serde(default)]
     pub resources: Vec<Resource>,
+    #[serde(skip)]
+    pub binary_manifest: Option<crate::manifest::BinaryManifest>,
 }
 
 impl Manifest {
     pub(crate) fn hooks(&self) -> Vec<Contribution> {
-        if self.format_version == 1 {
+        if self.abi_major == 1 {
             vec![Contribution {
                 id: self.contribution.clone(),
                 capability: CAPABILITY.into(),
@@ -183,7 +192,7 @@ pub(crate) fn executable_hash(path: &Path) -> Result<String, String> {
     Err("Host executable changed while hashing".into())
 }
 
-fn open_at(parent: &File, name: &std::ffi::OsStr, directory: bool) -> Result<File, String> {
+pub(crate) fn open_at(parent: &File, name: &std::ffi::OsStr, directory: bool) -> Result<File, String> {
     let name = CString::new(name.as_bytes()).map_err(|e| e.to_string())?;
     let flags = libc::O_RDONLY
         | libc::O_CLOEXEC
@@ -196,7 +205,7 @@ fn open_at(parent: &File, name: &std::ffi::OsStr, directory: bool) -> Result<Fil
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-fn open_directory(path: &Path) -> Result<File, String> {
+pub(crate) fn open_directory(path: &Path) -> Result<File, String> {
     if !path.is_absolute() {
         return Err("managed path must be absolute".into());
     }
@@ -327,8 +336,11 @@ pub(crate) fn inventory(home: &Path) -> Result<Inventory, String> {
         if packages.len() >= 32 {
             return Err("runtime set exceeds 32 packages".into());
         }
-        let package = open_at(&directory, std::ffi::OsStr::new(&name), true)?;
+        let package = open_at(&directory, std::ffi::OsStr::new(&name), !name.ends_with(".cmod"))?;
         let metadata = package.metadata().map_err(|e| e.to_string())?;
+        if name.ends_with(".cmod") && (!metadata.is_file() || metadata.nlink() != 1) {
+            return Err(".cmod must be a regular file with one link".into());
+        }
         packages.insert(name, (metadata.dev(), metadata.ino()));
     }
     Ok(Inventory {
@@ -341,6 +353,9 @@ pub(crate) fn payload_path(package: &Path, relative: &str) -> Result<PathBuf, St
     let path = Path::new(relative);
     if relative.is_empty()
         || relative.len() > 512
+        || relative.contains(['\\', ':'])
+        || relative.chars().any(char::is_control)
+        || path.components().count() > 16
         || path.is_absolute()
         || !path
             .components()
@@ -371,7 +386,7 @@ pub(crate) fn version(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b".+-".contains(&b))
 }
 
-fn digest(value: &str) -> bool {
+pub(crate) fn digest(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
@@ -389,6 +404,7 @@ pub(crate) fn check_manifest(manifest: &Manifest) -> Result<(), String> {
         return Err("unsupported manifest id/version/target/digest/size".into());
     }
     match manifest.format_version {
+        3 if manifest.binary_manifest.is_some() => {}
         1 if manifest.abi_major == ABI_MAJOR
             && manifest.abi_minor == ABI_MINOR
             && manifest.contribution == CONTRIBUTION
@@ -425,10 +441,10 @@ pub(crate) fn check_manifest(manifest: &Manifest) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn read_manifest(package: &Path) -> Result<(Manifest, InputPin), String> {
-    let (bytes, pin) = read_input(&package.join("mod.toml"), MAX_MANIFEST)?;
-    let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
-    let manifest = toml::from_str(text).map_err(|e| format!("manifest: {e}"))?;
+pub(crate) fn read_manifest(package: &Path) -> Result<(Manifest, InputPin), crate::LoadError> {
+    let (bytes, pin) = read_input(&package.join("mod.toml"), MAX_MANIFEST)
+        .map_err(|e| crate::LoadError::input("manifest_parse", "", &e))?;
+    let manifest = crate::manifest::parse(&bytes)?;
     Ok((manifest, pin))
 }
 
@@ -436,20 +452,29 @@ pub(crate) fn prepare_package(
     package: &Path,
     manifest: Manifest,
 ) -> Result<(Preflighted, Vec<InputPin>), String> {
-    let (bytes, pin) = read_input(&payload_path(package, &manifest.payload)?, MAX_PAYLOAD)?;
-    if pin.size != manifest.payload_size || pin.sha256 != manifest.payload_sha256 {
+    let mut pins = Vec::new();
+    let prepared = prepare_bytes(manifest, |relative, limit| {
+        let (bytes, pin) = read_input(&payload_path(package, relative)?, limit)?;
+        pins.push(pin);
+        Ok(bytes)
+    })?;
+    Ok((prepared, pins))
+}
+
+fn prepare_bytes(manifest: Manifest, mut read: impl FnMut(&str, u64) -> Result<Vec<u8>, String>) -> Result<Preflighted, String> {
+    let bytes = read(&manifest.payload, MAX_PAYLOAD)?;
+    if bytes.len() as u64 != manifest.payload_size || hash(&bytes) != manifest.payload_sha256 {
         return Err("payload size or SHA-256 mismatch".into());
     }
     let needed = elf::check(&bytes)?;
     let snapshot = sealed_snapshot(&bytes)?;
-    let mut pins = vec![pin];
     let mut resources = Vec::new();
     for resource in &manifest.resources {
         if resource.size > MAX_RESOURCE || !digest(&resource.sha256) {
             return Err("invalid resource size or digest".into());
         }
-        let (bytes, pin) = read_input(&payload_path(package, &resource.path)?, MAX_RESOURCE)?;
-        if pin.size != resource.size || pin.sha256 != resource.sha256 {
+        let bytes = read(&resource.path, MAX_RESOURCE)?;
+        if bytes.len() as u64 != resource.size || hash(&bytes) != resource.sha256 {
             return Err(format!(
                 "resource size or SHA-256 mismatch: {}",
                 resource.path
@@ -459,18 +484,184 @@ pub(crate) fn prepare_package(
             path: resource.path.clone(),
             bytes,
         });
-        pins.push(pin);
     }
     resources.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok((
-        Preflighted {
+    Ok(Preflighted {
             manifest,
             snapshot,
             needed,
             resources,
-        },
-        pins,
-    ))
+        })
+}
+
+const MAX_PACKAGE: u64 = 128 * 1024 * 1024;
+const MAX_ENTRIES: usize = 256;
+
+pub(crate) struct Candidate {
+    pub manifest: Manifest,
+    pub manifest_sha256: String,
+    pub content_sha256: String,
+    pub pins: Vec<InputPin>,
+    pub tree: Option<BTreeSet<String>>,
+    pub package: PathBuf,
+    files: Option<BTreeMap<String, Vec<u8>>>,
+}
+
+impl Candidate {
+    pub(crate) fn snapshot_size(&self) -> usize {
+        self.files.as_ref().map_or(0, |files| files.values().map(Vec::len).sum())
+    }
+
+    pub(crate) fn prepare(mut self) -> Result<(Preflighted, Vec<InputPin>), String> {
+        if let Some(mut files) = self.files.take() {
+            let prepared = prepare_bytes(self.manifest, |path, limit| {
+                let bytes = files.remove(path).ok_or("package: declared file is missing")?;
+                if bytes.len() as u64 > limit { return Err("package: file exceeds its bound".into()); }
+                Ok(bytes)
+            })?;
+            Ok((prepared, self.pins))
+        } else {
+            let (prepared, mut pins) = prepare_package(&self.package, self.manifest)?;
+            pins.extend(self.pins);
+            Ok((prepared, pins))
+        }
+    }
+}
+
+fn walk(directory: &File, prefix: &str, depth: usize, entries: &mut BTreeSet<String>) -> Result<(), String> {
+    if depth > 16 { return Err("package: directory depth limit".into()); }
+    for item in fs::read_dir(snapshot_path(directory)).map_err(|e| e.to_string())? {
+        let item = item.map_err(|e| e.to_string())?;
+        let name = item.file_name().into_string().map_err(|_| "package: non-UTF8 path")?;
+        let path = format!("{prefix}{name}");
+        payload_path(Path::new("/package"), &path)?;
+        let meta = item.file_type().map_err(|e| e.to_string())?;
+        let dir = meta.is_dir();
+        if !dir && !meta.is_file() { return Err("package: links and special files are forbidden".into()); }
+        if !entries.insert(if dir { format!("{path}/") } else { path.clone() }) || entries.len() > MAX_ENTRIES { return Err("package: duplicate path or entry limit".into()); }
+        if dir { walk(&open_at(directory, &item.file_name(), true)?, &format!("{path}/"), depth + 1, entries)?; }
+    }
+    Ok(())
+}
+
+pub(crate) fn directory_entries(package: &Path) -> Result<BTreeSet<String>, String> {
+    let mut entries = BTreeSet::new();
+    walk(&open_directory(package)?, "", 0, &mut entries)?;
+    Ok(entries)
+}
+
+pub(crate) fn candidate(package: &Path) -> Result<Candidate, crate::LoadError> {
+    let invalid = |message: String| crate::LoadError::input("manifest_parse", "", &message);
+    let archive = package.extension().is_some_and(|s| s == "cmod");
+    let (manifest, manifest_sha256, mut pins, mut files, tree) = if archive {
+        let (bytes, pin) = read_input(package, MAX_PACKAGE).map_err(invalid)?;
+        let files = zip_files(&bytes).map_err(invalid)?;
+        let raw = files.get("mod.toml").ok_or_else(|| invalid("package: mod.toml is missing".into()))?;
+        if raw.len() as u64 > MAX_MANIFEST { return Err(invalid("manifest: byte limit".into())); }
+        (crate::manifest::parse(raw)?, hash(raw), vec![pin], Some(files), None)
+    } else {
+        let (manifest, pin) = read_manifest(package)?;
+        if manifest.format_version == 3 {
+            let tree = directory_entries(package).map_err(invalid)?;
+            let mut files = BTreeMap::new(); let mut pins = vec![pin.clone()]; let mut total = 0_u64;
+            for path in tree.iter().filter(|s| !s.ends_with('/')) {
+                let limit = if path == &manifest.payload { MAX_PAYLOAD } else if path == "mod.toml" { MAX_MANIFEST } else { MAX_RESOURCE };
+                let (bytes, input) = read_input(&payload_path(package, path).map_err(invalid)?, limit).map_err(invalid)?;
+                total += bytes.len() as u64;
+                if total > MAX_PACKAGE { return Err(invalid("package: total byte limit".into())); }
+                pins.push(input); files.insert(path.clone(), bytes);
+            }
+            if files.get("mod.toml").is_none_or(|raw| hash(raw) != pin.sha256) { return Err(invalid("manifest: changed during package snapshot".into())); }
+            (manifest, pin.sha256, pins, Some(files), Some(tree))
+        } else { (manifest, pin.sha256.clone(), vec![pin], None, None) }
+    };
+    if archive && manifest.format_version != 3 { return Err(invalid("package: .cmod requires format 3".into())); }
+    if manifest.format_version == 3 { check_manifest(&manifest).map_err(invalid)?; }
+    if let Some(files) = &files {
+        for (path, bytes) in files {
+            let limit = if path == &manifest.payload { MAX_PAYLOAD } else if path == "mod.toml" { MAX_MANIFEST } else { MAX_RESOURCE };
+            if bytes.len() as u64 > limit { return Err(invalid("package: attachment byte limit".into())); }
+        }
+    }
+    let content_sha256 = if let Some(files) = files.as_mut() {
+        let identities: BTreeMap<_, _> = files.iter().map(|(path, bytes)| (path, (bytes.len(), hash(bytes)))).collect();
+        hash(&serde_json::to_vec(&identities).expect("content identities serialize"))
+    } else { manifest_sha256.clone() };
+    Ok(Candidate { manifest, manifest_sha256, content_sha256, pins: std::mem::take(&mut pins), tree, package: package.into(), files })
+}
+
+// zip's index replaces duplicate names; check the bounded ZIP envelope before it allocates an index.
+fn zip_directory(bytes: &[u8]) -> Result<usize, String> {
+    let bad = || "package: unsupported or malformed ZIP envelope".to_string();
+    let u16_at = |at: usize| -> Result<usize, String> { Ok(u16::from_le_bytes(bytes.get(at..at + 2).ok_or_else(bad)?.try_into().unwrap()) as usize) };
+    let u32_at = |at: usize| -> Result<usize, String> { Ok(u32::from_le_bytes(bytes.get(at..at + 4).ok_or_else(bad)?.try_into().unwrap()) as usize) };
+    let end = (bytes.len().saturating_sub(65557)..bytes.len().saturating_sub(21)).rev()
+        .find(|&i| bytes.get(i..i + 4) == Some(b"PK\x05\x06") && u16_at(i + 20).is_ok_and(|len| i + 22 + len == bytes.len())).ok_or_else(bad)?;
+    let count = u16_at(end + 10)?; let start = u32_at(end + 16)?;
+    if count == 0 || count > MAX_ENTRIES || u16_at(end + 4)? != 0 || u16_at(end + 6)? != 0
+        || u16_at(end + 8)? != count || start.checked_add(u32_at(end + 12)?) != Some(end)
+        || end.saturating_sub(start) > 1024 * 1024 { return Err(bad()); }
+    let mut position = start; let mut names = BTreeSet::new(); let mut ranges = Vec::new();
+    for _ in 0..count {
+        if bytes.get(position..position + 4) != Some(b"PK\x01\x02") { return Err(bad()); }
+        let flags = u16_at(position + 8)?; let method = u16_at(position + 10)?;
+        let name_len = u16_at(position + 28)?; let extra = u16_at(position + 30)?; let comment = u16_at(position + 32)?;
+        let local = u32_at(position + 42)?;
+        let name = bytes.get(position + 46..position + 46 + name_len).ok_or_else(bad)?;
+        let data_end = local.checked_add(30 + name_len + u16_at(local + 28)?).and_then(|n| n.checked_add(u32_at(position + 20).ok()?)).ok_or_else(bad)?;
+        if flags & (1 | 64 | 8192) != 0 || ![0, 8].contains(&method) || u16_at(position + 34)? != 0
+            || !names.insert(name) || local >= start || bytes.get(local..local + 4) != Some(b"PK\x03\x04")
+            || u16_at(local + 6)? != flags || u16_at(local + 8)? != method || u16_at(local + 26)? != name_len
+            || bytes.get(local + 30..local + 30 + name_len) != Some(name)
+            || data_end > start || ranges.iter().any(|&(a, b)| local < b && a < data_end)
+            || (flags & 8 == 0 && (u32_at(local + 14)? != u32_at(position + 16)?
+                || u32_at(local + 18)? != u32_at(position + 20)? || u32_at(local + 22)? != u32_at(position + 24)?))
+        { return Err(bad()); }
+        ranges.push((local, data_end));
+        position = position.checked_add(46 + name_len + extra + comment).ok_or_else(bad)?;
+        if position > end { return Err(bad()); }
+    }
+    if position != end || ranges.iter().map(|&(start, _)| start).min() != Some(0) { return Err(bad()); }
+    Ok(count)
+}
+
+fn zip_files(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    let count = zip_directory(bytes)?;
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|_| "package: invalid ZIP directory")?;
+    if zip.len() != count || zip.offset() != 0 { return Err("package: duplicate ZIP entry or prefixed archive".into()); }
+    let mut files = BTreeMap::new(); let mut entries = BTreeSet::new(); let mut total = 0_u64;
+    for index in 0..zip.len() {
+        let mut file = zip.by_index(index).map_err(|_| "package: unreadable/encrypted ZIP entry")?;
+        let raw = std::str::from_utf8(file.name_raw()).map_err(|_| "package: non-UTF8 ZIP path")?.to_string();
+        let path = raw.strip_suffix('/').unwrap_or(&raw);
+        payload_path(Path::new("/package"), path)?;
+        if !entries.insert(path.to_owned())
+            || file.encrypted() || ![zip::CompressionMethod::Stored, zip::CompressionMethod::Deflated].contains(&file.compression())
+            || file.unix_mode().is_some_and(|mode| ![0, libc::S_IFREG, libc::S_IFDIR].contains(&(mode & libc::S_IFMT)))
+            || file.unix_mode().is_some_and(|mode| (mode & libc::S_IFMT == libc::S_IFDIR) != file.is_dir() && mode & libc::S_IFMT != 0)
+            || (file.is_dir() && file.size() != 0) { return Err("package: invalid ZIP entry type/path/method".into()); }
+        if file.is_dir() { continue; }
+        if !file.is_file() || file.size() > MAX_PAYLOAD { return Err("package: ZIP entry limit".into()); }
+        total = total.checked_add(file.size()).ok_or("package: ZIP byte overflow")?;
+        if total > MAX_PACKAGE { return Err("package: ZIP total byte limit".into()); }
+        let expected = file.size(); let mut data = Vec::new();
+        (&mut file).take(expected + 1).read_to_end(&mut data).map_err(|_| "package: ZIP data/CRC failure")?;
+        if data.len() as u64 != expected { return Err("package: ZIP actual size mismatch".into()); }
+        files.insert(raw, data);
+    }
+    for path in entries.clone() {
+        let mut parent = Path::new(&path).parent();
+        while let Some(p) = parent {
+            if !p.as_os_str().is_empty() {
+                let p = p.to_string_lossy().to_string();
+                if files.contains_key(&p) { return Err("package: ZIP file/directory collision".into()); }
+                entries.insert(p);
+                if entries.len() > MAX_ENTRIES { return Err("package: ZIP logical entry limit".into()); }
+            }
+            parent = p.parent();
+        }
+    }
+    Ok(files)
 }
 
 pub(crate) fn sealed_snapshot(bytes: &[u8]) -> Result<File, String> {
@@ -521,7 +712,7 @@ mod tests {
     #[test]
     fn paths_and_known_metadata_reject_before_native() {
         let base = Path::new("/managed/package");
-        for value in ["", "/tmp/x.so", "../x.so", "bin/../../x.so"] {
+        for value in ["", "/tmp/x.so", "../x.so", "bin/../../x.so", "a\\b.so", "a:b.so", "a\0b.so", "a//b.so", "a/./b.so"] {
             assert!(payload_path(base, value).is_err());
         }
         assert!(!identifier(""));

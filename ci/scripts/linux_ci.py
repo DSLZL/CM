@@ -215,15 +215,15 @@ def main():
         artifact_dir = Path(os.environ["CM_CI_ARTIFACT_DIR"])
         artifact_dir.mkdir(parents=True, exist_ok=True)
         execute(root, logs, "current-task-acceptance", ["bash", str(source_file(root, cfg["acceptance_script"]))])
-        if cfg["task_id"] == "CM-P04":
+        if cfg["task_id"] in ("CM-P04", "CM-M01"):
             from runtime_consumer import provenance, validate_inputs
             producer = json.loads((artifact_dir / "producer-inputs.json").read_text())
             inputs = Path(os.environ["CM_CONSUMER_INPUT_DIR"]).resolve()
             manifest = validate_inputs(inputs)
             if (producer.get("status") != "pass" or producer.get("consumer_acceptance") != "not_run"
-                or producer.get("task_id") != "CM-P04" or producer.get("provenance") != provenance()
+                or producer.get("task_id") != cfg["task_id"] or producer.get("provenance") != provenance()
                 or producer.get("input_manifest_sha256") != manifest["sha256"]):
-                raise RuntimeError("P04 producer must hand off frozen inputs without claiming consumer acceptance")
+                raise RuntimeError("Producer must hand off frozen inputs without claiming consumer acceptance")
             return
         report_path = artifact_dir / "acceptance.json"
         if not report_path.is_file():

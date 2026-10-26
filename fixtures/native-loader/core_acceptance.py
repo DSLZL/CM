@@ -119,7 +119,7 @@ def cli_arguments(binary, cwd, endpoint, sandboxed=False):
 
 def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mode="",
              extra_env=None, command_prefix=(), expected_releases=1, restrictive=None,
-             sandboxed=False, long_output=False, requested_limit=None):
+             sandboxed=False, long_output=False, requested_limit=None, cm_options=()):
     assert os.uname().sysname == "Linux" and os.uname().machine == "x86_64"
     restrictive = mod_loaded if restrictive is None else restrictive
     directory.mkdir(parents=True)
@@ -206,7 +206,8 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
            **(extra_env or {})}
     Path(env["HOME"]).mkdir()
     assert not any(key.startswith(("ACTIONS_", "GITHUB_", "GH_")) for key in env)
-    args = [*command_prefix, *cli_arguments(binary, directory, endpoint, sandboxed=sandboxed)]
+    cli = cli_arguments(binary, directory, endpoint, sandboxed=sandboxed)
+    args = [*command_prefix, cli[0], *cm_options, *cli[1:]]
     stdout = directory / "stdout.jsonl"
     stderr = directory / "stderr.log"
     return_code = None

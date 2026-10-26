@@ -23,7 +23,7 @@ fn wrapped(call: impl FnOnce() -> u32) -> u32 {
 }
 
 unsafe extern "C" fn init(
-    _context: *const v2::InitContext,
+    context: *const v2::InitContext,
     userdata: *mut *mut c_void,
     _error: *mut ErrorBuffer,
 ) -> u32 {
@@ -31,7 +31,18 @@ unsafe extern "C" fn init(
         if userdata.is_null() {
             return FAILED;
         }
-        unsafe { *userdata = Box::into_raw(Box::new(0_u64)).cast() };
+        let limit = if VARIANT == "config" {
+            if context.is_null() { return FAILED; }
+            let context = unsafe { &*context };
+            if context.config.data.is_null() || context.config.len > 65536 { return FAILED; }
+            let view = unsafe { std::slice::from_raw_parts(context.config.data, context.config.len as usize) };
+            if view != br#"{"labels":["parameter"],"limit":128,"token":"M01_OWN_SECRET"}"# { return FAILED; }
+            if let Some(path) = std::env::var_os("CM_CONFIG_OBSERVATION") {
+                if std::fs::write(path, br#"{"owner_view_only":true,"four_layer_result":true}"#).is_err() { return FAILED; }
+            }
+            128_u64
+        } else { 256_u64 };
+        unsafe { *userdata = Box::into_raw(Box::new(limit)).cast() };
         if VARIANT == "init-fail" { FAILED } else { OK }
     })
 }
@@ -86,7 +97,7 @@ unsafe extern "C" fn limit(
         }
         if input.original_limit > 0 {
             output.decision = v21::LIMIT;
-            output.limit = input.original_limit.min(256);
+            output.limit = input.original_limit.min(unsafe { *userdata.cast::<u64>() });
         }
         match VARIANT {
             "callback-fail" => return FAILED,

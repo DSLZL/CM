@@ -1,7 +1,7 @@
 diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
 --- a/codex-rs/Cargo.lock
 +++ b/codex-rs/Cargo.lock
-@@ -1898,8 +1898,25 @@
+@@ -1898,8 +1898,27 @@
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
  
@@ -18,10 +18,12 @@ diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
 + "cm-abi",
 + "libc",
 + "libloading",
++ "semver",
 + "serde",
 + "serde_json",
 + "sha2 0.10.9",
 + "toml 0.9.11+spec-1.1.0",
++ "zip",
 +]
 +
 +[[package]]
@@ -29,7 +31,7 @@ diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
  version = "0.3.0"
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
-@@ -2531,8 +2548,9 @@
+@@ -2531,8 +2550,9 @@
   "assert_matches",
   "chrono",
   "clap",
@@ -41,7 +43,7 @@ diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
   "codex-app-server",
   "codex-app-server-client",
   "codex-app-server-daemon",
-@@ -2955,9 +2973,10 @@
+@@ -2955,9 +2975,10 @@
   "assert_matches",
   "async-channel",
   "base64 0.22.1",
@@ -55,7 +57,7 @@ diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
   "codex-agent-message-board-client",
   "codex-agent-message-board-extension",
   "codex-agent-roles",
-@@ -3189,14 +3208,15 @@
+@@ -3189,14 +3210,15 @@
   "pretty_assertions",
  ]
  

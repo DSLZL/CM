@@ -11,7 +11,24 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
  mod daemon_install;
  mod daemon_telemetry;
  #[cfg(any(target_os = "macos", target_os = "windows"))]
-@@ -241,7 +242,10 @@
+@@ -131,6 +132,14 @@
+     #[clap(flatten)]
+     pub config_overrides: CliConfigOverrides,
+-
++
++    /// Select a CM configuration profile from cm-runtime.toml.
++    #[arg(long, global = true, value_name = "NAME")]
++    cm_profile: Option<String>,
++
++    /// Override one CM Mod configuration field with a TOML value.
++    #[arg(long, global = true, value_name = "MOD.FIELD=TOML")]
++    cm_set: Vec<String>,
++
+     #[clap(flatten)]
+     pub feature_toggles: FeatureToggles,
+-
++
+@@ -241,7 +250,13 @@
      ExecServer(ExecServerCommand),
  
      /// Inspect feature flags.
@@ -20,10 +37,79 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 +
 +    /// Print this CM Host's embedded build identity as JSON.
 +    CmHostIdentity,
++
++    /// Inspect precompiled CM Mods without executing them.
++    Cm(CmCli),
  }
  
  #[derive(Debug, Parser)]
-@@ -1096,7 +1100,28 @@
+@@ -1002,5 +1017,22 @@
+-
++
+ #[derive(Debug, Parser)]
++struct CmCli {
++    #[command(subcommand)]
++    command: CmCommand,
++}
++
++#[derive(Debug, Parser)]
++enum CmCommand {
++    List,
++    Plan,
++    Doctor,
++    Lock {
++        #[arg(long)]
++        check: bool,
++    },
++}
++
++#[derive(Debug, Parser)]
+ struct FeaturesCli {
+     #[command(subcommand)]
+     sub: FeaturesSubcommand,
+@@ -1050,6 +1082,8 @@
+         config_overrides: mut root_config_overrides,
++        cm_profile,
++        cm_set,
+         feature_toggles,
+         remote,
+         mut interactive,
+         subcommand,
+     } = MultitoolCli::parse();
+@@ -1090,6 +1124,32 @@
+     let root_strict_config = interactive.strict_config;
++    let cm_options = cm_runtime::config::Options {
++        profile: cm_profile,
++        overrides: cm_set,
++    };
++    if let Some(Subcommand::Cm(command)) = &subcommand {
++        reject_remote_mode_for_subcommand(
++            root_remote.as_deref(),
++            root_remote_auth_token_env.as_deref(),
++            "cm",
++        )?;
++        let command = match &command.command {
++            CmCommand::List => cm_runtime::metadata::Command::List,
++            CmCommand::Plan => cm_runtime::metadata::Command::Plan,
++            CmCommand::Doctor => cm_runtime::metadata::Command::Doctor,
++            CmCommand::Lock { check: false } => cm_runtime::metadata::Command::Lock,
++            CmCommand::Lock { check: true } => cm_runtime::metadata::Command::CheckLock,
++        };
++        match cm_runtime::metadata::run(&find_codex_home()?, command, &cm_options) {
++            Ok(value) => println!("{}", serde_json::to_string(&value)?),
++            Err(error) => {
++                eprintln!("{}", serde_json::to_string(&error)?);
++                anyhow::bail!("CM metadata validation failed");
++            }
++        }
++        return Ok(());
++    }
+     interactive
+         .shared
+         .take_auto_review_config_overrides(&mut root_config_overrides);
+     reject_root_strict_config_for_subcommand(root_strict_config, &subcommand)?;
+     if let Some(subcommand) = subcommand.as_ref() {
+@@ -1096,7 +1156,28 @@
          profile_v2_for_subcommand(&interactive, subcommand)?;
      }
  
@@ -44,7 +130,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 +        cm_runtime::package::preflight()?;
 +        let embedded_exec = matches!(&subcommand, Some(Subcommand::Exec(command)) if command.command.is_none())
 +            && root_remote.is_none();
-+        Some(cm_runtime::initialize(&find_codex_home()?, embedded_exec)?)
++        Some(cm_runtime::initialize_options(&find_codex_home()?, embedded_exec, &cm_options)?)
 +    } else {
 +        None
 +    };
@@ -53,11 +139,12 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
      match subcommand {
          None | Some(Subcommand::Agents(_)) => {
              prepend_config_flags(
-@@ -1886,7 +1911,15 @@
+@@ -1886,7 +1967,16 @@
              cmd.strict_config |= root_strict_config;
              cmd.run(&arg0_paths, &root_config_overrides).await?;
          }
 -        Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
++        Some(Subcommand::Cm(_)) => unreachable!("CM metadata was dispatched before native initialization"),
 +        Some(Subcommand::CmHostIdentity) => {
 +            reject_remote_mode_for_subcommand(
 +                root_remote.as_deref(),
@@ -70,13 +157,14 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
              FeaturesSubcommand::List => {
                  reject_remote_mode_for_subcommand(
                      root_remote.as_deref(),
-@@ -2352,7 +2385,8 @@
+@@ -2352,7 +2442,9 @@
          Some(Subcommand::Apply(_)) => Some("apply"),
          Some(Subcommand::ResponsesApiProxy(_)) => Some("responses-api-proxy"),
          Some(Subcommand::StdioToUds(_)) => Some("stdio-to-uds"),
 -        Some(Subcommand::Features(_)) => Some("features"),
 +        Some(Subcommand::Features(_)) => Some("features"),
 +        Some(Subcommand::CmHostIdentity) => Some("cm-host-identity"),
++        Some(Subcommand::Cm(_)) => Some("cm"),
          Some(Subcommand::TcpTunnel(_)) => Some("tcp-tunnel"),
      }
  }

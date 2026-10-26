@@ -135,3 +135,11 @@ Worker logs retain sccache statistics, restore/save observations and final accep
 ## Verification boundary
 
 P04 remains not_run until the exact published source/worker revisions complete current-source P01/P02/P03 regressions, all six consumer checks and evidence review. Failed/partial runs cannot accept a newer source revision. A package or loader pass cannot establish whole-product or release readiness. No local build, test, lint or simulated CI is permitted. Publication and dispatch follow the current explicit session authorization; credentials and product Releases require separate concrete authorization.
+
+## CM-M01 candidate acceptance
+
+The current config maps CM-M01 through fixtures/mods/binary-manifest-cases/acceptance.sh and ci/scripts/mod_manifest.py. The producer retains current P01/P02/P03 reports, freezes H, independently builds the configuration-aware author variant, then publishes binary format 3 package inputs and an external archive receipt. Source/build.rs attachments are exercised only in the producer metadata audit, outside the strict consumer handoff.
+
+The cache-none consumer first runs the complete P04 matrix, missing-library rejection and recovery. It then runs the actual packaged CLI metadata/configuration/lock matrix under the same outer observer. Root acceptance has the six CM-M01 IDs; p04-baseline-acceptance.json is a separate current-source regression. P04 reports are not relabeled as M01. Worker policy explicitly requires the consumer for both CM-P04 and CM-M01; the exact producer input, consumer upload and successful jobs remain bound in the existing receipt.
+
+Public contracts and usage are in docs/mod-manifest.md and schemas/. Product changes enter the Host overlay/identity; the standalone M01 driver, fixtures, docs and public descriptive schemas do not. A product change needs a new H; later driver-only corrections can reuse the verified exact Host cache. No M01 check is accepted before the published dual revisions run and their reports, raw observations and API receipts are reviewed. The current candidate has not been tested locally; all product gates execute in the independent Linux x64 Actions repository.

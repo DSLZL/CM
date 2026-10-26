@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CM runtime selection and namespaced configuration",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "format_version": {
+          "const": 1
+        },
+        "enabled": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9._-]{1,128}$"
+          },
+          "maxItems": 32,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "format_version",
+        "enabled"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "format_version": {
+          "const": 2
+        },
+        "enabled": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9._-]{1,128}$"
+          },
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "profile": {
+          "type": "string",
+          "pattern": "^[a-z0-9._-]{1,128}$"
+        },
+        "mods": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z0-9._-]{1,128}$"
+          },
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        "profiles": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z0-9._-]{1,128}$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mods": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9._-]{1,128}$"
+                },
+                "additionalProperties": {
+                  "type": "object"
+                }
+              }
+            },
+            "required": []
+          }
+        }
+      },
+      "required": [
+        "format_version",
+        "enabled"
+      ]
+    }
+  ],
+  "description": "64 KiB input, depth 16. Defaults, user, selected CM profile and current --cm-set parameters merge objects recursively; arrays/scalars replace. Each package schema checks provided fields/types; required applies after merging enabled Mods. No TOML datetime or nonfinite numbers."
+}

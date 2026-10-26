@@ -1,0 +1,335 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CM mod.lock v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "domain": {
+      "const": "cm.mod-lock.v1"
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "domain": {
+          "const": "cm.runtime-plan.v1"
+        },
+        "host": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "build_id": {
+              "type": "string"
+            },
+            "executable_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "target": {
+              "const": "x86_64-unknown-linux-gnu"
+            },
+            "api_version": {
+              "type": "string"
+            },
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "abis": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "build_id",
+            "executable_sha256",
+            "target",
+            "api_version",
+            "capabilities",
+            "abis"
+          ]
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "present": {
+              "type": "boolean"
+            },
+            "sha256": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mods": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "pattern": "^[a-z0-9._-]{1,128}$"
+              },
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "schema_sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "defaults_sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "sources": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "layer": {
+                          "enum": [
+                            "defaults",
+                            "user",
+                            "profile",
+                            "parameters"
+                          ]
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "fields": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "layer",
+                        "sha256",
+                        "fields"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "sha256",
+                  "schema_sha256",
+                  "defaults_sha256",
+                  "sources"
+                ]
+              }
+            }
+          },
+          "required": [
+            "present",
+            "sha256",
+            "mods"
+          ]
+        },
+        "candidate_manifests": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z0-9._-]{1,128}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "candidate_contents": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z0-9._-]{1,128}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "mods": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z0-9._-]{1,128}$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "type": "string"
+              },
+              "manifest_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "payload_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "payload_size": {
+                "type": "integer"
+              },
+              "abi": {
+                "type": "string"
+              },
+              "content_tree_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "package_format": {
+                "enum": [
+                  "directory",
+                  "cm.content.v1"
+                ]
+              },
+              "format_version": {
+                "enum": [
+                  1,
+                  2,
+                  3
+                ]
+              },
+              "dependencies": {
+                "type": "array",
+                "items": {
+                  "$ref": "mod.schema.json#/$defs/dependency"
+                }
+              },
+              "metadata": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Binary/compatibility/provenance/state declarations and configuration digests only."
+              },
+              "contributions": {
+                "type": "array",
+                "items": {
+                  "$ref": "mod.schema.json#/$defs/contribution"
+                }
+              },
+              "resources": {
+                "type": "array",
+                "items": {
+                  "$ref": "mod.schema.json#/$defs/resource"
+                }
+              }
+            },
+            "required": [
+              "version",
+              "manifest_sha256",
+              "payload_sha256",
+              "payload_size",
+              "abi",
+              "content_tree_sha256",
+              "package_format",
+              "format_version",
+              "dependencies",
+              "metadata",
+              "contributions",
+              "resources"
+            ]
+          }
+        },
+        "dependency_edges": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "initialization_order": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9._-]{1,128}$"
+          }
+        },
+        "hook_edges": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "phases": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "exclusive": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "domain",
+        "host",
+        "config",
+        "candidate_manifests",
+        "candidate_contents",
+        "mods",
+        "dependency_edges",
+        "initialization_order",
+        "hook_edges",
+        "phases",
+        "exclusive"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "domain",
+    "plan"
+  ],
+  "description": "Exact canonical sorted JSON must match fresh prepare. This record cannot create an executable PreparedPlan. Unknown/duplicate keys, future domain/schema or changed inputs fail explicit checking. Compression/slot/path/mtime/inode are not identity inputs; archive SHA belongs in an external receipt."
+}

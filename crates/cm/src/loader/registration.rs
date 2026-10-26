@@ -44,10 +44,9 @@ impl RegistrationSet {
     pub(crate) fn load(
         plan: RuntimePlan,
         modules: Vec<Preflighted>,
-        config: Vec<u8>,
+        mut config: BTreeMap<String, Vec<u8>>,
     ) -> Result<Self, LoadError> {
         let digest = plan.sha256();
-        let config = Box::leak(config.into_boxed_slice());
         let mut staged = Self {
             plan,
             digest,
@@ -56,12 +55,13 @@ impl RegistrationSet {
         };
         for prepared in modules {
             let owner = prepared.manifest.id.clone();
+            let config = Box::leak(config.remove(&owner).unwrap_or_default().into_boxed_slice());
             let hooks = prepared.manifest.hooks();
             event(
                 "init-start",
                 json!({"mod": owner, "plan_sha256": staged.digest}),
             );
-            let loaded = if prepared.manifest.format_version == 1 {
+            let loaded = if prepared.manifest.abi_major == 1 {
                 NativeMod::load(prepared).map(Module::Legacy)
             } else {
                 CompositionMod::load(prepared, config, &staged.plan.host.build_id)

@@ -6,7 +6,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use cm_abi::v2;
-use serde::Deserialize;
 use serde::Serialize;
 
 use crate::LoadError;
@@ -32,7 +31,7 @@ pub struct HostIdentity {
 }
 
 impl HostIdentity {
-    fn read(executable: &Path) -> Result<Self, LoadError> {
+    pub(crate) fn read(executable: &Path) -> Result<Self, LoadError> {
         let value: serde_json::Value = serde_json::from_str(IDENTITY)
             .map_err(|e| LoadError::input("host_identity", "", &e.to_string()))?;
         let field = |name: &str| -> Result<String, LoadError> {
@@ -61,6 +60,7 @@ impl HostIdentity {
 pub struct ConfigIdentity {
     pub present: bool,
     pub sha256: Option<String>,
+    pub mods: BTreeMap<String, crate::config::Identity>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -72,6 +72,9 @@ pub struct PlannedMod {
     pub abi: String,
     pub content_tree_sha256: String,
     pub package_format: String,
+    pub format_version: u32,
+    pub(crate) dependencies: Vec<loader::Dependency>,
+    pub metadata: Option<serde_json::Value>,
     pub(crate) contributions: Vec<Contribution>,
     pub(crate) resources: Vec<loader::Resource>,
 }
@@ -84,6 +87,7 @@ pub struct RuntimePlan {
     pub host: HostIdentity,
     pub config: ConfigIdentity,
     pub candidate_manifests: BTreeMap<String, String>,
+    pub candidate_contents: BTreeMap<String, String>,
     pub mods: BTreeMap<String, PlannedMod>,
     pub dependency_edges: Vec<(String, String)>,
     pub initialization_order: Vec<String>,
@@ -99,20 +103,14 @@ impl RuntimePlan {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Selection {
-    format_version: u32,
-    enabled: Vec<String>,
-}
-
 /// Opaque, process-owned inputs. A serialized RuntimePlan cannot construct this.
 pub struct PreparedPlan {
     home: PathBuf,
     inventory: Inventory,
     pins: Vec<(String, InputPin)>,
     config_present: bool,
-    config: Vec<u8>,
+    config: BTreeMap<String, Vec<u8>>,
+    trees: Vec<(PathBuf, BTreeSet<String>)>,
     plan: RuntimePlan,
     modules: BTreeMap<String, Preflighted>,
 }
@@ -122,13 +120,18 @@ impl PreparedPlan {
         &self.plan
     }
 
-    pub(crate) fn commit(self) -> Result<(RuntimePlan, Vec<Preflighted>, Vec<u8>), LoadError> {
+    pub(crate) fn revalidate(&self) -> Result<(), LoadError> {
         let drift = |owner: &str, text: &str| LoadError::input("input_drift", owner, text);
         if loader::inventory(&self.home).map_err(|e| drift("", &e))? != self.inventory {
             return Err(drift("", "candidate inventory changed"));
         }
         for (owner, pin) in &self.pins {
             pin.revalidate().map_err(|e| drift(owner, &e))?;
+        }
+        for (package, entries) in &self.trees {
+            if loader::directory_entries(package).map_err(|e| drift("", &e))? != *entries {
+                return Err(drift("", "package directory entries changed"));
+            }
         }
         if !self.config_present
             && exists(&self.home.join("cm-runtime.toml")).map_err(|e| drift("", &e))?
@@ -140,6 +143,11 @@ impl PreparedPlan {
         if current != self.plan.host {
             return Err(drift("", "current Host differs from the planned Host"));
         }
+        Ok(())
+    }
+
+    pub(crate) fn commit(self) -> Result<(RuntimePlan, Vec<Preflighted>, BTreeMap<String, Vec<u8>>), LoadError> {
+        self.revalidate()?;
         // Input linearization: only owned snapshots are consumed after this point.
         let mut modules = self.modules;
         let ordered = self
@@ -235,7 +243,7 @@ fn phase(kind: &Kind) -> &'static str {
 }
 
 fn resolve(
-    selected: &BTreeMap<String, (Manifest, InputPin)>,
+    selected: &BTreeMap<String, (Manifest, String)>,
     host: HostIdentity,
     config: ConfigIdentity,
     candidate_manifests: BTreeMap<String, String>,
@@ -247,8 +255,11 @@ fn resolve(
     let mut payload_budget = 0_u64;
     let mut resource_budget = 0_u64;
     let mut resource_count = 0;
-    for (id, (manifest, pin)) in selected {
+    for (id, (manifest, manifest_sha256)) in selected {
         loader::check_manifest(manifest).map_err(|e| failure("manifest_contract", id, None, &e))?;
+        if let Some(binary) = &manifest.binary_manifest {
+            binary.compatible(&host).map_err(|e| failure("compatibility", id, None, &e))?;
+        }
         if reserved(id) {
             return Err(failure("reserved_name", id, None, "reserved Mod namespace"));
         }
@@ -266,12 +277,14 @@ fn resolve(
         }
         let mut seen = BTreeSet::new();
         for dependency in &manifest.dependencies {
-            if !loader::identifier(&dependency.id) || !loader::version(&dependency.version) {
+            if !loader::identifier(&dependency.id) || dependency.version.len() > 128
+                || (manifest.format_version < 3 && (!loader::version(&dependency.version) || dependency.optional))
+                || (manifest.format_version == 3 && semver::VersionReq::parse(&dependency.version).is_err()) {
                 return Err(failure(
                     "unsupported_version",
                     id,
                     None,
-                    "dependency requires an exact version",
+                    "dependencies.version: invalid version constraint",
                 ));
             }
             if dependency.id == *id || !seen.insert(dependency.id.clone()) {
@@ -282,15 +295,20 @@ fn resolve(
                     "self or duplicate dependency",
                 ));
             }
-            let other = selected.get(&dependency.id).ok_or_else(|| {
-                failure(
+            let Some(other) = selected.get(&dependency.id) else {
+                if dependency.optional { continue; }
+                return Err(failure(
                     "missing_dependency",
                     id,
                     None,
                     &format!("missing {}", dependency.id),
-                )
-            })?;
-            if other.0.version != dependency.version {
+                ));
+            };
+            let matches = if manifest.format_version == 3 {
+                let version = semver::Version::parse(&other.0.version).map_err(|_| failure("dependency_version", id, None, "dependencies: selected version is not SemVer"))?;
+                semver::VersionReq::parse(&dependency.version).expect("checked range").matches(&version)
+            } else { other.0.version == dependency.version };
+            if !matches {
                 return Err(failure(
                     "dependency_version",
                     id,
@@ -352,7 +370,7 @@ fn resolve(
         let mut contributions = manifest.hooks();
         contributions.sort_by(|a, b| a.id.cmp(&b.id));
         for contribution in &mut contributions {
-            if manifest.format_version == 2
+            if manifest.abi_major == 2
                 && (!loader::identifier(&contribution.id)
                     || reserved(&contribution.id)
                     || contribution.kind == Kind::LegacyFilter)
@@ -364,7 +382,7 @@ fn resolve(
                     "invalid/reserved contribution",
                 ));
             }
-            let capability = if manifest.format_version == 1 {
+            let capability = if manifest.abi_major == 1 {
                 cm_abi::CAPABILITY
             } else {
                 v2::CAPABILITY
@@ -424,19 +442,22 @@ fn resolve(
             }
         }
         let content_tree_sha256 = loader::hash(
-            &serde_json::to_vec(&(&pin.sha256, &manifest.payload_sha256, &resources))
+            &serde_json::to_vec(&(manifest_sha256, &manifest.payload_sha256, &resources))
                 .expect("content tree serializes"),
         );
         mods.insert(
             id.clone(),
             PlannedMod {
                 version: manifest.version.clone(),
-                manifest_sha256: pin.sha256.clone(),
+                manifest_sha256: manifest_sha256.clone(),
                 payload_sha256: manifest.payload_sha256.clone(),
                 payload_size: manifest.payload_size,
                 abi: format!("{}.{}", manifest.abi_major, manifest.abi_minor),
                 content_tree_sha256,
                 package_format: "directory".into(),
+                format_version: manifest.format_version,
+                dependencies: manifest.dependencies.clone(),
+                metadata: manifest.binary_manifest.as_ref().map(crate::manifest::BinaryManifest::summary),
                 contributions,
                 resources,
             },
@@ -545,6 +566,7 @@ fn resolve(
         host,
         config,
         candidate_manifests,
+        candidate_contents: BTreeMap::new(),
         mods,
         dependency_edges: dependency_edges.into_iter().collect(),
         initialization_order,
@@ -555,29 +577,46 @@ fn resolve(
 }
 
 pub fn prepare(home: &Path) -> Result<PreparedPlan, LoadError> {
-    prepare_for_executable(home, Path::new("/proc/self/exe"))
+    prepare_options(home, &crate::config::Options::default())
+}
+
+pub fn prepare_options(home: &Path, options: &crate::config::Options) -> Result<PreparedPlan, LoadError> {
+    prepare_inputs(home, Path::new("/proc/self/exe"), options)
 }
 
 /// Probe-only counterfactual identity; commit still requires the current executable.
 pub fn prepare_for_executable(home: &Path, executable: &Path) -> Result<PreparedPlan, LoadError> {
+    prepare_inputs(home, executable, &crate::config::Options::default())
+}
+
+fn prepare_inputs(home: &Path, executable: &Path, options: &crate::config::Options) -> Result<PreparedPlan, LoadError> {
     let inventory = loader::inventory(home).map_err(|e| failure("inventory", "", None, &e))?;
     let mut candidates = BTreeMap::new();
     let mut pins = Vec::new();
+    let mut trees = Vec::new();
+    let mut snapshot_bytes = 0_usize;
     for directory in inventory.packages.keys() {
         let package = home.join("mods").join(directory);
-        let (manifest, pin) = loader::read_manifest(&package)
-            .map_err(|e| failure("manifest_parse", directory, None, &e))?;
+        let candidate = loader::candidate(&package).map_err(|mut error| {
+            if error.mod_id.is_none() { error.mod_id = Some(directory.clone()); }
+            error
+        })?;
+        let manifest = &candidate.manifest;
+        snapshot_bytes += candidate.snapshot_size();
+        if snapshot_bytes > 256 * 1024 * 1024 { return Err(failure("budget", &manifest.id, None, "candidate snapshot byte limit")); }
         if !loader::identifier(&manifest.id) {
             return Err(failure("manifest_id", &manifest.id, None, "invalid Mod ID"));
         }
-        pins.push((manifest.id.clone(), pin.clone()));
+        pins.extend(candidate.pins.iter().cloned().map(|pin| (manifest.id.clone(), pin)));
+        if let Some(tree) = &candidate.tree { trees.push((package, tree.clone())); }
+        let id = manifest.id.clone();
         if candidates
-            .insert(manifest.id.clone(), (package, manifest, pin))
+            .insert(id.clone(), candidate)
             .is_some()
         {
             return Err(failure(
                 "duplicate_mod",
-                directory,
+                &id,
                 None,
                 "duplicate Mod ID",
             ));
@@ -588,51 +627,37 @@ pub fn prepare_for_executable(home: &Path, executable: &Path) -> Result<Prepared
     let (config, selection, config_sha) = if config_present {
         let (bytes, pin) = loader::read_input(&config_path, loader::MAX_MANIFEST)
             .map_err(|e| failure("selection", "", None, &e))?;
-        let selection: Selection = toml::from_str(
-            std::str::from_utf8(&bytes)
-                .map_err(|e| failure("selection", "", None, &e.to_string()))?,
-        )
-        .map_err(|e| failure("selection", "", None, &e.to_string()))?;
-        if selection.format_version != 1 {
-            return Err(failure(
-                "selection",
-                "",
-                None,
-                "unsupported selection format",
-            ));
-        }
-        let mut enabled = BTreeSet::new();
-        for id in selection.enabled {
-            if !candidates.contains_key(&id) || !enabled.insert(id.clone()) {
-                return Err(failure(
-                    "selection",
-                    &id,
-                    None,
-                    "unknown or duplicate selected Mod",
-                ));
-            }
-        }
+        let selection = crate::config::Selection::parse(&bytes).map_err(|e| failure("selection", "", None, &e))?;
         let sha = Some(pin.sha256.clone());
         pins.push((String::new(), pin));
-        (bytes, enabled, sha)
+        (bytes, selection, sha)
     } else {
-        (Vec::new(), candidates.keys().cloned().collect(), None)
+        (Vec::new(), crate::config::absent(candidates.keys().cloned().collect()), None)
     };
+    let mut enabled = BTreeSet::new();
+    for id in &selection.enabled {
+        if !candidates.contains_key(id) || !enabled.insert(id.clone()) {
+            return Err(failure("selection", id, None, "unknown or duplicate selected Mod"));
+        }
+    }
+    let manifests: BTreeMap<_, _> = candidates.iter().map(|(id, candidate)| (id.clone(), candidate.manifest.clone())).collect();
+    let (config_values, config_identities) = selection.resolve(options, &manifests, &config)?;
     let selected: BTreeMap<_, _> = candidates
         .iter()
-        .filter(|(id, _)| selection.contains(*id))
-        .map(|(id, (_, manifest, pin))| (id.clone(), (manifest.clone(), pin.clone())))
+        .filter(|(id, _)| enabled.contains(*id))
+        .map(|(id, candidate)| (id.clone(), (candidate.manifest.clone(), candidate.manifest_sha256.clone())))
         .collect();
     let candidate_manifests = candidates
         .iter()
-        .map(|(id, (_, _, pin))| (id.clone(), pin.sha256.clone()))
+        .map(|(id, candidate)| (id.clone(), candidate.manifest_sha256.clone()))
         .collect();
-    let plan = resolve(
+    let mut plan = resolve(
         &selected,
         HostIdentity::read(executable)?,
         ConfigIdentity {
             present: config_present,
             sha256: config_sha,
+            mods: config_identities,
         },
         candidate_manifests,
     )
@@ -643,12 +668,20 @@ pub fn prepare_for_executable(home: &Path, executable: &Path) -> Result<Prepared
             error
         }
     })?;
+    plan.candidate_contents = candidates.iter().map(|(id, candidate)| (id.clone(), candidate.content_sha256.clone())).collect();
+    for (id, module) in &mut plan.mods {
+        if module.format_version == 3 {
+            module.content_tree_sha256 = candidates[id].content_sha256.clone();
+            module.package_format = "cm.content.v1".into();
+        }
+    }
     let mut modules = BTreeMap::new();
     for id in &plan.initialization_order {
-        let (package, manifest, _) = candidates.remove(id).unwrap();
+        let candidate = candidates.remove(id).unwrap();
+        let hooks = candidate.manifest.hooks();
         let (module, inputs) =
-            loader::prepare_package(&package, manifest.clone()).map_err(|e| {
-                resource_error(failure("package_input", id, None, &e), &manifest.hooks())
+            candidate.prepare().map_err(|e| {
+                resource_error(failure("package_input", id, None, &e), &hooks)
             })?;
         pins.extend(inputs.into_iter().map(|pin| (id.clone(), pin)));
         modules.insert(id.clone(), module);
@@ -658,7 +691,8 @@ pub fn prepare_for_executable(home: &Path, executable: &Path) -> Result<Prepared
         inventory,
         pins,
         config_present,
-        config,
+        config: config_values,
+        trees,
         plan,
         modules,
     })

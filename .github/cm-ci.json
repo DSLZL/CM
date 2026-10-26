@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "configured": true,
-  "task_id": "CM-P04",
+  "task_id": "CM-M01",
   "required_checks": [
-    "CM-P04-AC01",
-    "CM-P04-AC02",
-    "CM-P04-AC03",
-    "CM-P04-AC04",
-    "CM-P04-AC05",
-    "CM-P04-AC06"
+    "CM-M01-AC01",
+    "CM-M01-AC02",
+    "CM-M01-AC03",
+    "CM-M01-AC04",
+    "CM-M01-AC05",
+    "CM-M01-AC06"
   ],
   "target": "x86_64-unknown-linux-gnu",
   "rust_toolchain": "1.95.0",
@@ -36,7 +36,7 @@
       "no_default_features": false
     }
   ],
-  "acceptance_script": "fixtures/runtime-consumer/acceptance.sh",
+  "acceptance_script": "fixtures/mods/binary-manifest-cases/acceptance.sh",
   "cargo_config_files": [
     "adapters/codex-e4568a3/host/codex-rs/.cargo/config.toml"
   ],
@@ -63,7 +63,11 @@
     "crates/cm-abi/src/v21.rs",
     "crates/cm-abi/include/cm_mod_v21.h",
     "crates/cm/src/output_limit.rs",
-    "crates/cm/src/package.rs"
+    "crates/cm/src/package.rs",
+    "crates/cm/src/config.rs",
+    "crates/cm/src/manifest.rs",
+    "crates/cm/src/metadata.rs",
+    "crates/cm/src/mod_lock.rs"
   ],
   "generated_native_identity_files": [
     "adapters/codex-e4568a3/inputs/native.json"

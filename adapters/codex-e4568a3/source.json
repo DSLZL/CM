@@ -8,15 +8,15 @@
     "codex-rs/Cargo.lock": "319fbf5f0e3f1217f09e3bdeeae5bbd6b9da208e30495d7f5eb3102a76474812",
     "codex-rs/rust-toolchain.toml": "570656042681cfd8795403a455baf9a33035331a07db0645e866bbcea89a3d64"
   },
-  "host_release_id": "cm-host-0.3.0-p04",
-  "host_api_version": "0.3.0",
+  "host_release_id": "cm-host-0.4.0-m01",
+  "host_api_version": "0.4.0",
   "capabilities": [
     "core.tool_parallel_eligibility.v1",
     "core.tool_parallel_eligibility.compose.v1",
     "core.exec_output_limit.v1"
   ],
   "protocol_source": "codex-rs/protocol",
-  "stage": "runtime-consumer-output-limit",
+  "stage": "binary-manifest-lock-config",
   "official_asset": {
     "url": "https://github.com/openai/codex/releases/download/rust-v0.163.0/codex-x86_64-unknown-linux-musl.tar.gz",
     "sha256": "beb339e8ecd9ba057a6bb2dc81ad8ca474812edfbf0fc5056ca818797648dde4",
@@ -42,7 +42,11 @@
     "crates/cm-abi/src/v21.rs": "codex-rs/cm-abi/src/v21.rs",
     "crates/cm-abi/include/cm_mod_v21.h": "codex-rs/cm-abi/include/cm_mod_v21.h",
     "crates/cm/src/output_limit.rs": "codex-rs/cm/src/output_limit.rs",
-    "crates/cm/src/package.rs": "codex-rs/cm/src/package.rs"
+    "crates/cm/src/package.rs": "codex-rs/cm/src/package.rs",
+    "crates/cm/src/manifest.rs": "codex-rs/cm/src/manifest.rs",
+    "crates/cm/src/config.rs": "codex-rs/cm/src/config.rs",
+    "crates/cm/src/metadata.rs": "codex-rs/cm/src/metadata.rs",
+    "crates/cm/src/mod_lock.rs": "codex-rs/cm/src/mod_lock.rs"
   },
   "patches": [
     "cli.patch",

@@ -130,7 +130,12 @@ unsafe extern "C" fn init(
             );
         }
         if context.config.len != 0 {
-            assert!(unsafe { view(context.config) }.contains("format_version"));
+            let config = unsafe { view(context.config) };
+            assert!(config.contains("format_version"));
+            assert!(!config.contains("M01_") && !config.contains("profiles") && !config.contains("token"));
+            if let Some(path) = std::env::var_os("CM_LEGACY_CONFIG_OBSERVATION") {
+                std::fs::write(path, br#"{"selection_projection_only":true}"#).unwrap();
+            }
         }
         unsafe { *userdata = Box::into_raw(Box::new(0_u64)).cast() };
         if VARIANT == "init-fail" { FAILED } else { OK }
