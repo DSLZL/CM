@@ -369,6 +369,9 @@ def self_check():
     observer_text = runtime_observer_source(composition)
     observer = types.ModuleType("observer")
     exec(observer_text, observer.__dict__)
+    observer.audit_network([
+        '1 socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC|SOCK_NONBLOCK, 0, [7<UNIX-STREAM:[161700->161701]>, 8<UNIX-STREAM:[161701->161700]>]) = 0'
+    ], Path("/metadata"), ())
     for secret in mod_manifest.CANARIES:
         assert secret not in redact_trace('1 execve("/codex", ["--cm-set", "' + secret + '"], []) = 0\n', observer)
     assert {"host", "native_mod", "linux_ci"}.isdisjoint(observer.__dict__)

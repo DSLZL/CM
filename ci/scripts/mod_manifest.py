@@ -547,10 +547,12 @@ def producer_audit(inputs, package, destination):
                 calls = re.findall(r'execve\("([^"\n]+)"', text)
                 assert all(Path(p).resolve() == (package / "bin/codex").resolve() for p in calls), calls
                 assert "execveat(" not in text
-                assert not re.search(r'\b(?:connect|sendto|socketpair)\(', text), ("Metadata socket operation; see sanitized trace", path.name)
+                assert not re.search(r'\b(?:connect|sendto)\(', text), ("Metadata network operation; see sanitized trace", path.name)
+                pairs = [path.suffix[1:] + " " + line for line in text.splitlines() if line.startswith("socketpair(")]
+                composition.audit_network(pairs, work, ())
                 assert not re.search(r'mmap\(.*PROT_EXEC.*(?:/mods/|memfd:cm)', text)
                 assert "m01-state-sentinel.json" not in text
-                current.append({"file": path.name, "sha256": sha(target), "exec_count": len(calls)})
+                current.append({"file": path.name, "sha256": sha(target), "exec_count": len(calls), "anonymous_unix_socketpairs": len(pairs)})
             assert current and sum(item["exec_count"] for item in current) == 1
             traces.extend(current)
             commands.append({"container": kind, "command": action, "return_code": result.returncode,
