@@ -132,7 +132,11 @@ unsafe extern "C" fn init(
         if context.config.len != 0 {
             let config = unsafe { view(context.config) };
             assert!(config.contains("format_version"));
-            assert!(!config.contains("M01_") && !config.contains("profiles") && !config.contains("token"));
+            assert!(
+                !config.contains("M01_")
+                    && !config.contains("profiles")
+                    && !config.contains("token")
+            );
             if let Some(path) = std::env::var_os("CM_LEGACY_CONFIG_OBSERVATION") {
                 std::fs::write(path, br#"{"selection_projection_only":true}"#).unwrap();
             }
