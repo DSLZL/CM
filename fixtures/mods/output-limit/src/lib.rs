@@ -32,16 +32,33 @@ unsafe extern "C" fn init(
             return FAILED;
         }
         let limit = if VARIANT == "config" {
-            if context.is_null() { return FAILED; }
+            if context.is_null() {
+                return FAILED;
+            }
             let context = unsafe { &*context };
-            if context.config.data.is_null() || context.config.len > 65536 { return FAILED; }
-            let view = unsafe { std::slice::from_raw_parts(context.config.data, context.config.len as usize) };
-            if view != br#"{"labels":["parameter"],"limit":128,"token":"M01_OWN_SECRET"}"# { return FAILED; }
+            if context.config.data.is_null() || context.config.len > 65536 {
+                return FAILED;
+            }
+            let view = unsafe {
+                std::slice::from_raw_parts(context.config.data, context.config.len as usize)
+            };
+            if view != br#"{"labels":["parameter"],"limit":128,"token":"M01_OWN_SECRET"}"# {
+                return FAILED;
+            }
             if let Some(path) = std::env::var_os("CM_CONFIG_OBSERVATION") {
-                if std::fs::write(path, br#"{"owner_view_only":true,"four_layer_result":true}"#).is_err() { return FAILED; }
+                if std::fs::write(
+                    path,
+                    br#"{"owner_view_only":true,"four_layer_result":true}"#,
+                )
+                .is_err()
+                {
+                    return FAILED;
+                }
             }
             128_u64
-        } else { 256_u64 };
+        } else {
+            256_u64
+        };
         unsafe { *userdata = Box::into_raw(Box::new(limit)).cast() };
         if VARIANT == "init-fail" { FAILED } else { OK }
     })
