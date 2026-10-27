@@ -1,6 +1,7 @@
-# 原生运行时 SDK（ABI 2.2 候选）
+# 原生运行时 SDK（ABI 2.2）
 
-本增量尚待独立 Linux x64 Actions 验收。当前实现面为本地 Embedded
+本增量已通过独立 Linux x64 [M02 验收](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/40514837331)（源码 `825c11e`）。
+当前支持面为本地 Embedded
 `codex exec` 的新建、resume、fork，以及本地 stdio App Server。
 TUI、Remote、WebSocket、daemon 和任意 Core 私有接口不在本次支持面。
 
