@@ -420,12 +420,17 @@ fn resolve(
                     Kind::ContextSection => cm_abi::v22::CONTEXT_SECTION,
                     _ => unreachable!("runtime kind"),
                 };
-                manifest.format_version == 3 && manifest.abi_major == 2 && manifest.abi_minor == 2
+                manifest.format_version == 3
+                    && manifest.abi_major == 2
+                    && manifest.abi_minor == 2
                     && contribution.capability == capability
-                    && manifest.required_capabilities.contains(&contribution.capability)
+                    && manifest
+                        .required_capabilities
+                        .contains(&contribution.capability)
                     && crate::runtime::valid_name(id, &contribution.resource)
                     && contribution.priority == 0
-                    && contribution.order_before.is_empty() && contribution.order_after.is_empty()
+                    && contribution.order_before.is_empty()
+                    && contribution.order_after.is_empty()
             } else if limiter {
                 manifest.abi_major == 2
                     && manifest.abi_minor >= 1
@@ -454,12 +459,26 @@ fn resolve(
             }
             if contribution.kind.runtime() {
                 let name = (contribution.kind.abi(), contribution.resource.clone());
-                if let Some(previous) = runtime_names.insert(name, format!("{id}::{}", contribution.id)) {
-                    return Err(failure("runtime_name_collision", id, Some(&contribution.id),
-                        &format!("runtime name {} claimed by {previous} and {id}::{}", contribution.resource, contribution.id)));
+                if let Some(previous) =
+                    runtime_names.insert(name, format!("{id}::{}", contribution.id))
+                {
+                    return Err(failure(
+                        "runtime_name_collision",
+                        id,
+                        Some(&contribution.id),
+                        &format!(
+                            "runtime name {} claimed by {previous} and {id}::{}",
+                            contribution.resource, contribution.id
+                        ),
+                    ));
                 }
                 if runtime_names.len() > 128 {
-                    return Err(failure("runtime_contribution_limit", id, Some(&contribution.id), "process runtime contribution limit is 128"));
+                    return Err(failure(
+                        "runtime_contribution_limit",
+                        id,
+                        Some(&contribution.id),
+                        "process runtime contribution limit is 128",
+                    ));
                 }
             }
             for references in [
@@ -589,7 +608,16 @@ fn resolve(
         "dependency_cycle",
     )?;
     let mut phases = BTreeMap::new();
-    for name in ["before", "body", "legacy_filter", "after", "output_limit", "lifecycle", "tool", "context_section"] {
+    for name in [
+        "before",
+        "body",
+        "legacy_filter",
+        "after",
+        "output_limit",
+        "lifecycle",
+        "tool",
+        "context_section",
+    ] {
         let nodes: BTreeSet<_> = hooks
             .iter()
             .filter(|(_, (_, hook))| phase(&hook.kind) == name)
@@ -607,7 +635,11 @@ fn resolve(
             order.retain(|key| key != replacement);
             order.push(replacement.clone());
         }
-        if !matches!(name, "output_limit" | "lifecycle" | "tool" | "context_section") || !order.is_empty() {
+        if !matches!(
+            name,
+            "output_limit" | "lifecycle" | "tool" | "context_section"
+        ) || !order.is_empty()
+        {
             phases.insert(name.into(), order);
         }
     }

@@ -50,7 +50,11 @@ pub struct Handle {
 }
 
 impl Handle {
-    pub const NONE: Self = Self { epoch: 0, slot: 0, generation: 0 };
+    pub const NONE: Self = Self {
+        epoch: 0,
+        slot: 0,
+        generation: 0,
+    };
 }
 
 #[repr(C)]
@@ -89,8 +93,10 @@ pub struct Completion {
 }
 
 pub type Complete = unsafe extern "C" fn(Handle, *const Completion, *mut ErrorBuffer) -> u32;
-pub type StateGet = unsafe extern "C" fn(Handle, Handle, Handle, Bytes, *mut Buffer, *mut ErrorBuffer) -> u32;
-pub type StateSet = unsafe extern "C" fn(Handle, Handle, Handle, Bytes, Bytes, *mut ErrorBuffer) -> u32;
+pub type StateGet =
+    unsafe extern "C" fn(Handle, Handle, Handle, Bytes, *mut Buffer, *mut ErrorBuffer) -> u32;
+pub type StateSet =
+    unsafe extern "C" fn(Handle, Handle, Handle, Bytes, Bytes, *mut ErrorBuffer) -> u32;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -148,7 +154,11 @@ pub struct ModApi {
 }
 
 pub const fn header<T>() -> Header {
-    Header { struct_size: size_of::<T>() as u32, major: 2, minor: 2 }
+    Header {
+        struct_size: size_of::<T>() as u32,
+        major: 2,
+        minor: 2,
+    }
 }
 
 #[cfg(test)]

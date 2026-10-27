@@ -205,6 +205,16 @@ def main():
     elif phase == "build-test":
         import host
         reused = host.reused_build(root, logs)
+        if cfg["task_id"] == "CM-M02":
+            format_errors = []
+            for owner in ("lifecycle-audit", "example-tool"):
+                try:
+                    execute(root, logs, "m02-" + owner + "-fmt", ["cargo", "fmt", "--manifest-path",
+                        "fixtures/mods/" + owner + "/Cargo.toml", "--", "--check"])
+                except RuntimeError as error:
+                    format_errors.append(str(error))
+            if format_errors:
+                raise RuntimeError("; ".join(format_errors))
         for unit in cfg["units"]:
             env = dict(os.environ)
             env["CARGO_TARGET_DIR"] = str(Path(os.environ["CARGO_TARGET_DIR"]) / unit["id"])
