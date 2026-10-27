@@ -40,18 +40,16 @@ async fn cm_runtime_native_scopes() {
         environments: Some(Vec::new()), ..StartThreadOptions::new(config.clone())
     }).await.expect("parent");
     let child = manager.start_thread(StartThreadOptions {
-        internal_parent: Some(InternalSessionParent {
-            thread_id: parent.thread_id,
-            auth_manager: Arc::clone(&parent.thread.session.services.auth_manager),
-            agent_control: AgentControlInit::Provided {
-                control: Arc::clone(&parent.thread.session.services.agent_control),
-                runtime: parent.thread.session.services.local_agent_runtime.clone(),
-            },
-            originator: "cm-native-probe".into(), inherited_instructions: None,
-        }),
-        session_source: Some(SessionSource::SubAgent(SubAgentSource::Review)),
+        session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: parent.thread_id,
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        })),
         environments: Some(Vec::new()), ..StartThreadOptions::new(config.clone())
     }).await.expect("inherited local child");
+    assert_eq!(child.thread.config_snapshot().await.parent_thread_id, Some(parent.thread_id));
     assert!(Arc::ptr_eq(&registry, &child.thread.session.services.extensions));
     assert_ne!(parent.thread_id, child.thread_id);
 
