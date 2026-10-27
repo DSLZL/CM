@@ -205,7 +205,7 @@ def main():
     elif phase == "build-test":
         import host
         reused = host.reused_build(root, logs)
-        if cfg["task_id"] == "CM-M02":
+        if cfg.get("task_id") == "CM-M02":
             format_errors = []
             for owner in ("lifecycle-audit", "example-tool"):
                 try:
