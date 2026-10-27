@@ -65,8 +65,9 @@ pub fn record(owner: &str, event: &str, fields: &str) {
             .append(true)
             .open(path)
             .expect("fixture event file");
-        writeln!(file, "{{\"owner\":{owner:?},\"event\":{event:?}{fields}}}")
-            .expect("fixture event write");
+        // Format first so concurrent Mod callbacks append each record in one write.
+        let line = format!("{{\"owner\":{owner:?},\"event\":{event:?}{fields}}}\n");
+        file.write_all(line.as_bytes()).expect("fixture event write");
     }
 }
 
