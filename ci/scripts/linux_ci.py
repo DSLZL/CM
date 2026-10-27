@@ -223,6 +223,10 @@ def main():
             if unit["id"] == "host" and reused is not None:
                 print("CM CI: reuse verified Host binaries and original Cargo checks from", json.dumps(reused["origin"]), flush=True)
                 continue
+            if cfg.get("task_id") == "CM-M02" and unit["id"] == "host":
+                boundary = {**unit, "packages": ["cm-abi", "cm-sdk", "cm-runtime"]}
+                execute(root, logs, "m02-abi-clippy",
+                    cargo_args(boundary, "clippy", cfg, cfg["clippy_profile"]) + ["--all-targets", "--", "-D", "warnings"], env)
             for name in ("clippy", "test", "build"):
                 execute(root, logs, unit["id"] + "-" + name, commands[name], env)
     elif phase == "acceptance":

@@ -136,7 +136,6 @@ pub struct RuntimeContribution {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
 pub struct HostApi {
     pub base: v21::HostApi,
     pub runtime: *const HostRuntimeApi,

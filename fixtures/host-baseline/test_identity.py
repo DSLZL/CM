@@ -191,7 +191,7 @@ class IdentityTests(unittest.TestCase):
                    "build_profile": "dev-small", "clippy_profile": "dev-small", "test_profile": "dev-small"}
             with patch.dict(os.environ, {"CM_SOURCE_DIR": str(root), "GITHUB_WORKSPACE": str(root), "CM_CI_LOG_DIR": str(root)}), \
                     patch.object(linux_ci, "require_hosted_linux"), patch.object(linux_ci, "load_config", return_value=cfg), \
-                    patch.object(host, "reused_build", return_value={"origin": {"run_id": "original"}}), \
+                    patch.object(host, "reused_build", return_value={"origin": {"run_id": "original"}}) as reused, \
                     patch.object(linux_ci, "execute") as run, patch.object(sys, "argv", ["linux_ci.py", "build-test"]):
                 expected = ["m02-lifecycle-audit-fmt", "m02-example-tool-fmt"]
                 run.side_effect = [RuntimeError(label) for label in expected]
@@ -204,6 +204,11 @@ class IdentityTests(unittest.TestCase):
                 run.reset_mock()
                 linux_ci.main()
                 self.assertEqual([call.args[2] for call in run.call_args_list], [*expected, "host-fmt"])
+                reused.return_value = None
+                run.reset_mock()
+                linux_ci.main()
+                self.assertEqual([call.args[2] for call in run.call_args_list],
+                    [*expected, "host-fmt", "m02-abi-clippy", "host-clippy", "host-test", "host-build"])
 
     def test_host_cache_round_trip_retains_original_quality_and_detects_restored_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
