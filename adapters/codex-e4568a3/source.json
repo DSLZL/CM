@@ -86,6 +86,7 @@
     "codex-rs/core/src/tools/spec_plan.rs",
     "codex-rs/core/src/tools/registry.rs",
     "codex-rs/core/src/context/world_state/mod.rs",
-    "codex-rs/core/src/session/world_state.rs"
+    "codex-rs/core/src/session/world_state.rs",
+    "codex-rs/core/tests/suite/openai_file_mcp.rs"
   ]
 }
