@@ -1,4 +1,5 @@
 //! Private staging: no registration becomes visible until every init succeeds.
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::mem::align_of;
@@ -195,6 +196,39 @@ enum Callback {
     Eligibility(v2::Hook),
     Limit(v21::Hook),
     Runtime(u64),
+}
+
+thread_local! {
+    static POLICY_GATES: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+struct PolicyGate<'a> {
+    key: usize,
+    _guard: std::sync::MutexGuard<'a, ()>,
+}
+
+impl<'a> PolicyGate<'a> {
+    fn enter(gate: &'a std::sync::Mutex<()>) -> Result<Option<Self>, LoadError> {
+        let key = std::ptr::from_ref(gate) as usize;
+        // Controlled Next can enter another contribution of this Mod on the same thread.
+        if POLICY_GATES.with(|held| held.borrow().contains(&key)) {
+            return Ok(None);
+        }
+        let guard = gate
+            .lock()
+            .map_err(|_| LoadError::native("policy", "poisoned Mod gate"))?;
+        POLICY_GATES.with(|held| held.borrow_mut().push(key));
+        Ok(Some(Self {
+            key,
+            _guard: guard,
+        }))
+    }
+}
+
+impl Drop for PolicyGate<'_> {
+    fn drop(&mut self) {
+        POLICY_GATES.with(|held| held.borrow_mut().retain(|key| *key != self.key));
+    }
 }
 
 struct CompositionMod {
@@ -620,10 +654,7 @@ impl CompositionMod {
     }
 
     fn hook(&self, callback: usize, input: &v2::Input) -> Result<(u32, bool), LoadError> {
-        let _gate = self
-            .gate
-            .lock()
-            .map_err(|_| LoadError::native("policy", "poisoned Mod gate"))?;
+        let _gate = PolicyGate::enter(&self.gate)?;
         #[repr(C)]
         struct Output {
             before: [u8; 16],
@@ -726,5 +757,30 @@ impl CompositionMod {
             event("userdata-released", json!({"mod": self.owner, "count": 1}));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PolicyGate;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    #[test]
+    fn controlled_next_retains_gate_until_the_outer_callback_returns() {
+        let gate = Arc::new(Mutex::new(()));
+        let outer = PolicyGate::enter(&gate).unwrap();
+        assert!(outer.is_some());
+        let middle = Mutex::new(());
+        let middle_guard = PolicyGate::enter(&middle).unwrap();
+        assert!(PolicyGate::enter(&gate).unwrap().is_none());
+        let other = Arc::clone(&gate);
+        std::thread::spawn(move || assert!(other.try_lock().is_err()))
+            .join()
+            .unwrap();
+        drop(middle_guard);
+        drop(outer);
+        assert!(gate.try_lock().is_ok());
+        assert!(PolicyGate::enter(&gate).unwrap().is_some());
     }
 }

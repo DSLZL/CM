@@ -58,6 +58,8 @@ def install(home, receipt, *, directory=None, dependencies=(), changes=None, hoo
     resource_file.write_text("composition-resource-v1\n")
     kinds = [("terminal", "replacement")] if receipt["variant"] == "replacement" else [
         ("before", "before"), ("around", "around"), ("after", "after")]
+    if receipt["variant"] == "nested-next":
+        kinds.insert(2, ("around-inner", "around"))
     contributions = hooks or [
         {"id": name, "kind": kind, "capability": COMPOSE, "resource": CAPABILITY,
          "order_before": [], "order_after": [], "priority": 0} for name, kind in kinds]
@@ -104,7 +106,7 @@ def build_mods(root, logs, package, frozen):
     ), "Shared fixture formatting must pass before the Host build"
     mods = {}
     for role, variants in (
-        ("a", ("normal", "replacement", "short", "init-fail", "release-fail", "max-table", *INVALID)),
+        ("a", ("normal", "nested-next", "replacement", "short", "init-fail", "release-fail", "max-table", *INVALID)),
         ("b", ("normal", "replacement")),
     ):
         relative = "fixtures/mods/composition-" + role
@@ -1126,6 +1128,7 @@ def business(cases, root, binary, mods, frozen):
         ("empty", (), False), ("a", ("a",), False), ("b", ("b",), True),
         ("ab", ("a", "b"), True), ("disabled", ("a", "b"), False), ("removed", (), False),
         ("replacement", ("a", "b/replacement"), True),
+        ("same-mod-next", ("a/nested-next", "b"), True),
     ):
         home = cases / ("business-" + name) / "profile"
         home.mkdir(parents=True)
@@ -1153,6 +1156,12 @@ def business(cases, root, binary, mods, frozen):
             assert ready["plan"]["initialization_order"] == ["compose-b", "compose-a"]
         if name == "replacement":
             assert any(row["event"] == "hook-enter" and row["detail"]["contribution"] == "terminal" for row in trace)
+        if name == "same-mod-next":
+            for call_id in ("cm-a", "cm-b"):
+                order = [key for key in callback_keys({"trace": trace}, "hook-enter", call_id)
+                         if "::around" in key]
+                assert order == ["compose-a::around", "compose-a::around-inner", "compose-b::around"], order
+                assert callback_keys({"trace": trace}, "around-complete", call_id) == list(reversed(order))
         result["runtime_plan_sha256"] = ready["plan_sha256"]
         result["runtime_plan"] = ready["plan"]
         host.write(directory / "result.json", result)

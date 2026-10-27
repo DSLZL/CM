@@ -327,7 +327,7 @@ pub unsafe extern "C" fn cm_mod_entry_v2(
             unsafe { *table = Box::into_raw(Box::new(4_u32)).cast() };
             return OK;
         }
-        let definitions = if VARIANT == "replacement" {
+        let mut definitions = if VARIANT == "replacement" {
             vec![("terminal", v2::REPLACEMENT)]
         } else {
             vec![
@@ -336,6 +336,9 @@ pub unsafe extern "C" fn cm_mod_entry_v2(
                 ("after", v2::AFTER),
             ]
         };
+        if VARIANT == "nested-next" {
+            definitions.insert(2, ("around-inner", v2::AROUND));
+        }
         let mut hooks: Vec<_> = definitions
             .into_iter()
             .map(|(id, kind)| v2::Contribution {
