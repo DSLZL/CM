@@ -97,10 +97,10 @@ def native_probe(root, logs, inputs, package, frozen):
     lock.write_text(text[:match.start(2)] + "\n".join(dependencies) + text[match.end(2):])
     target = Path(os.environ["CARGO_TARGET_DIR"]) / "m02-native-probe"
     env = {**os.environ, "CARGO_TARGET_DIR": str(target)}
-    command = ["cargo", "test", "--locked", "--manifest-path", str(probe / "codex-rs/Cargo.toml"),
+    command = ["cargo", "test", "--locked", "--manifest-path", "codex-rs/Cargo.toml",
         "--target", TARGET, "--profile", cfg["test_profile"], "--package", "codex-core", "--lib",
         "--no-run", "--message-format=json"]
-    execute(root, logs, "m02-native-probe-build", command, env)
+    execute(probe, logs, "m02-native-probe-build", command, env)
     artifacts = []
     for line in (logs / "m02-native-probe-build.log").read_text().splitlines():
         if not line.startswith("{"):
