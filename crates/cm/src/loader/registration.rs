@@ -218,10 +218,7 @@ impl<'a> PolicyGate<'a> {
             .lock()
             .map_err(|_| LoadError::native("policy", "poisoned Mod gate"))?;
         POLICY_GATES.with(|held| held.borrow_mut().push(key));
-        Ok(Some(Self {
-            key,
-            _guard: guard,
-        }))
+        Ok(Some(Self { key, _guard: guard }))
     }
 }
 
