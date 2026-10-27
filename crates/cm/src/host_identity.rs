@@ -20,13 +20,16 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing Host build identity"))?;
         assert_eq!(build_id.len(), "sha256:".len() + 64);
         assert!(build_id.starts_with("sha256:"));
-        assert_eq!(identity["stage"], "binary-manifest-lock-config");
+        assert_eq!(identity["stage"], "runtime-sdk-host-adapter");
         assert_eq!(
             identity["capabilities"],
             serde_json::json!([
                 "core.tool_parallel_eligibility.v1",
                 "core.tool_parallel_eligibility.compose.v1",
-                "core.exec_output_limit.v1"
+                "core.exec_output_limit.v1",
+                "runtime.lifecycle.v1",
+                "runtime.tool.v1",
+                "runtime.context_section.v1"
             ])
         );
         assert!(identity.get("artifact_sha256").is_none());

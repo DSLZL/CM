@@ -235,7 +235,14 @@ def self_check():
             assert any(commands[phase][index:index + 2] == ["--package", package]
                 for index in range(len(commands[phase]) - 1))
     assert "codex-core" not in commands["test"] and "codex-app-server" not in commands["test"]
-    directory = Path(__file__).resolve().parents[2] / "fixtures/runtime-sdk"
+    root = Path(__file__).resolve().parents[2]
+    pin = read(root / "adapters/codex-e4568a3/source.json")
+    identity_test = (root / "crates/cm/src/host_identity.rs").read_text()
+    stage = re.search(r'assert_eq!\(identity\["stage"\], ("[^"]*")\);', identity_test)
+    capabilities = re.search(r'identity\["capabilities"\],\s*serde_json::json!\((\[.*?\])\)', identity_test, re.DOTALL)
+    assert stage and json.loads(stage[1]) == pin["stage"], "Embedded identity test stage differs from the pinned Host contract"
+    assert capabilities and json.loads(capabilities[1]) == pin["capabilities"], "Embedded identity test capabilities differ from the pinned Host contract"
+    directory = root / "fixtures/runtime-sdk"
     import importlib.util
     spec = importlib.util.spec_from_file_location("cm_m02_driver", directory / "driver.py")
     module = importlib.util.module_from_spec(spec)
