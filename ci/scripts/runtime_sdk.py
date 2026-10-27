@@ -61,6 +61,23 @@ def native_probe(root, logs, inputs, package, frozen):
     cfg = load_config(root)
     probe = Path(os.environ["RUNNER_TEMP"]) / "cm-m02-native-probe-source"
     shutil.copytree(root / host.HOST, probe, ignore=shutil.ignore_patterns(".git", "target"))
+    runtime = probe / "codex-rs/cm/src/runtime.rs"
+    text = runtime.read_text()
+    anchor = "        let request = request(instance, value.request)?;\n"
+    assert text.count(anchor) == 1
+    # Exercise the real ordinary-entry guard from a Mod's synchronous C completion.
+    injection = '''        let mut entered = false;
+        let reentry = ordinary("runtime_reentry_probe", || {
+            entered = true;
+            Ok(())
+        });
+        event("runtime-native-reentry-probe", json!({
+            "mod": request.module.owner, "request": handle_json(value.request),
+            "callback_entered": entered,
+            "error": reentry.err().map(|error| error.message),
+        }));
+'''
+    runtime.write_text(text.replace(anchor, anchor + injection, 1))
     core = probe / "codex-rs/core"
     test_source = root / "fixtures/runtime-sdk/host_scopes.rs"
     shutil.copyfile(test_source, core / "src/cm_runtime_native.rs")
@@ -121,8 +138,17 @@ def native_probe(root, logs, inputs, package, frozen):
         before = rows[:rows.index(row)]
         assert any(item["owner"] == "host-builtin" and item["thread"] == row["thread"] for item in before)
     assert sum(row["event"] == "userdata-release" for row in rows) == 2
-    collisions = [json.loads(line) for line in trace.read_text().splitlines()]
-    collisions = [row for row in collisions if row["event"] == "runtime-registration-failed"]
+    native = [json.loads(line) for line in trace.read_text().splitlines()]
+    reentries = [row for row in native if row["event"] == "runtime-native-reentry-probe"]
+    assert {row["detail"]["mod"] for row in reentries} == {"lifecycle-audit"}
+    for row in reentries:
+        assert not row["detail"]["callback_entered"]
+        assert row["detail"]["error"] == "reentrant native callback rejected", row
+        assert any(item["event"] == "runtime-complete" and item["seq"] > row["seq"]
+            and item["os_thread"] == row["os_thread"]
+            and item["detail"]["mod"] == row["detail"]["mod"]
+            and item["detail"]["request"] == row["detail"]["request"] for item in native), row
+    collisions = [row for row in native if row["event"] == "runtime-registration-failed"]
     assert {row["detail"]["resource"] for row in collisions} >= {"example-tool__echo", "example-tool__context"}, collisions
     host.verify_sources(root, logs)
     assert sha(package / "bin/codex") == frozen["executable_sha256"]
@@ -132,7 +158,10 @@ def native_probe(root, logs, inputs, package, frozen):
         "cli_executable_sha256": frozen["executable_sha256"],
         "native_fixture_source_manifest_sha256": host.manifest_digest(host.manifest(probe)),
         "independent_registry_state_verified": True, "inherited_mod_state_shared": True,
-        "new_thread_state_verified": True, "builtin_before_mod": True}
+        "new_thread_state_verified": True, "builtin_before_mod": True,
+        "ordinary_reentry": {"status": "pass", "attempts": len(reentries), "trace": "m02-native-trace.jsonl",
+            "boundary": "actual Mod C completion to the ordinary Host entry guard",
+            "private_instrumented_test_binary": True, "consumer_replayed": False}}
     write(inputs / "fixture/m02-native-probe.json", result)
     return result
 
