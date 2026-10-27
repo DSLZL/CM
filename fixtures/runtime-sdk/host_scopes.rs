@@ -2,6 +2,11 @@
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the hosted Linux native Mod fixtures"]
 async fn cm_runtime_native_scopes() {
+    // Keep the full Core scenario off the stack pinned by tokio::test.
+    Box::pin(cm_runtime_native_scopes_scenario()).await;
+}
+
+async fn cm_runtime_native_scopes_scenario() {
     let profile = std::path::PathBuf::from(std::env::var_os("CM_RUNTIME_PROBE_PROFILE").expect("probe profile"));
     let guard = cm_runtime::initialize(&profile, true).expect("native fixture registration");
     let mut config = test_config().await;
