@@ -392,7 +392,7 @@ def matrix():
         turns = [client.turn(thread_id, "stdio-first"), client.turn(thread_id, "stdio-second")]
         live = client.call("thread/resume", {"threadId": thread_id})
         assert live["thread"]["id"] == thread_id
-        fork = client.call("thread/fork", {"threadId": thread_id})["thread"]["id"]
+        fork = client.call("thread/fork", {"threadId": thread_id, "model": "gpt-5.4"})["thread"]["id"]
         assert fork != thread_id
         turns.append(client.turn(fork, "stdio-fork"))
         unsubscribed = client.call("thread/unsubscribe", {"threadId": thread_id})

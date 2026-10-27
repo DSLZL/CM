@@ -314,7 +314,7 @@ def bound_sandbox_aliases(lines):
         # Rejected package copies can create unused aliases; bind only the frozen Host.
         if not match or Path(match[2]).name != "codex-linux-sandbox" or match[1] != "/inputs/host/bin/codex":
             continue
-        assert re.fullmatch(r'(?:/profile|/work(?:/[A-Za-z0-9_-]+)*)/tmp/arg0-linux/codex-arg0[A-Za-z0-9]+/codex-linux-sandbox', match[2]), line
+        assert re.fullmatch(r'(?:/profile|/work)(?:/[A-Za-z0-9_-]+)*/tmp/arg0-linux/codex-arg0[A-Za-z0-9]+/codex-linux-sandbox', match[2]), line
         aliases.add(match[2])
     return aliases
 
@@ -360,7 +360,7 @@ def audit_executions(executions, python_scripts=("fixtures/native-loader/tool_ba
         # The upstream sandbox probe searches for true, absent from the minimal rootfs.
         missing_probe = (', ["true"], ' in line and line.endswith(' = -1 ENOENT (No such file or directory)') and (
             match[1] in ("/inputs/host/codex-path/true", "/usr/bin/true", "/bin/true") or
-            re.fullmatch(r'(?:/profile|/work(?:/[A-Za-z0-9_-]+)*)/tmp/arg0-linux/codex-arg0[A-Za-z0-9]+/true', match[1])))
+            re.fullmatch(r'(?:/profile|/work)(?:/[A-Za-z0-9_-]+)*/tmp/arg0-linux/codex-arg0[A-Za-z0-9]+/true', match[1])))
         helper = (match[1] == "/proc/self/exe" and '"--codex-run-as-process-setup"' in line) or (
             match[1] in sandbox_aliases and '"--sandbox-policy-cwd"' in line and '"--permission-profile"' in line) or line in bwrap_executions
         assert Path(match[1]).name in allowed or helper or missing_probe, "Unclassified executable: " + line
@@ -461,7 +461,8 @@ def check_network_audit():
     audit_executions([helper, '4 execve("/usr/bin/lsb_release", ["lsb_release", "-a"], 0x1) = 0'])
     missing_probe = '4 execve("/usr/bin/true", ["true"], 0x1 /* 27 vars */) = -1 ENOENT (No such file or directory)'
     for path in ("/inputs/host/codex-path/true", "/usr/bin/true", "/bin/true",
-                 "/profile/tmp/arg0-linux/codex-arg0ABC123/true", "/work/zero-0/tmp/arg0-linux/codex-arg0ABC123/true"):
+                 "/profile/tmp/arg0-linux/codex-arg0ABC123/true", "/work/zero-0/tmp/arg0-linux/codex-arg0ABC123/true",
+                 "/profile/m02/embedded/tmp/arg0-linux/codex-arg0ABC123/true"):
         audit_executions([missing_probe.replace("/usr/bin/true", path)])
     alias = "/profile/tmp/arg0-linux/codex-arg0ABC123/codex-linux-sandbox"
     creation = '4 symlink("/inputs/host/bin/codex", "' + alias + '") = 0'
@@ -470,6 +471,11 @@ def check_network_audit():
     assert bound_sandbox_aliases([creation.replace('symlink(', 'symlinkat(').replace(', "' + alias, ', AT_FDCWD</work>, "' + alias)]) == bindings
     sandbox = '4 execve("' + alias + '", ["' + alias + '", "--sandbox-policy-cwd", "/work", "--permission-profile", "{}"], 0x1) = 0'
     audit_executions([sandbox], sandbox_aliases=bindings)
+    for profile in ("/profile/m02/embedded", "/profile/m02/stdio-live"):
+        nested_alias = alias.replace("/profile", profile, 1)
+        nested_bindings = bound_sandbox_aliases([creation.replace(alias, nested_alias)])
+        assert nested_bindings == {nested_alias}
+        audit_executions([sandbox.replace(alias, nested_alias)], sandbox_aliases=nested_bindings)
     packaged = "/inputs/host/codex-resources/bwrap"
     opened = '4 openat(AT_FDCWD</work>, "' + packaged + '", O_RDONLY|O_CLOEXEC) = 3<' + packaged + '>'
     fd_exec = '4 execve("/proc/self/fd/3", ["bwrap", "--unshare-user", "--unshare-net", "--", "true"], 0x1) = 0'
@@ -496,7 +502,10 @@ def check_network_audit():
     unused = creation.replace("/inputs/host/bin/codex", "/work/packages/missing-helper/bin/codex")
     assert not bound_sandbox_aliases([unused])
     for invalid in (creation.replace("/inputs/host/bin/codex", "/tmp/codex"), unused,
-                    creation.replace("/profile/tmp/", "/outside/tmp/")):
+                    creation.replace("/profile/tmp/", "/outside/tmp/"),
+                    creation.replace("/profile/tmp/", "/profile/m02/../tmp/"),
+                    creation.replace("/profile/tmp/", "/profile/m02//tmp/"),
+                    creation.replace("/profile/tmp/", "/profile-extra/tmp/")):
         try:
             audit_executions([sandbox], sandbox_aliases=bound_sandbox_aliases([invalid]))
         except AssertionError:
@@ -509,6 +518,7 @@ def check_network_audit():
                     missing_probe.replace('["true"]', '["true", "--unexpected"]'),
                     missing_probe.replace('/usr/bin/true', '/outside/true'),
                     missing_probe.replace('/usr/bin/true', '/usr/bin/cargo'),
+                    missing_probe.replace('/usr/bin/true', '/profile/m02/../tmp/arg0-linux/codex-arg0ABC123/true'),
                     sandbox,
                     fd_exec,
                     helper.replace('"--codex-run-as-process-setup"', '"--unknown"')):
