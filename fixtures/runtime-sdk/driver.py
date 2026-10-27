@@ -521,7 +521,25 @@ def matrix():
                 assert any(row["event"] == "bounds" and row["quota_recovered"] for row in rows(directory / "events.jsonl"))
             else:
                 assert "controlled" in (directory / "stderr.log").read_text() + (directory / "stdout.jsonl").read_text() or mode == "tool-error"
-            errors.append({"mode": mode, "return_code": result.returncode, "model_requests": len(service.requests)})
+            error_case = {"mode": mode, "return_code": result.returncode, "model_requests": len(service.requests)}
+            if mode in ("callback-error", "panic"):
+                native = core.trace_rows(directory / "native.jsonl")
+                failures = [row["detail"]["error"] for row in native if row["event"] == "runtime-scope-failed"
+                    and row["detail"]["error"]["stage"] == "runtime_dispatch"]
+                assert failures and all(failure == failures[0] for failure in failures), failures
+                failure = failures[0]
+                assert (failure["mod_id"], failure["contribution"], failure["resource"]) == (
+                    "example-tool", "echo", "example-tool__echo")
+                expected = "Mod panic" if mode == "panic" else "controlled native callback error"
+                assert expected in failure["message"], failure
+                tool_request = next(row["detail"]["request"] for row in native if row["event"] == "runtime-request"
+                    and row["detail"]["mod"] == "example-tool" and row["detail"]["event_kind"] == 10)
+                completions = [row["detail"] for row in native if row["event"] == "runtime-complete"
+                    and row["detail"]["request"] == tool_request]
+                assert len(completions) == 1 and completions[0]["status"] == 1
+                assert completions[0]["quiescent"] and completions[0]["code"] == 7
+                error_case.update(abi_callback=failure, lifetime=settled(directory, failed=True))
+            errors.append(error_case)
         finally:
             service.close()
 

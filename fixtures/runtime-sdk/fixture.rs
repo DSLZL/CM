@@ -354,9 +354,25 @@ impl Mod for Fixture {
         if ["callback-error", "panic"].contains(&self.mode.as_str())
             && request.event == v22::TOOL_CALL
         {
-            self.host
-                .complete(request.handle, v22::CANCELLED, b"", true)
-                .map_err(|error| format!("{error:?}"))?;
+            let host = self.host;
+            std::thread::spawn(move || {
+                // Let the ABI callback error win before acknowledging quiescence.
+                let started = Instant::now();
+                while !host
+                    .state(request.handle, request.mod_scope, "calls")
+                    .is_err_and(|error| error.code == v22::ALREADY_COMPLETED)
+                {
+                    assert!(
+                        started.elapsed() < Duration::from_secs(4),
+                        "callback failure did not become terminal"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                assert_eq!(
+                    code(host.complete(request.handle, v22::FAILED, b"", true)),
+                    v22::ALREADY_COMPLETED
+                );
+            });
             if self.mode == "panic" {
                 panic!("controlled Mod panic");
             }
