@@ -1,15 +1,14 @@
 {
   "schema_version": 1,
   "configured": true,
-  "task_id": "CM-M02",
+  "task_id": "CM-M03",
   "required_checks": [
-    "CM-M02-AC01",
-    "CM-M02-AC02",
-    "CM-M02-AC03",
-    "CM-M02-AC04",
-    "CM-M02-AC05",
-    "CM-M02-AC06",
-    "CM-M02-AC07"
+    "CM-M03-AC01",
+    "CM-M03-AC02",
+    "CM-M03-AC03",
+    "CM-M03-AC04",
+    "CM-M03-AC05",
+    "CM-M03-AC06"
   ],
   "target": "x86_64-unknown-linux-gnu",
   "rust_toolchain": "1.95.0",
@@ -39,7 +38,7 @@
       "no_default_features": false
     }
   ],
-  "acceptance_script": "fixtures/runtime-sdk/acceptance.sh",
+  "acceptance_script": "fixtures/managed-package/acceptance.sh",
   "cargo_config_files": [
     "adapters/codex-e4568a3/host/codex-rs/.cargo/config.toml"
   ],
@@ -78,7 +77,11 @@
     "crates/cm-sdk/src/lib.rs",
     "crates/cm-host-adapter/Cargo.toml",
     "crates/cm-host-adapter/src/lib.rs",
-    "crates/cm/src/runtime.rs"
+    "crates/cm/src/runtime.rs",
+    "adapters/codex-e4568a3/managed.patch",
+    "crates/cm/src/profile.rs",
+    "crates/cm/src/mod_install.rs",
+    "crates/cm/src/launcher.rs"
   ],
   "generated_native_identity_files": [
     "adapters/codex-e4568a3/inputs/native.json"

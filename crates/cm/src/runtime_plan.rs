@@ -108,7 +108,8 @@ type CommittedPlan = (RuntimePlan, Vec<Preflighted>, BTreeMap<String, Vec<u8>>);
 /// Opaque, process-owned inputs. A serialized RuntimePlan cannot construct this.
 pub struct PreparedPlan {
     home: PathBuf,
-    inventory: Inventory,
+    inventory: Option<Inventory>,
+    managed: Option<crate::profile::Snapshot>,
     pins: Vec<(String, InputPin)>,
     config_present: bool,
     config: BTreeMap<String, Vec<u8>>,
@@ -118,13 +119,24 @@ pub struct PreparedPlan {
 }
 
 impl PreparedPlan {
+    pub(crate) fn managed(&self) -> bool {
+        self.managed.is_some()
+    }
+
+    pub(crate) fn validate_backend(&self) -> Result<(), LoadError> {
+        if self.managed() { crate::profile::validate_environment(&self.home)?; }
+        Ok(())
+    }
+
     pub fn plan(&self) -> &RuntimePlan {
         &self.plan
     }
 
     pub(crate) fn revalidate(&self) -> Result<(), LoadError> {
         let drift = |owner: &str, text: &str| LoadError::input("input_drift", owner, text);
-        if loader::inventory(&self.home).map_err(|e| drift("", &e))? != self.inventory {
+        if let Some(managed) = &self.managed {
+            managed.revalidate()?;
+        } else if Some(loader::inventory(&self.home).map_err(|e| drift("", &e))?) != self.inventory {
             return Err(drift("", "candidate inventory changed"));
         }
         for (owner, pin) in &self.pins {
@@ -680,20 +692,59 @@ fn prepare_inputs(
     executable: &Path,
     options: &crate::config::Options,
 ) -> Result<PreparedPlan, LoadError> {
-    let inventory = loader::inventory(home).map_err(|e| failure("inventory", "", None, &e))?;
+    prepare_snapshot(home, executable, options, crate::profile::snapshot(home)?)
+}
+
+pub(crate) fn prepare_managed(
+    home: &Path,
+    options: &crate::config::Options,
+    snapshot: crate::profile::Snapshot,
+) -> Result<PreparedPlan, LoadError> {
+    prepare_snapshot(home, Path::new("/proc/self/exe"), options, Some(snapshot))
+}
+
+fn prepare_snapshot(
+    home: &Path,
+    executable: &Path,
+    options: &crate::config::Options,
+    managed: Option<crate::profile::Snapshot>,
+) -> Result<PreparedPlan, LoadError> {
+    let inventory = if managed.is_none() {
+        Some(loader::inventory(home).map_err(|e| failure("inventory", "", None, &e))?)
+    } else { None };
+    let packages: Vec<_> = if let Some(snapshot) = &managed {
+        snapshot.packages().into_iter().map(|(id, path, sha)| (id, path, Some(sha))).collect()
+    } else {
+        inventory.as_ref().expect("unmanaged inventory").packages.keys()
+            .map(|slot| (slot.clone(), home.join("mods").join(slot), None)).collect()
+    };
     let mut candidates = BTreeMap::new();
     let mut pins = Vec::new();
     let mut trees = Vec::new();
     let mut snapshot_bytes = 0_usize;
-    for directory in inventory.packages.keys() {
-        let package = home.join("mods").join(directory);
-        let candidate = loader::candidate(&package).map_err(|mut error| {
+    for (directory, package, expected) in packages {
+        let mut candidate = loader::candidate(&package).map_err(|mut error| {
             if error.mod_id.is_none() {
                 error.mod_id = Some(directory.clone());
             }
             error
         })?;
         let manifest = &candidate.manifest;
+        if let Some(expected) = expected {
+            let actual = if manifest.format_version == 3 {
+                candidate.content_sha256.clone()
+            } else {
+                let full = loader::installation_snapshot(&package)?;
+                pins.extend(full.pins.into_iter().map(|pin| (manifest.id.clone(), pin)));
+                if let Some(tree) = full.tree { trees.push((package.clone(), tree)); }
+                snapshot_bytes += full.files.values().map(Vec::len).sum::<usize>();
+                full.sha256
+            };
+            if actual != expected || manifest.id != directory {
+                return Err(failure("input_drift", &directory, None, "managed object content/ID differs from its address"));
+            }
+            candidate.content_sha256 = actual;
+        }
         snapshot_bytes += candidate.snapshot_size();
         if snapshot_bytes > 256 * 1024 * 1024 {
             return Err(failure(
@@ -723,7 +774,7 @@ fn prepare_inputs(
     }
     let config_path = home.join("cm-runtime.toml");
     let config_present = exists(&config_path).map_err(|e| failure("selection", "", None, &e))?;
-    let (config, selection, config_sha) = if config_present {
+    let (config, mut selection, config_sha) = if config_present {
         let (bytes, pin) = loader::read_input(&config_path, loader::MAX_MANIFEST)
             .map_err(|e| failure("selection", "", None, &e))?;
         let selection = crate::config::Selection::parse(&bytes)
@@ -738,6 +789,13 @@ fn prepare_inputs(
             None,
         )
     };
+    if let Some(snapshot) = &managed {
+        if snapshot.generation.config_sha256 != config_sha {
+            return Err(failure("input_drift", "", None, "managed configuration changed; use cm launch to validate the next generation"));
+        }
+        selection.enabled = snapshot.generation.enabled.iter().cloned().collect();
+        selection.format_version = 2;
+    }
     let mut enabled = BTreeSet::new();
     for id in &selection.enabled {
         if !candidates.contains_key(id) || !enabled.insert(id.clone()) {
@@ -753,7 +811,8 @@ fn prepare_inputs(
         .iter()
         .map(|(id, candidate)| (id.clone(), candidate.manifest.clone()))
         .collect();
-    let (config_values, config_identities) = selection.resolve(options, &manifests, &config)?;
+    let original = if managed.is_some() { b"cm.managed.v1".as_slice() } else { &config };
+    let (config_values, config_identities) = selection.resolve(options, &manifests, original)?;
     let selected: BTreeMap<_, _> = candidates
         .iter()
         .filter(|(id, _)| enabled.contains(*id))
@@ -793,7 +852,7 @@ fn prepare_inputs(
         .map(|(id, candidate)| (id.clone(), candidate.content_sha256.clone()))
         .collect();
     for (id, module) in &mut plan.mods {
-        if module.format_version == 3 {
+        if module.format_version == 3 || managed.is_some() {
             module.content_tree_sha256 = candidates[id].content_sha256.clone();
             module.package_format = "cm.content.v1".into();
         }
@@ -811,6 +870,7 @@ fn prepare_inputs(
     Ok(PreparedPlan {
         home: home.into(),
         inventory,
+        managed,
         pins,
         config_present,
         config: config_values,

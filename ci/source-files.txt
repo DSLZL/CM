@@ -5,6 +5,7 @@
 .gitignore
 adapters/codex-e4568a3/cli.patch
 adapters/codex-e4568a3/host-lock.patch
+adapters/codex-e4568a3/managed.patch
 adapters/codex-e4568a3/native.patch
 adapters/codex-e4568a3/runtime.patch
 adapters/codex-e4568a3/source.json
@@ -12,6 +13,7 @@ ci/README.md
 ci/scripts/dispatch_build.py
 ci/scripts/host.py
 ci/scripts/linux_ci.py
+ci/scripts/managed_package.py
 ci/scripts/mod_manifest.py
 ci/scripts/native_mod.py
 ci/scripts/record_run.py
@@ -43,6 +45,7 @@ crates/cm/examples/native_probe.rs
 crates/cm/src/config.rs
 crates/cm/src/host_identity.rs
 crates/cm/src/lib.rs
+crates/cm/src/launcher.rs
 crates/cm/src/loader/elf.rs
 crates/cm/src/loader/mod.rs
 crates/cm/src/loader/native.rs
@@ -50,15 +53,20 @@ crates/cm/src/loader/registration.rs
 crates/cm/src/manifest.rs
 crates/cm/src/metadata.rs
 crates/cm/src/mod_lock.rs
+crates/cm/src/mod_install.rs
 crates/cm/src/output_limit.rs
 crates/cm/src/package.rs
+crates/cm/src/profile.rs
 crates/cm/src/runtime.rs
 crates/cm/src/runtime_plan.rs
 crates/cm/src/tool_policy.rs
 docs/mod-manifest.md
+docs/managed-package.md
 docs/runtime-sdk.md
 fixtures/host-baseline/acceptance.sh
 fixtures/host-baseline/test_identity.py
+fixtures/managed-package/acceptance.sh
+fixtures/managed-package/driver.py
 fixtures/mods/binary-manifest-cases/acceptance.sh
 fixtures/mods/composition-a/Cargo.lock
 fixtures/mods/composition-a/Cargo.toml

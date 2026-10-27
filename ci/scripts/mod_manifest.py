@@ -63,6 +63,15 @@ def manifest(package, fields):
     write_toml(package / "mod.toml", fields)
 
 
+def native_glibc_min(payload):
+    # Trusted author output only; user installation never executes readelf or ldd.
+    text = subprocess.check_output(["readelf", "--version-info", str(payload)], text=True)
+    versions = [tuple(map(int, value.split("."))) for value in re.findall(r"\bGLIBC_(\d+[.]\d+(?:[.]\d+)?)\b", text)]
+    required = max(versions, default=(2, 2))
+    # The manifest has major.minor precision: round patch requirements up.
+    return f"{required[0]}.{required[1] + int(any(required[2:]))}"
+
+
 def convert(package, *, configured=False):
     old = tomllib.loads((package / "mod.toml").read_text())
     if old["format_version"] == 3:
@@ -72,7 +81,8 @@ def convert(package, *, configured=False):
             "capability": old["required_capabilities"][0], "resource": old["required_capabilities"][0]}])
         value = {"format_version": 3, "id": old["id"], "version": "1.2.3", "kind": "sdk",
             "binary": {"path": old["payload"], "size": old["payload_size"], "sha256": old["payload_sha256"],
-                "target": TARGET, "entry": "cm_mod_entry_v" + str(old["abi_major"]), "glibc_min": "2.17", "cpu": "x86-64"},
+                "target": TARGET, "entry": "cm_mod_entry_v" + str(old["abi_major"]),
+                "glibc_min": native_glibc_min(package / old["payload"]), "cpu": "x86-64"},
             "compat": {"abi_major": old["abi_major"], "abi_minor_min": old["abi_minor"], "abi_minor_max": old["abi_minor"],
                 "host_api_min": "0.4.0", "required_capabilities": old["required_capabilities"]},
             "dependencies": [], "conflicts": [], "contributions": hooks, "resources": old.get("resources", []),
@@ -425,7 +435,7 @@ def matrix():
     evidence = Path("/evidence/m01"); work = Path("/work/m01"); work.mkdir()
     baseline = sha(binary)
     home = install(work / "configured", inputs, configured=True)
-    other = home / "mods/other-mod"; shutil.copytree(inputs / "mods/b/normal", other)
+    other = home / "mods/other-mod"; shutil.copytree(inputs / "mods/m01-b", other)
     convert(other, configured=True)
     mutate(home, "output-fixture", lambda m: None)
     fields = tomllib.loads((other / "mod.toml").read_text()); fields["id"] = "other-mod"; fields["state"]["owner"] = "other-mod"

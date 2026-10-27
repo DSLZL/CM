@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::Component;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::LoadError;
 use crate::loader;
@@ -83,6 +83,37 @@ fn same_development_copy(executable: &Path, root: &Path, original: &Path) -> boo
 }
 
 pub fn preflight() -> Result<(), LoadError> {
+    validate(true)
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ManagedHost {
+    pub executable: std::path::PathBuf,
+    pub executable_sha256: String,
+    pub inventory_sha256: String,
+    pub target: String,
+}
+
+pub(crate) fn managed_identity() -> Result<ManagedHost, LoadError> {
+    validate(false)?;
+    let executable = fs::canonicalize("/proc/self/exe")
+        .map_err(|e| LoadError::input("package", "", &e.to_string()))?;
+    let inventory = executable.parent().and_then(Path::parent)
+        .ok_or_else(|| LoadError::input("package", "", "missing package root"))?
+        .join("cm-runtime-files.json");
+    let (_, pin) = loader::read_input(&inventory, 4 * 1024 * 1024)
+        .map_err(|e| LoadError::input("package", "", &e))?;
+    Ok(ManagedHost {
+        executable_sha256: loader::executable_hash(&executable)
+            .map_err(|e| LoadError::input("package", "", &e))?,
+        executable,
+        inventory_sha256: pin.sha256,
+        target: loader::TARGET.into(),
+    })
+}
+
+fn validate(allow_development: bool) -> Result<(), LoadError> {
     let result = (|| -> Result<(), String> {
         let executable = fs::canonicalize("/proc/self/exe").map_err(|error| error.to_string())?;
         let root = executable
@@ -90,7 +121,7 @@ pub fn preflight() -> Result<(), LoadError> {
             .and_then(Path::parent)
             .ok_or("missing package root")?;
         // Upstream integration tests install copies of the 0.0.0 development CLI.
-        if let Some(target) = option_env!("CARGO_TARGET_DIR") {
+        if let Some(target) = option_env!("CARGO_TARGET_DIR").filter(|_| allow_development) {
             let original = Path::new(target).join("x86_64-unknown-linux-gnu/dev-small/codex");
             if same_build_inode(&executable, &original)
                 || same_development_copy(&executable, root, &original)

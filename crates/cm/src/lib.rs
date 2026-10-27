@@ -21,9 +21,12 @@ pub mod config;
 mod loader;
 mod manifest;
 pub mod metadata;
+pub mod mod_install;
 pub mod mod_lock;
+pub mod launcher;
 pub mod output_limit;
 pub mod package;
+pub mod profile;
 pub mod runtime;
 pub mod runtime_plan;
 pub mod tool_policy;
@@ -198,6 +201,47 @@ pub struct ShutdownGuard {
     active: bool,
 }
 
+static PENDING_TUI: OnceLock<Mutex<Option<runtime_plan::PreparedPlan>>> = OnceLock::new();
+
+/// Prepare without executing native code until the actual TUI backend is known.
+pub fn defer_tui(home: &Path, options: &config::Options) -> Result<ShutdownGuard, LoadError> {
+    let prepared = runtime_plan::prepare_options(home, options)?;
+    prepared.validate_backend()?;
+    if prepared.plan().mods.is_empty() && !profile::managed(home)? {
+        return initialize_prepared(prepared, false);
+    }
+    PENDING_TUI.set(Mutex::new(Some(prepared)))
+        .map_err(|_| LoadError::new("startup", false, "TUI preparation is terminal"))?;
+    Ok(ShutdownGuard { active: true })
+}
+
+pub fn tui_embedded_required() -> bool {
+    PENDING_TUI.get().is_some()
+}
+
+/// Called only on the real Embedded start branch, before opening Core sessions.
+pub fn initialize_tui_embedded() -> Result<(), LoadError> {
+    let Some(pending) = PENDING_TUI.get() else { return Ok(()); };
+    if STARTED.load(Ordering::Acquire) {
+        return match RUNTIME.get() {
+            Some(Ok(_)) => Ok(()),
+            _ => Err(LoadError::new("startup", false, "previous TUI initialization failed")),
+        };
+    }
+    let prepared = pending.lock().map_err(|_| LoadError::new("startup", false, "poisoned TUI preparation"))?
+        .take().ok_or_else(|| LoadError::new("startup", false, "TUI initialization was already consumed"))?;
+    let mut guard = initialize_prepared(prepared, true)?;
+    // The CLI owns the outer guard and drains on all normal TUI exit paths.
+    guard.active = false;
+    Ok(())
+}
+
+pub fn confirm_tui_embedded() {
+    if tui_embedded_required() {
+        event("backend-selected", json!({"backend":"Embedded", "transport":"InProcess", "pid":std::process::id()}));
+    }
+}
+
 /// Initialize exactly once before opening Core business sessions.
 pub fn initialize(home: &Path, embedded_exec: bool) -> Result<ShutdownGuard, LoadError> {
     initialize_with(embedded_exec, || runtime_plan::prepare(home))
@@ -252,11 +296,12 @@ fn initialize_with(
                 "already_native_executed": false,
             }),
         );
-        if !prepared.plan().mods.is_empty() && !embedded_exec {
+        prepared.validate_backend()?;
+        if (prepared.managed() || !prepared.plan().mods.is_empty()) && !embedded_exec {
             return Err(LoadError::new(
                 "backend",
                 false,
-                "Core Mods require local Embedded exec or local stdio App Server; other backends lack a verified handshake",
+                "CM requires local Embedded execution; other backends lack a verified handshake",
             ));
         }
         let (plan, modules, config) = prepared.commit()?;

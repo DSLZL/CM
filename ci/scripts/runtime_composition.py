@@ -307,19 +307,27 @@ def audit_network(lines, directory, ports, kernel_routes=(), tcp_connections=())
                     or (tcp and tcp[1] in ports)), "Unknown socket peer: " + line
 
 
-def bound_sandbox_aliases(lines):
+def sandbox_path(path, leaf):
+    prefix, separator, tail = path.rpartition("/tmp/arg0-linux/")
+    return bool(separator and re.fullmatch(r'/(?:profile|work)(?:/[^/\\\x00-\x1f]+)*', prefix)
+        and all(part not in (".", "..") for part in prefix.split("/")[1:])
+        and re.fullmatch(r'codex-arg0[A-Za-z0-9]+/' + re.escape(leaf), tail))
+
+
+def bound_sandbox_aliases(lines, hosts=("/inputs/host/bin/codex",)):
     aliases = set()
     for line in lines:
         match = re.fullmatch(r'\d+\s+symlink(?:at)?\("([^"]+)", (?:AT_FDCWD(?:<[^>]*>)?, )?"([^"]+)"\) = 0', line)
         # Rejected package copies can create unused aliases; bind only the frozen Host.
-        if not match or Path(match[2]).name != "codex-linux-sandbox" or match[1] != "/inputs/host/bin/codex":
+        if not match or Path(match[2]).name != "codex-linux-sandbox" or match[1] not in hosts:
             continue
-        assert re.fullmatch(r'(?:/profile|/work)(?:/[A-Za-z0-9_-]+)*/tmp/arg0-linux/codex-arg0[A-Za-z0-9]+/codex-linux-sandbox', match[2]), line
+        assert sandbox_path(match[2], "codex-linux-sandbox"), line
         aliases.add(match[2])
     return aliases
 
 
 def bound_bwrap_executions(calls, helper):
+    helpers = (helper,) if isinstance(helper, str) else tuple(helper)
     descriptors = set()
     executions = set()
     for line in calls:
@@ -329,7 +337,7 @@ def bound_bwrap_executions(calls, helper):
                           (call.startswith("fcntl(") and ", F_DUPFD" in call)):
             descriptors.discard((pid, allocated[1]))
         opened = re.fullmatch(r'openat\(AT_FDCWD(?:<[^>]*>)?, "([^"]+)", O_RDONLY\|O_CLOEXEC\) = (\d+)<([^>]+)>', call)
-        if opened and opened[1] == opened[3] == helper:
+        if opened and opened[1] == opened[3] and opened[1] in helpers:
             descriptors.add((pid, opened[2]))
         closed = re.match(r'close\((\d+)(?:<[^>]*>)?\) =', call)
         if closed:
@@ -360,7 +368,7 @@ def audit_executions(executions, python_scripts=("fixtures/native-loader/tool_ba
         # The upstream sandbox probe searches for true, absent from the minimal rootfs.
         missing_probe = (', ["true"], ' in line and line.endswith(' = -1 ENOENT (No such file or directory)') and (
             match[1] in ("/inputs/host/codex-path/true", "/usr/bin/true", "/bin/true") or
-            re.fullmatch(r'(?:/profile|/work)(?:/[A-Za-z0-9_-]+)*/tmp/arg0-linux/codex-arg0[A-Za-z0-9]+/true', match[1])))
+            sandbox_path(match[1], "true")))
         helper = (match[1] == "/proc/self/exe" and '"--codex-run-as-process-setup"' in line) or (
             match[1] in sandbox_aliases and '"--sandbox-policy-cwd"' in line and '"--permission-profile"' in line) or line in bwrap_executions
         assert Path(match[1]).name in allowed or helper or missing_probe, "Unclassified executable: " + line
