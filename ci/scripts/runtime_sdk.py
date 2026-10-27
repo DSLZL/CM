@@ -118,12 +118,26 @@ def native_probe(root, logs, inputs, package, frozen):
     report = inputs / "fixture/m02-native-scopes.json"
     events = inputs / "fixture/m02-native-events.jsonl"
     trace = inputs / "fixture/m02-native-trace.jsonl"
+    stack_source = probe / "justfile"
+    stack = re.search(r'^rust_min_stack := "([0-9]+)"', stack_source.read_text(), re.MULTILINE)
+    assert stack, "Pinned upstream Core test stack setting is missing"
+    test_environment = {"RUST_MIN_STACK": stack[1]}
+    test_environment_source = {"path": "justfile", "sha256": sha(stack_source)}
     env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR") if key in os.environ}
+    # Direct libtest execution must retain the pinned upstream test harness stack.
+    env.update(test_environment)
     env.update(CODEX_HOME=str(home), HOME=str(home / "home"), CM_RUNTIME_PROBE_PROFILE=str(home),
         CM_RUNTIME_PROBE_REPORT=str(report), CM_RUNTIME_EVENTS=str(events), CM_NATIVE_TRACE=str(trace),
         CM_RUNTIME_MODE="handles")
     run = [str(binary), "--ignored", "--exact", "thread_manager::tests::cm_runtime_native_scopes", "--nocapture"]
-    execute(root, logs, "m02-native-probe", run, env)
+    write(logs / "m02-native-probe-environment.json", {
+        "environment": test_environment, "source": test_environment_source})
+    try:
+        execute(root, logs, "m02-native-probe", run, env)
+    finally:
+        for artifact in (report, events, trace):
+            if artifact.is_file():
+                shutil.copyfile(artifact, logs / artifact.name)
     evidence = read(report)
     assert evidence["status"] == "pass"
     rows = [json.loads(line) for line in events.read_text().splitlines()]
@@ -154,6 +168,7 @@ def native_probe(root, logs, inputs, package, frozen):
     assert sha(package / "bin/codex") == frozen["executable_sha256"]
     result = {"status": "pass", "scope_report": evidence, "events": "m02-native-events.jsonl",
         "trace": "m02-native-trace.jsonl", "binary_sha256": sha(binary), "command": run,
+        "test_environment": test_environment, "test_environment_source": test_environment_source,
         "fixture_source_sha256": sha(test_source), "host_build_id": frozen["host_identity"]["host_build_id"],
         "cli_executable_sha256": frozen["executable_sha256"],
         "native_fixture_source_manifest_sha256": host.manifest_digest(host.manifest(probe)),
