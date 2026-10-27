@@ -44,6 +44,9 @@ pub(crate) enum Kind {
     After,
     LegacyFilter,
     OutputLimit,
+    Lifecycle,
+    Tool,
+    ContextSection,
 }
 
 impl Kind {
@@ -55,7 +58,14 @@ impl Kind {
             Self::After => v2::AFTER,
             Self::LegacyFilter => 0,
             Self::OutputLimit => 5,
+            Self::Lifecycle => cm_abi::v22::KIND_LIFECYCLE,
+            Self::Tool => cm_abi::v22::KIND_TOOL,
+            Self::ContextSection => cm_abi::v22::KIND_CONTEXT_SECTION,
         }
+    }
+
+    pub(crate) fn runtime(&self) -> bool {
+        matches!(self, Self::Lifecycle | Self::Tool | Self::ContextSection)
     }
 }
 

@@ -1,0 +1,18 @@
+[package]
+name = "cm-lifecycle-audit-fixture"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+cm-sdk = { path = "../../../crates/cm-sdk" }
+
+[workspace]
+
+[profile.dev-small]
+inherits = "dev"
+debug = 0
+incremental = false

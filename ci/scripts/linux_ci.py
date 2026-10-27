@@ -174,11 +174,15 @@ def cargo_args(unit, subcommand, cfg, profile=None):
 def build_commands(unit, cfg):
     unit = {**unit, "packages": sorted(unit["packages"]), "features": sorted(unit.get("features", []))}
     fmt = ["cargo", "fmt", "--manifest-path", unit["manifest"]]
-    for package in unit["packages"]:
+    packages = unit["packages"] + (["codex-app-server", "codex-core"] if unit["id"] == "host" else [])
+    for package in sorted(set(packages)):
         fmt += ["--package", package]
+    clippy = cargo_args(unit, "clippy", cfg, cfg["clippy_profile"])
+    if unit["id"] == "host":
+        clippy += ["--package", "codex-app-server", "--package", "codex-core"]
     return {
         "fmt": fmt + ["--", "--check"],
-        "clippy": cargo_args(unit, "clippy", cfg, cfg["clippy_profile"]) + ["--all-targets", "--", "-D", "warnings"],
+        "clippy": clippy + ["--all-targets", "--", "-D", "warnings"],
         "test": cargo_args(unit, "test", cfg, cfg["test_profile"]),
         "build": cargo_args(unit, "build", cfg, cfg["build_profile"]),
     }
@@ -215,7 +219,7 @@ def main():
         artifact_dir = Path(os.environ["CM_CI_ARTIFACT_DIR"])
         artifact_dir.mkdir(parents=True, exist_ok=True)
         execute(root, logs, "current-task-acceptance", ["bash", str(source_file(root, cfg["acceptance_script"]))])
-        if cfg["task_id"] in ("CM-P04", "CM-M01"):
+        if cfg["task_id"] in ("CM-P04", "CM-M01", "CM-M02"):
             from runtime_consumer import provenance, validate_inputs
             producer = json.loads((artifact_dir / "producer-inputs.json").read_text())
             inputs = Path(os.environ["CM_CONSUMER_INPUT_DIR"]).resolve()

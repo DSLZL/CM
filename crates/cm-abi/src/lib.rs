@@ -4,6 +4,7 @@ use core::ffi::c_void;
 
 pub mod v2;
 pub mod v21;
+pub mod v22;
 
 pub const ABI_MAJOR: u16 = 1;
 pub const ABI_MINOR: u16 = 0;

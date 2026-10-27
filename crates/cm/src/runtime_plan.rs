@@ -51,7 +51,7 @@ impl HostIdentity {
             target: loader::TARGET.into(),
             api_version: field("host_api_version")?,
             capabilities,
-            abis: vec!["1.0".into(), "2.0".into(), "2.1".into()],
+            abis: vec!["1.0".into(), "2.0".into(), "2.1".into(), "2.2".into()],
         })
     }
 }
@@ -241,6 +241,9 @@ fn phase(kind: &Kind) -> &'static str {
         Kind::LegacyFilter => "legacy_filter",
         Kind::After => "after",
         Kind::OutputLimit => "output_limit",
+        Kind::Lifecycle => "lifecycle",
+        Kind::Tool => "tool",
+        Kind::ContextSection => "context_section",
     }
 }
 
@@ -257,6 +260,7 @@ fn resolve(
     let mut payload_budget = 0_u64;
     let mut resource_budget = 0_u64;
     let mut resource_count = 0;
+    let mut runtime_names = BTreeMap::new();
     for (id, (manifest, manifest_sha256)) in selected {
         loader::check_manifest(manifest).map_err(|e| failure("manifest_contract", id, None, &e))?;
         if let Some(binary) = &manifest.binary_manifest {
@@ -409,9 +413,22 @@ fn resolve(
                 v2::CAPABILITY
             };
             let limiter = contribution.kind == Kind::OutputLimit;
-            let contract = if limiter {
+            let contract = if contribution.kind.runtime() {
+                let capability = match contribution.kind {
+                    Kind::Lifecycle => cm_abi::v22::LIFECYCLE,
+                    Kind::Tool => cm_abi::v22::TOOL,
+                    Kind::ContextSection => cm_abi::v22::CONTEXT_SECTION,
+                    _ => unreachable!("runtime kind"),
+                };
+                manifest.format_version == 3 && manifest.abi_major == 2 && manifest.abi_minor == 2
+                    && contribution.capability == capability
+                    && manifest.required_capabilities.contains(&contribution.capability)
+                    && crate::runtime::valid_name(id, &contribution.resource)
+                    && contribution.priority == 0
+                    && contribution.order_before.is_empty() && contribution.order_after.is_empty()
+            } else if limiter {
                 manifest.abi_major == 2
-                    && manifest.abi_minor == 1
+                    && manifest.abi_minor >= 1
                     && contribution.resource == cm_abi::v21::CAPABILITY
                     && contribution.capability == cm_abi::v21::CAPABILITY
                     && manifest
@@ -434,6 +451,16 @@ fn resolve(
                     Some(&contribution.id),
                     "unknown resource/capability or priority out of bounds",
                 ));
+            }
+            if contribution.kind.runtime() {
+                let name = (contribution.kind.abi(), contribution.resource.clone());
+                if let Some(previous) = runtime_names.insert(name, format!("{id}::{}", contribution.id)) {
+                    return Err(failure("runtime_name_collision", id, Some(&contribution.id),
+                        &format!("runtime name {} claimed by {previous} and {id}::{}", contribution.resource, contribution.id)));
+                }
+                if runtime_names.len() > 128 {
+                    return Err(failure("runtime_contribution_limit", id, Some(&contribution.id), "process runtime contribution limit is 128"));
+                }
             }
             for references in [
                 &mut contribution.order_before,
@@ -562,7 +589,7 @@ fn resolve(
         "dependency_cycle",
     )?;
     let mut phases = BTreeMap::new();
-    for name in ["before", "body", "legacy_filter", "after", "output_limit"] {
+    for name in ["before", "body", "legacy_filter", "after", "output_limit", "lifecycle", "tool", "context_section"] {
         let nodes: BTreeSet<_> = hooks
             .iter()
             .filter(|(_, (_, hook))| phase(&hook.kind) == name)
@@ -580,7 +607,7 @@ fn resolve(
             order.retain(|key| key != replacement);
             order.push(replacement.clone());
         }
-        if name != "output_limit" || !order.is_empty() {
+        if !matches!(name, "output_limit" | "lifecycle" | "tool" | "context_section") || !order.is_empty() {
             phases.insert(name.into(), order);
         }
     }

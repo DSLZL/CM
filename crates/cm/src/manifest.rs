@@ -159,7 +159,7 @@ impl BinaryManifest {
         let abi = &self.compat;
         let minor_max = match abi.abi_major {
             1 => 0,
-            2 => 1,
+            2 => 2,
             _ => return Err("compat.abi_major: unsupported".into()),
         };
         if self.format_version != 3
@@ -206,7 +206,7 @@ impl BinaryManifest {
             }
         }
         if abi.required_capabilities.is_empty()
-            || abi.required_capabilities.len() > 3
+            || abi.required_capabilities.len() > 6
             || abi
                 .required_capabilities
                 .iter()

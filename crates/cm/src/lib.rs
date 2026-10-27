@@ -24,6 +24,7 @@ pub mod metadata;
 pub mod mod_lock;
 pub mod output_limit;
 pub mod package;
+pub mod runtime;
 pub mod runtime_plan;
 pub mod tool_policy;
 
@@ -255,7 +256,7 @@ fn initialize_with(
             return Err(LoadError::new(
                 "backend",
                 false,
-                "Core Mods require local embedded exec; other backends lack a verified handshake",
+                "Core Mods require local Embedded exec or local stdio App Server; other backends lack a verified handshake",
             ));
         }
         let (plan, modules, config) = prepared.commit()?;
@@ -296,6 +297,7 @@ fn shutdown() -> Result<(), LoadError> {
     };
     runtime.stopping.store(true, Ordering::Release);
     event("stopping-requested", json!({}));
+    let runtime_cleanup = crate::runtime::shutdown();
     let _call = NativeCall::enter().map_err(|e| LoadError::native("shutdown", &e))?;
     let mut state = runtime
         .state
@@ -315,6 +317,7 @@ fn shutdown() -> Result<(), LoadError> {
     if let Some(mut registration) = state.registration.take() {
         registration.release()?;
     }
+    runtime_cleanup?;
     event(
         "stopped",
         json!({"active_tools": 0, "libraries_unloaded": 0}),

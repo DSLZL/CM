@@ -1,0 +1,13 @@
+[package]
+name = "cm-host-adapter"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+cm-abi = { path = "../cm-abi" }
+cm-runtime = { path = "../cm" }
+codex-extension-api = { workspace = true }
+codex-protocol = { workspace = true }
+codex-tools = { workspace = true }
+serde_json = { workspace = true }

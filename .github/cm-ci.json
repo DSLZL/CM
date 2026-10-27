@@ -1,14 +1,15 @@
 {
   "schema_version": 1,
   "configured": true,
-  "task_id": "CM-M01",
+  "task_id": "CM-M02",
   "required_checks": [
-    "CM-M01-AC01",
-    "CM-M01-AC02",
-    "CM-M01-AC03",
-    "CM-M01-AC04",
-    "CM-M01-AC05",
-    "CM-M01-AC06"
+    "CM-M02-AC01",
+    "CM-M02-AC02",
+    "CM-M02-AC03",
+    "CM-M02-AC04",
+    "CM-M02-AC05",
+    "CM-M02-AC06",
+    "CM-M02-AC07"
   ],
   "target": "x86_64-unknown-linux-gnu",
   "rust_toolchain": "1.95.0",
@@ -30,13 +31,15 @@
         "codex-cli",
         "codex-code-mode-host",
         "cm-abi",
-        "cm-runtime"
+        "cm-runtime",
+        "cm-sdk",
+        "cm-host-adapter"
       ],
       "features": [],
       "no_default_features": false
     }
   ],
-  "acceptance_script": "fixtures/mods/binary-manifest-cases/acceptance.sh",
+  "acceptance_script": "fixtures/runtime-sdk/acceptance.sh",
   "cargo_config_files": [
     "adapters/codex-e4568a3/host/codex-rs/.cargo/config.toml"
   ],
@@ -67,7 +70,15 @@
     "crates/cm/src/config.rs",
     "crates/cm/src/manifest.rs",
     "crates/cm/src/metadata.rs",
-    "crates/cm/src/mod_lock.rs"
+    "crates/cm/src/mod_lock.rs",
+    "adapters/codex-e4568a3/runtime.patch",
+    "crates/cm-abi/src/v22.rs",
+    "crates/cm-abi/include/cm_mod_v22.h",
+    "crates/cm-sdk/Cargo.toml",
+    "crates/cm-sdk/src/lib.rs",
+    "crates/cm-host-adapter/Cargo.toml",
+    "crates/cm-host-adapter/src/lib.rs",
+    "crates/cm/src/runtime.rs"
   ],
   "generated_native_identity_files": [
     "adapters/codex-e4568a3/inputs/native.json"

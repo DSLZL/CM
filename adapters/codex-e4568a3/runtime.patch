@@ -1,0 +1,209 @@
+diff --git a/codex-rs/Cargo.toml b/codex-rs/Cargo.toml
+--- a/codex-rs/Cargo.toml
++++ b/codex-rs/Cargo.toml
+@@ -1,5 +1,7 @@
+ [workspace]
+ members = [
+     "cm",
+     "cm-abi",
++    "cm-sdk",
++    "cm-host-adapter",
+     "aws-auth",
+diff --git a/codex-rs/app-server/Cargo.toml b/codex-rs/app-server/Cargo.toml
+--- a/codex-rs/app-server/Cargo.toml
++++ b/codex-rs/app-server/Cargo.toml
+@@ -24,6 +24,7 @@
+ [lints]
+ workspace = true
+ 
+ [dependencies]
++cm-host-adapter = { path = "../cm-host-adapter" }
+ codex-utils-process = { workspace = true }
+ anyhow = { workspace = true }
+diff --git a/codex-rs/app-server/src/extensions.rs b/codex-rs/app-server/src/extensions.rs
+--- a/codex-rs/app-server/src/extensions.rs
++++ b/codex-rs/app-server/src/extensions.rs
+@@ -136,4 +136,5 @@
+         },
+     );
++    cm_host_adapter::append(&mut builder);
+     Arc::new(builder.build())
+ }
+diff --git a/codex-rs/core/src/lib.rs b/codex-rs/core/src/lib.rs
+--- a/codex-rs/core/src/lib.rs
++++ b/codex-rs/core/src/lib.rs
+@@ -6,3 +6,9 @@
+ #![deny(clippy::print_stdout, clippy::print_stderr)]
+ 
++fn cm_runtime_check(level: &str) -> codex_protocol::error::Result<()> {
++    cm_runtime::runtime::check_level(level).map_err(|error| {
++        codex_protocol::error::CodexErrorDetails::InvalidRequest(error.to_string()).into()
++    })
++}
++
+ mod apply_patch;
+diff --git a/codex-rs/core/src/session/session.rs b/codex-rs/core/src/session/session.rs
+--- a/codex-rs/core/src/session/session.rs
++++ b/codex-rs/core/src/session/session.rs
+@@ -1713,5 +1713,14 @@
+                     .await;
+             }
++            if let Err(error) = crate::cm_runtime_check(thread_extension_data.level_id()) {
++                for contributor in extensions.thread_lifecycle_contributors() {
++                    contributor.on_thread_stop(codex_extension_api::ThreadStopInput {
++                        session_store: &session_extension_data,
++                        thread_store: &thread_extension_data,
++                    }).await;
++                }
++                return Err(error.into());
++            }
+ 
+             let executed_tool_calls =
+                 crate::state::ExecutedToolCalls::new(&config.features, &initial_history);
+diff --git a/codex-rs/core/src/thread_manager.rs b/codex-rs/core/src/thread_manager.rs
+--- a/codex-rs/core/src/thread_manager.rs
++++ b/codex-rs/core/src/thread_manager.rs
+@@ -2454,4 +2454,11 @@
+         if is_resumed_thread {
+             new_thread.thread.emit_thread_resume_lifecycle().await;
+         }
++        if let Err(error) = crate::cm_runtime_check(new_thread.thread.session.services.thread_extension_data.level_id()) {
++            let _ = new_thread.thread.submit(codex_protocol::protocol::Op::Shutdown).await;
++            new_thread.thread.wait_until_terminated().await;
++            self.threads.write().await.remove(&new_thread.thread_id);
++            if let Some(startup_guard) = startup_guard { startup_guard.cleanup().await; }
++            return Err(error);
++        }
+         startup_state.release_membership();
+diff --git a/codex-rs/core/src/tasks/regular.rs b/codex-rs/core/src/tasks/regular.rs
+--- a/codex-rs/core/src/tasks/regular.rs
++++ b/codex-rs/core/src/tasks/regular.rs
+@@ -45,3 +45,5 @@
+         cancellation_token: CancellationToken,
+     ) -> SessionTaskResult {
++        crate::cm_runtime_check(sess.services.thread_extension_data.level_id())?;
++        crate::cm_runtime_check(ctx.extension_data.level_id())?;
+         let run_turn_span = trace_span!("run_turn");
+diff --git a/codex-rs/core/src/tools/spec_plan.rs b/codex-rs/core/src/tools/spec_plan.rs
+--- a/codex-rs/core/src/tools/spec_plan.rs
++++ b/codex-rs/core/src/tools/spec_plan.rs
+@@ -381,3 +381,4 @@
+     tool_search_handler_cache: &ToolSearchHandlerCache,
+ ) -> CodexResult<ToolRouter> {
++    crate::cm_runtime_check(turn_context.extension_data.level_id())?;
+     let model_messages = ResolvedModelMessages::from_model(model_info);
+@@ -542,3 +543,4 @@
+     let child_management_tools = required_child_management_tool_names(turn_context, model_info);
++    crate::cm_runtime_check(turn_context.extension_data.level_id())?;
+ 
+     Ok(ToolRouter::from_parts(
+diff --git a/codex-rs/core/src/tools/registry.rs b/codex-rs/core/src/tools/registry.rs
+--- a/codex-rs/core/src/tools/registry.rs
++++ b/codex-rs/core/src/tools/registry.rs
+@@ -464,5 +464,8 @@
+         runtime: Arc<dyn CoreToolRuntime>,
+         exposure: ToolExposure,
+     ) -> bool {
+         let tool_name = runtime.tool_name().with_default_namespace();
++        if tool_name.is_default_namespace() && cm_runtime::runtime::guard_name(
++            cm_runtime::runtime::Kind::Tool, &tool_name.name, self.tools.contains_key(&tool_name),
++        ).is_err() { return false; }
+         if !self.tool_policy.allows(&tool_name) {
+diff --git a/codex-rs/core/src/context/world_state/mod.rs b/codex-rs/core/src/context/world_state/mod.rs
+--- a/codex-rs/core/src/context/world_state/mod.rs
++++ b/codex-rs/core/src/context/world_state/mod.rs
+@@ -466,3 +466,4 @@
+     pub(crate) fn add_section<S: WorldStateSection>(&mut self, section: S) {
+         let id = S::ID;
++        if cm_runtime::runtime::guard_name(cm_runtime::runtime::Kind::ContextSection, id, self.sections.contains_key(id)).is_err() { return; }
+         assert!(
+@@ -475,3 +476,4 @@
+     pub(crate) fn add_extension_section(&mut self, section: WorldStateSectionContribution) {
+         let id = section.id();
++        if cm_runtime::runtime::guard_name(cm_runtime::runtime::Kind::ContextSection, id, self.sections.contains_key(id)).is_err() { return; }
+         assert!(
+diff --git a/codex-rs/core/src/session/world_state.rs b/codex-rs/core/src/session/world_state.rs
+--- a/codex-rs/core/src/session/world_state.rs
++++ b/codex-rs/core/src/session/world_state.rs
+@@ -440,3 +440,5 @@
++        crate::cm_runtime_check(self.services.thread_extension_data.level_id())?;
++        crate::cm_runtime_check(turn_context.extension_data.level_id())?;
+         Ok(world_state)
+     }
+ }
+diff --git a/codex-rs/core/src/tools/parallel.rs b/codex-rs/core/src/tools/parallel.rs
+--- a/codex-rs/core/src/tools/parallel.rs
++++ b/codex-rs/core/src/tools/parallel.rs
+@@ -204,2 +204,5 @@
+                 let _message_admission = message_admission?;
++                crate::cm_runtime_check(session.services.thread_extension_data.level_id())
++                    .and_then(|_| crate::cm_runtime_check(turn.extension_data.level_id()))
++                    .map_err(|error| FunctionCallError::Fatal(error.to_string()))?;
+                 let cm_name = dispatch_call.tool_name.clone().with_default_namespace();
+diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
+--- a/codex-rs/cli/src/main.rs
++++ b/codex-rs/cli/src/main.rs
+@@ -1174,10 +1174,14 @@
+-        let embedded_exec = matches!(&subcommand, Some(Subcommand::Exec(command)) if command.command.is_none())
+-            && root_remote.is_none();
+-        Some(cm_runtime::initialize_options(
+-            &find_codex_home()?,
+-            embedded_exec,
++        let local_exec = matches!(&subcommand, Some(Subcommand::Exec(command)) if command.command.is_none()
++            || matches!(&command.command, Some(codex_exec::Command::Resume(_) | codex_exec::Command::Fork(_))));
++        let local_stdio = matches!(&subcommand, Some(Subcommand::AppServer(command))
++            if command.subcommand.is_none() && !command.managed_daemon && !command.remote_control
++                && matches!(command.listen, codex_app_server::AppServerTransport::Stdio));
++        let cm_supported_backend = root_remote.is_none() && (local_exec || local_stdio);
++        Some(cm_runtime::initialize_options(
++            &find_codex_home()?,
++            cm_supported_backend,
+             &cm_options,
+         )?)
+     } else {
+         None
+     };
+diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
+--- a/codex-rs/Cargo.lock
++++ b/codex-rs/Cargo.lock
+@@ -1900,5 +1900,17 @@
+ [[package]]
++name = "cm-host-adapter"
++version = "0.1.0"
++dependencies = [
++ "cm-abi",
++ "cm-runtime",
++ "codex-extension-api",
++ "codex-protocol",
++ "codex-tools",
++ "serde_json",
++]
++
++[[package]]
+ name = "cm-runtime"
+ version = "0.1.0"
+ dependencies = [
+  "cm-abi",
+@@ -1925,3 +1937,10 @@
+ [[package]]
++name = "cm-sdk"
++version = "0.1.0"
++dependencies = [
++ "cm-abi",
++]
++
++[[package]]
+ name = "cobs"
+ version = "0.3.0"
+@@ -2117,10 +2136,11 @@
+ name = "codex-app-server"
+ version = "0.0.0"
+ dependencies = [
+  "anyhow",
+  "app_test_support",
+  "axum",
+  "base64 0.22.1",
+  "chrono",
+  "clap",
++ "cm-host-adapter",
+  "codex-agent-extension",

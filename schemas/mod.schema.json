@@ -160,13 +160,15 @@
         "abi_minor_min": {
           "enum": [
             0,
-            1
+            1,
+            2
           ]
         },
         "abi_minor_max": {
           "enum": [
             0,
-            1
+            1,
+            2
           ]
         },
         "host_api_min": {
@@ -177,7 +179,7 @@
           "items": {
             "type": "string"
           },
-          "maxItems": 3,
+          "maxItems": 6,
           "minItems": 1,
           "uniqueItems": true
         },
@@ -230,7 +232,10 @@
             "replacement",
             "after",
             "legacy_filter",
-            "output_limit"
+            "output_limit",
+            "lifecycle",
+            "tool",
+            "context_section"
           ]
         },
         "capability": {

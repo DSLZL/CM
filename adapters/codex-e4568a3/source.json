@@ -8,15 +8,18 @@
     "codex-rs/Cargo.lock": "319fbf5f0e3f1217f09e3bdeeae5bbd6b9da208e30495d7f5eb3102a76474812",
     "codex-rs/rust-toolchain.toml": "570656042681cfd8795403a455baf9a33035331a07db0645e866bbcea89a3d64"
   },
-  "host_release_id": "cm-host-0.4.0-m01",
-  "host_api_version": "0.4.0",
+  "host_release_id": "cm-host-0.5.0-m02",
+  "host_api_version": "0.5.0",
   "capabilities": [
     "core.tool_parallel_eligibility.v1",
     "core.tool_parallel_eligibility.compose.v1",
-    "core.exec_output_limit.v1"
+    "core.exec_output_limit.v1",
+    "runtime.lifecycle.v1",
+    "runtime.tool.v1",
+    "runtime.context_section.v1"
   ],
   "protocol_source": "codex-rs/protocol",
-  "stage": "binary-manifest-lock-config",
+  "stage": "runtime-sdk-host-adapter",
   "official_asset": {
     "url": "https://github.com/openai/codex/releases/download/rust-v0.163.0/codex-x86_64-unknown-linux-musl.tar.gz",
     "sha256": "beb339e8ecd9ba057a6bb2dc81ad8ca474812edfbf0fc5056ca818797648dde4",
@@ -46,12 +49,20 @@
     "crates/cm/src/manifest.rs": "codex-rs/cm/src/manifest.rs",
     "crates/cm/src/config.rs": "codex-rs/cm/src/config.rs",
     "crates/cm/src/metadata.rs": "codex-rs/cm/src/metadata.rs",
-    "crates/cm/src/mod_lock.rs": "codex-rs/cm/src/mod_lock.rs"
+    "crates/cm/src/mod_lock.rs": "codex-rs/cm/src/mod_lock.rs",
+    "crates/cm-abi/src/v22.rs": "codex-rs/cm-abi/src/v22.rs",
+    "crates/cm-abi/include/cm_mod_v22.h": "codex-rs/cm-abi/include/cm_mod_v22.h",
+    "crates/cm-sdk/Cargo.toml": "codex-rs/cm-sdk/Cargo.toml",
+    "crates/cm-sdk/src/lib.rs": "codex-rs/cm-sdk/src/lib.rs",
+    "crates/cm-host-adapter/Cargo.toml": "codex-rs/cm-host-adapter/Cargo.toml",
+    "crates/cm-host-adapter/src/lib.rs": "codex-rs/cm-host-adapter/src/lib.rs",
+    "crates/cm/src/runtime.rs": "codex-rs/cm/src/runtime.rs"
   },
   "patches": [
     "cli.patch",
     "native.patch",
-    "host-lock.patch"
+    "host-lock.patch",
+    "runtime.patch"
   ],
   "patched_paths": [
     "codex-rs/Cargo.toml",
@@ -65,6 +76,16 @@
     "codex-rs/app-server/src/message_processor.rs",
     "codex-rs/exec/Cargo.toml",
     "codex-rs/exec/src/lib.rs",
-    "codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs"
+    "codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs",
+    "codex-rs/app-server/Cargo.toml",
+    "codex-rs/app-server/src/extensions.rs",
+    "codex-rs/core/src/lib.rs",
+    "codex-rs/core/src/session/session.rs",
+    "codex-rs/core/src/thread_manager.rs",
+    "codex-rs/core/src/tasks/regular.rs",
+    "codex-rs/core/src/tools/spec_plan.rs",
+    "codex-rs/core/src/tools/registry.rs",
+    "codex-rs/core/src/context/world_state/mod.rs",
+    "codex-rs/core/src/session/world_state.rs"
   ]
 }

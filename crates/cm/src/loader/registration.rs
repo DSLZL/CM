@@ -194,6 +194,7 @@ impl RegistrationSet {
 enum Callback {
     Eligibility(v2::Hook),
     Limit(v21::Hook),
+    Runtime(u64),
 }
 
 struct CompositionMod {
@@ -201,6 +202,8 @@ struct CompositionMod {
     callbacks: Vec<Callback>,
     release: Option<cm_abi::Release>,
     userdata: *mut c_void,
+    instance: Option<cm_abi::v22::Handle>,
+    gate: std::sync::Arc<std::sync::Mutex<()>>,
 }
 
 // Runtime serializes callbacks and release, including controlled synchronous Next.
@@ -238,22 +241,28 @@ impl CompositionMod {
             next: Some(crate::tool_policy::next),
             reserved: 0,
         };
-        let capabilities = [
+        let mut capabilities = vec![
             Bytes::from_static(v2::CAPABILITY),
             Bytes::from_static(v21::CAPABILITY),
         ];
-        let mut host = v21::HostApi {
-            base,
-            capabilities: capabilities.as_ptr(),
-            capability_count: capabilities.len() as u64,
-            reserved: 0,
+        let instance = if manifest.abi_minor == 2 { Some(crate::runtime::new_instance(&manifest.id)?) } else { None };
+        let services = instance.map(|instance| Box::leak(Box::new(crate::runtime::services(instance))));
+        if manifest.abi_minor == 2 {
+            capabilities.extend(cm_abi::v22::CAPABILITIES.map(Bytes::from_static));
+        }
+        let mut host = cm_abi::v22::HostApi {
+            base: v21::HostApi { base, capabilities: capabilities.as_ptr(),
+                capability_count: capabilities.len() as u64, reserved: 0 },
+            runtime: services.map_or(ptr::null(), |services| services as *const _),
         };
         if manifest.abi_minor == 1 {
-            host.base.header = v21::header::<v21::HostApi>();
+            host.base.base.header = v21::header::<v21::HostApi>();
+        } else if manifest.abi_minor == 2 {
+            host.base.base.header = cm_abi::v22::header::<cm_abi::v22::HostApi>();
         }
         let mut table: *const Header = ptr::null();
         native::invoke("entry", |error| unsafe {
-            entry(&host.base, &mut table, error)
+            entry(&host.base.base, &mut table, error)
         })?;
         if crate::tool_policy::NEXT_VIOLATION.load(std::sync::atomic::Ordering::Acquire) {
             return Err(LoadError::native(
@@ -271,7 +280,9 @@ impl CompositionMod {
             return Err(LoadError::native("negotiate", "short v2 header prefix"));
         }
         let prefix = unsafe { table.read() };
-        let minimum = if manifest.abi_minor == 1 {
+        let minimum = if manifest.abi_minor == 2 {
+            size_of::<cm_abi::v22::ModApi>()
+        } else if manifest.abi_minor == 1 {
             size_of::<v21::ModApi>()
         } else {
             size_of::<v2::ModApi>()
@@ -297,7 +308,7 @@ impl CompositionMod {
                 != manifest
                     .contributions
                     .iter()
-                    .filter(|hook| hook.kind != Kind::OutputLimit)
+                    .filter(|hook| hook.kind != Kind::OutputLimit && !hook.kind.runtime())
                     .count() as u64
             || api.contribution_count > 128
             || (api.contribution_count != 0 && api.contributions.is_null())
@@ -342,7 +353,7 @@ impl CompositionMod {
                 ));
             }
         }
-        if manifest.abi_minor == 1 {
+        if manifest.abi_minor >= 1 {
             // Prefix size/version/alignment were checked before touching the optional tail.
             let tail = unsafe { table.cast::<v21::ModApi>().read() };
             let expected = manifest
@@ -394,7 +405,48 @@ impl CompositionMod {
                 }
             }
         }
+        let mut runtime_api = None;
+        if manifest.abi_minor == 2 {
+            let tail = unsafe { table.cast::<cm_abi::v22::ModApi>().read() };
+            let expected = manifest.contributions.iter().filter(|hook| hook.kind.runtime()).count();
+            if tail.reserved != 0 || tail.contribution_count != expected as u64 || tail.contribution_count > 128
+                || tail.contribution_stride != size_of::<cm_abi::v22::RuntimeContribution>() as u64
+                || (tail.contribution_count != 0 && tail.contributions.is_null())
+                || !(tail.contributions as usize).is_multiple_of(align_of::<cm_abi::v22::RuntimeContribution>())
+                || tail.runtime.is_null() || !(tail.runtime as usize).is_multiple_of(align_of::<cm_abi::v22::ModRuntimeApi>())
+            { return Err(LoadError::native("negotiate", "invalid runtime count/stride/pointer")); }
+            // Validate the readable header before copying the full optional table.
+            if unsafe { tail.runtime.cast::<u32>().read() } < size_of::<Header>() as u32 {
+                return Err(LoadError::native("negotiate", "short runtime API header"));
+            }
+            let prefix = unsafe { tail.runtime.cast::<Header>().read() };
+            if !crate::runtime::valid_header::<cm_abi::v22::ModRuntimeApi>(prefix) {
+                return Err(LoadError::native("negotiate", "invalid runtime API header"));
+            }
+            let api = unsafe { tail.runtime.read() };
+            if api.reserved != 0 || api.dispatch.is_none() || api.cancel.is_none() || api.request_release.is_none() {
+                return Err(LoadError::native("negotiate", "missing runtime callbacks/reserved"));
+            }
+            runtime_api = Some(api);
+            let mut routes = std::collections::BTreeSet::new();
+            for index in 0..tail.contribution_count as usize {
+                let descriptor = unsafe { tail.contributions.add(index).read() };
+                if !crate::runtime::valid_header::<cm_abi::v22::RuntimeContribution>(descriptor.header)
+                    || descriptor.reserved != 0 || descriptor.route == 0 || !routes.insert(descriptor.route)
+                { return Err(LoadError::native("negotiate", "invalid runtime descriptor/route")); }
+                let id = unsafe { native::text(descriptor.id, 128)? };
+                let capability = unsafe { native::text(descriptor.capability, 128)? };
+                let resource = unsafe { native::text(descriptor.resource, 128)? };
+                if !crate::runtime::valid_name(&manifest.id, &resource) {
+                    return Err(LoadError::native("negotiate", "runtime name outside owner namespace").owner(&manifest.id, Some(&id)));
+                }
+                if descriptors.insert(id, (capability, resource, descriptor.kind, Callback::Runtime(descriptor.route))).is_some() {
+                    return Err(LoadError::native("negotiate", "duplicate actual runtime contribution"));
+                }
+            }
+        }
         let mut callbacks = Vec::new();
+        let mut runtime_contributions = Vec::new();
         for hook in &manifest.contributions {
             let (capability, resource, kind, callback) =
                 descriptors.remove(&hook.id).ok_or_else(|| {
@@ -408,6 +460,16 @@ impl CompositionMod {
                     "actual contribution differs from manifest",
                 )
                 .owner(&manifest.id, Some(&hook.id)));
+            }
+            if let Callback::Runtime(route) = callback {
+                let kind = match hook.kind {
+                    Kind::Lifecycle => crate::runtime::Kind::Lifecycle,
+                    Kind::Tool => crate::runtime::Kind::Tool,
+                    Kind::ContextSection => crate::runtime::Kind::ContextSection,
+                    _ => return Err(LoadError::native("negotiate", "runtime binding kind mismatch")),
+                };
+                runtime_contributions.push(crate::runtime::Contribution { owner: manifest.id.clone(), id: hook.id.clone(),
+                    name: hook.resource.clone(), kind, route, instance: instance.expect("ABI 2.2 instance") });
             }
             callbacks.push(callback);
         }
@@ -449,6 +511,8 @@ impl CompositionMod {
             callbacks,
             release: api.release,
             userdata: ptr::null_mut(),
+            instance,
+            gate: std::sync::Arc::new(std::sync::Mutex::new(())),
         };
         let result = native::invoke("init", |error| unsafe {
             (api.init.unwrap())(&context, &mut loaded.userdata, error)
@@ -471,10 +535,18 @@ impl CompositionMod {
             }
             return Err(error);
         }
+        if let Some(api) = runtime_api
+            && let Err(error) = crate::runtime::install(instance.expect("ABI 2.2 instance"), &manifest.id,
+                loaded.userdata, api, runtime_contributions, std::sync::Arc::clone(&loaded.gate))
+        {
+            if let Err(cleanup) = loaded.release() { event("release-failed", json!(cleanup)); }
+            return Err(error);
+        }
         Ok(loaded)
     }
 
     fn hook(&self, callback: usize, input: &v2::Input) -> Result<(u32, bool), LoadError> {
+        let _gate = self.gate.lock().map_err(|_| LoadError::native("policy", "poisoned Mod gate"))?;
         #[repr(C)]
         struct Output {
             before: [u8; 16],
@@ -521,6 +593,7 @@ impl CompositionMod {
     }
 
     fn limit(&self, callback: usize, input: &v21::Input) -> Result<(v21::Output, bool), LoadError> {
+        let _gate = self.gate.lock().map_err(|_| LoadError::native("output_limit", "poisoned Mod gate"))?;
         #[repr(C)]
         struct Guarded {
             before: [u8; 16],
@@ -557,6 +630,8 @@ impl CompositionMod {
     }
 
     fn release(&mut self) -> Result<(), LoadError> {
+        if let Some(instance) = self.instance { crate::runtime::can_release(instance)?; }
+        let _gate = self.gate.lock().map_err(|_| LoadError::native("release", "poisoned Mod gate"))?;
         let userdata = std::mem::take(&mut self.userdata);
         if !userdata.is_null() {
             let release = self
