@@ -272,10 +272,8 @@ impl Fixture {
             ",\"invalid_status\":true,\"result_limit\":true,\"key_limit\":true,\"state_total_limit\":true,\"quota_recovered\":true",
         );
     }
-}
 
-impl Mod for Fixture {
-    fn dispatch(&mut self, request: Request) -> Result<(), String> {
+    fn dispatch_request(&mut self, request: Request) -> Result<(), String> {
         let _returned = DispatchReturn {
             owner: self.owner,
             request: request.handle,
@@ -351,16 +349,43 @@ impl Mod for Fixture {
                 .map_err(|error| format!("{error:?}"))?;
             return Ok(());
         }
+        if self.mode == "sync-cancel" && request.event == v22::TOOL_CALL {
+            record(
+                self.owner,
+                "worker-entered",
+                &format!(",\"request\":{:?}", handle(request.handle)),
+            );
+            let started = Instant::now();
+            while !self
+                .host
+                .state(request.handle, request.mod_scope, "calls")
+                .is_err_and(|error| error.code == v22::REQUEST_CANCELLED)
+            {
+                assert!(started.elapsed() < Duration::from_secs(45));
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            return self.count(request.handle, request.mod_scope).map(|_| ());
+        }
         if ["callback-error", "panic"].contains(&self.mode.as_str())
             && request.event == v22::TOOL_CALL
         {
+            self.pending.insert(
+                request.handle,
+                Arc::new(Pending {
+                    cancelled: AtomicBool::new(false),
+                    changed: Condvar::new(),
+                    lock: Mutex::new(()),
+                }),
+            );
             let host = self.host;
             std::thread::spawn(move || {
                 // Let the ABI callback error win before acknowledging quiescence.
                 let started = Instant::now();
                 while !host
                     .state(request.handle, request.mod_scope, "calls")
-                    .is_err_and(|error| error.code == v22::ALREADY_COMPLETED)
+                    .is_err_and(|error| {
+                        [v22::ALREADY_COMPLETED, v22::REQUEST_CANCELLED].contains(&error.code)
+                    })
                 {
                     assert!(
                         started.elapsed() < Duration::from_secs(4),
@@ -368,9 +393,9 @@ impl Mod for Fixture {
                     );
                     std::thread::sleep(Duration::from_millis(1));
                 }
-                assert_eq!(
-                    code(host.complete(request.handle, v22::FAILED, b"", true)),
-                    v22::ALREADY_COMPLETED
+                assert!(
+                    [v22::ALREADY_COMPLETED, v22::REQUEST_CANCELLED]
+                        .contains(&code(host.complete(request.handle, v22::FAILED, b"", true)))
                 );
             });
             if self.mode == "panic" {
@@ -476,6 +501,24 @@ impl Mod for Fixture {
         }
         Ok(())
     }
+}
+
+impl Mod for Fixture {
+    fn dispatch(&mut self, request: Request) -> Result<(), String> {
+        let handle = request.handle;
+        let scope = request.mod_scope;
+        let result = self.dispatch_request(request);
+        if result.is_err()
+            && !self.pending.contains_key(&handle)
+            && self
+                .host
+                .state(handle, scope, "calls")
+                .is_err_and(|error| error.code == v22::REQUEST_CANCELLED)
+        {
+            return Ok(());
+        }
+        result
+    }
 
     fn cancel(&mut self, request: Handle) -> Result<(), String> {
         record(
@@ -486,6 +529,15 @@ impl Mod for Fixture {
         if let Some(pending) = self.pending.get(&request) {
             pending.cancelled.store(true, Ordering::Release);
             pending.changed.notify_all();
+        } else {
+            // Ordinary callbacks have returned and no background work owns this request.
+            let acknowledged = code(self.host.complete(request, v22::CANCELLED, b"", true));
+            assert_eq!(acknowledged, v22::REQUEST_CANCELLED);
+            record(
+                self.owner,
+                "sync-cancel-quiet",
+                &format!(",\"request\":{:?},\"code\":{acknowledged}", handle(request)),
+            );
         }
         record(
             self.owner,

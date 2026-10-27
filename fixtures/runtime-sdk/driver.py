@@ -424,14 +424,14 @@ def matrix():
         assert all(row["thread_before" if kind == 1 else "turn_before"] == 0 for row in selected)
 
     cancellations = []
-    for mode in ("async", "cancel", "late", "noncooperative", "timeout"):
+    for mode in ("async", "sync-cancel", "cancel", "late", "noncooperative", "timeout"):
         case_home = PROFILE / mode
         install(case_home)
         service = Provider()
         test = Client(EVIDENCE / mode, case_home, service, mode=mode)
         try:
             identity = test.start()
-            outcome = test.turn(identity, mode, interrupt=mode in ("cancel", "late", "noncooperative"),
+            outcome = test.turn(identity, mode, interrupt=mode in ("sync-cancel", "cancel", "late", "noncooperative"),
                 release=mode == "async", failure=mode == "timeout")
         finally:
             test.close(failure=mode in ("noncooperative", "timeout"))
@@ -442,6 +442,16 @@ def matrix():
         if mode == "async":
             assert len(complete) == 1 and complete[0]["code"] == 0
             business_evidence(service)
+        elif mode == "sync-cancel":
+            acknowledged = [row for row in records if row["event"] == "sync-cancel-quiet" and row["owner"] == "example-tool"]
+            assert len(acknowledged) == 1 and acknowledged[0]["code"] == 8 and not complete
+            tool_request = next(row["request"] for row in records if row["event"] == "dispatch"
+                and row["owner"] == "example-tool" and row["kind"] == 10)
+            assert acknowledged[0]["request"] == tool_request
+            native = core.trace_rows(EVIDENCE / mode / "native.jsonl")
+            assert any(row["event"] == "runtime-request-cancel" and row["detail"]["mod"] == "example-tool"
+                and not row["detail"]["timeout"] for row in native)
+            assert not any(row["event"] == "runtime-scope-failed" for row in native)
         elif mode != "noncooperative":
             assert len(complete) == 1 and complete[0]["code"] == 8
         if mode == "timeout":
