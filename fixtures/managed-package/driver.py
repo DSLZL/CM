@@ -16,6 +16,7 @@ import stat
 import struct
 import subprocess
 import sys
+import tempfile
 import termios
 import threading
 import time
@@ -71,6 +72,13 @@ def protected_inventory(root):
             "sha256": sha(path) if stat.S_ISREG(info.st_mode) else None,
             "link": os.readlink(path) if stat.S_ISLNK(info.st_mode) else None})
     return result
+
+
+def official_entrypoint(installation):
+    binaries = [path for path in installation.rglob("*") if path.is_file() and
+                path.name in {"codex", "codex-x86_64-unknown-linux-musl"}]
+    assert len(binaries) == 1, "Official fixture must contain exactly one Codex entrypoint"
+    return binaries[0]
 
 
 def environment(directory, *, official=True):
@@ -513,6 +521,18 @@ def backend_rejections(home):
 
 
 def self_check():
+    with tempfile.TemporaryDirectory() as directory:
+        installation = Path(directory)
+        binary = installation / "codex-x86_64-unknown-linux-musl"
+        binary.write_bytes(b"official fixture")
+        assert official_entrypoint(installation) == binary
+        (installation / "codex").write_bytes(b"ambiguous entrypoint")
+        try:
+            official_entrypoint(installation)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("Ambiguous official entrypoint accepted")
     command = launch_command(Path("/work/独立 Host/bin/codex"), Path("/profile/用户 数据"),
         ["exec", "空格 '引号' -- ; $(false)"])
     assert command[-2:] == ["exec", "空格 '引号' -- ; $(false)"] and command[4] == "launch"
@@ -551,7 +571,7 @@ def matrix():
     writable_official_before = protected_inventory(OFFICIAL_PROFILE)
     global_path = WORK / "global"
     global_path.mkdir()
-    official_binary = next(path for path in (INPUTS / "official/install").rglob("codex") if path.is_file())
+    official_binary = official_entrypoint(INPUTS / "official/install")
     (global_path / "codex").symlink_to(official_binary)
     path_before = os.environ["PATH"]
     drop = []

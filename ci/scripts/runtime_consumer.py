@@ -402,6 +402,39 @@ def self_check():
     for invalid in (alias.replace("/profile/", "/profile-extra/"), alias.replace("/m03/", "/m03/../"),
                     alias.replace("/m03/", "/m03//")):
         assert not observer.sandbox_path(invalid, "codex-linux-sandbox")
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        primary = root / "rootfs/inputs/host/bin/codex"
+        primary.parent.mkdir(parents=True)
+        build_id = "sha256:" + "a" * 64
+        data = b"frozen Host " + build_id.encode()
+        primary.write_bytes(data)
+        write(root / "rootfs/inputs/producer.json", {"host": {
+            "executable_sha256": sha(primary), "host_identity": {"host_build_id": build_id}}})
+        copies = {
+            "/inputs/host/bin/codex": data,
+            "/work/m03/独立 Host/bin/codex": data,
+            "/work/m01/integrity/changed-host/codex": data + b"different executable identity",
+            "/work/m01/integrity/changed-host-build-id/codex": data.replace(build_id.encode(), b"sha256:" + b"0" * 64),
+        }
+        for name, content in copies.items():
+            actual = root / ("rootfs" + name if name.startswith("/inputs/") else name.lstrip("/"))
+            actual.parent.mkdir(parents=True, exist_ok=True)
+            actual.write_bytes(content)
+        calls = ['1 execve("' + name + '", ["codex"], 0x1) = 0' for name in copies]
+        bound = bind_host_executables(calls, root)
+        assert bound == {name: hashlib.sha256(content).hexdigest() for name, content in copies.items()}
+        for name in ("/work/m03/独立 Host/bin/codex", "/work/m01/integrity/changed-host/codex",
+                     "/work/m01/integrity/changed-host-build-id/codex", "/work/m01/integrity/changed-host-extra/codex"):
+            actual = root / name.lstrip("/")
+            actual.parent.mkdir(parents=True, exist_ok=True)
+            actual.write_bytes(b"unexpected executable")
+            try:
+                bind_host_executables(['1 execve("' + name + '", ["codex"], 0x1) = 0'], root)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError("Unpinned Host bytes accepted: " + name)
     observer.audit_network([
         '1 socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC|SOCK_NONBLOCK, 0, [7<UNIX-STREAM:[161700->161701]>, 8<UNIX-STREAM:[161701->161700]>]) = 0'
     ], Path("/metadata"), ())
@@ -679,6 +712,39 @@ def redact_trace(text, observer):
     return trace_paths(mod_manifest.redact(observer.redact_syscalls(text)))
 
 
+def bind_host_executables(executions, root):
+    primary = root / "rootfs/inputs/host/bin/codex"
+    expected = sha(primary)
+    host = read(root / "rootfs/inputs/producer.json")["host"]
+    assert expected == host["executable_sha256"], "Frozen Host differs from the producer"
+    before = host["host_identity"]["host_build_id"].encode()
+    data = primary.read_bytes()
+    assert re.fullmatch(rb"sha256:[0-9a-f]{64}", before) and before in data
+    after = b"sha256:" + (b"0" if before != b"sha256:" + b"0" * 64 else b"1") * 64
+    # The M01 rejection matrix executes exactly these two deterministic mutations.
+    rejected = {
+        "/work/m01/integrity/changed-host/codex": hashlib.sha256(data + b"different executable identity").hexdigest(),
+        "/work/m01/integrity/changed-host-build-id/codex": hashlib.sha256(data.replace(before, after)).hexdigest(),
+    }
+    del data
+    bound = {}
+    for line in executions:
+        match = re.search(r'execve\("([^"]+)"', line)
+        if not match or Path(match[1]).name != "codex":
+            continue
+        path = Path(match[1])
+        if path.is_relative_to("/inputs/host"):
+            actual = root / "rootfs" / path.relative_to("/")
+        elif path.is_relative_to("/work") or path.is_relative_to("/profile"):
+            actual = root / path.relative_to("/")
+        else:
+            raise AssertionError("Unbound Host executable: " + str(path))
+        wanted = rejected.get(str(path), expected)
+        assert ".." not in path.parts and actual.is_file() and sha(actual) == wanted, "Host bytes differ: " + str(path)
+        bound[str(path)] = wanted
+    return bound
+
+
 def observe(directory, evidence):
     import observer
     observer.check_network_audit()
@@ -719,25 +785,7 @@ def observe(directory, evidence):
             assert paths[1] not in alias_targets or alias_targets[paths[1]] == paths[0]
             alias_targets[paths[1]] = paths[0]
     assert set(alias_targets) == aliases
-    # Bind every actual Host execution/copy to frozen bytes outside the consumer namespace.
-    primary = directory.parent / "rootfs/inputs/host/bin/codex"
-    expected = sha(primary)
-    bound_hosts = {}
-    for line in executions:
-        match = re.search(r'execve\("([^"]+)"', line)
-        if not match or Path(match[1]).name != "codex":
-            continue
-        path = Path(match[1])
-        if path.is_relative_to("/inputs/host"):
-            actual = directory.parent / "rootfs" / path.relative_to("/")
-            wanted = expected
-        elif path.is_relative_to("/work") or path.is_relative_to("/profile"):
-            actual = directory.parent / path.relative_to("/")
-            wanted = expected
-        else:
-            raise AssertionError("Unbound Host executable: " + str(path))
-        assert ".." not in path.parts and actual.is_file() and sha(actual) == wanted, "Host bytes differ: " + str(path)
-        bound_hosts[str(path)] = wanted
+    bound_hosts = bind_host_executables(executions, directory.parent)
     observer.audit_executions(executions, python_scripts=scripts, sandbox_aliases=aliases, bwrap_executions=bwrap_executions)
     assert bwrap_executions, "No actual nested packaged sandbox helper"
     assert any('execve("/inputs/host/codex-path/rg"' in line for line in executions), "No actual packaged rg execution"
