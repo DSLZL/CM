@@ -271,6 +271,53 @@ class IdentityTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 host.require_build_success(events[:index] + [{**event, "return_code": 1}] + events[index + 1:])
 
+    def test_compiler_cache_survives_image_release_but_rejects_tool_or_flag_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            logs = root / "logs"
+            logs.mkdir()
+            (root / "Cargo.toml").write_text("[profile.dev-small]\ndebug = 0\n")
+            (root / "Cargo.lock").write_text("locked dependencies")
+            compiler = root / "cc"
+            compiler.write_bytes(b"compiler-v1")
+            output = root / "github-output"
+            cfg = {"native_tools": ["cc"], "cargo_config_files": ["Cargo.toml"],
+                   "units": [{"id": "host", "manifest": "Cargo.toml", "lockfile": "Cargo.lock",
+                              "packages": ["codex-cli"]}],
+                   "build_profile": "dev-small", "test_profile": "dev-small", "clippy_profile": "dev-small"}
+
+            def checked(command, **_):
+                if command[0] == "sccache":
+                    return "sccache " + linux_ci.SCCACHE_VERSION
+                if command[0] == "git":
+                    return "1" * 40
+                return "pinned " + " ".join(command)
+
+            def identify():
+                output.write_text("")
+                linux_ci.identify(root, logs, cfg)
+                value = host.read(logs / "build-identity.json")
+                self.assertEqual(dict(line.split("=", 1) for line in output.read_text().splitlines()), value["cache_keys"])
+                return value
+
+            env = {"GITHUB_OUTPUT": str(output), "GITHUB_REPOSITORY": "DSLZL/CM-build-linux-x64",
+                   "RUNNER_OS": "Linux", "RUNNER_ARCH": "X64", "ImageOS": "ubuntu24",
+                   "ImageVersion": "before", "RUSTFLAGS": "-C target-cpu=x86-64"}
+            with patch.dict(os.environ, env, clear=True), patch.object(linux_ci.shutil, "which", return_value=str(compiler)), \
+                    patch.object(linux_ci.subprocess, "check_output", side_effect=checked):
+                before = identify()
+                os.environ["ImageVersion"] = "after"
+                after = identify()
+                self.assertEqual(before["compatibility_fingerprint"], after["compatibility_fingerprint"])
+                self.assertEqual(before["cache_keys"]["sccache_prefix"], after["cache_keys"]["sccache_prefix"])
+                self.assertNotEqual(before["cache_keys"]["sccache_legacy_prefix"], after["cache_keys"]["sccache_legacy_prefix"])
+                self.assertEqual(after["compatibility"]["image_version"], "after")
+                for key, value in (("RUSTFLAGS", "-C target-cpu=x86-64-v3"), ("RUNNER_ARCH", "ARM64"), ("ImageOS", "ubuntu26")):
+                    with self.subTest(changed=key), patch.dict(os.environ, {key: value}):
+                        self.assertNotEqual(after["compatibility_fingerprint"], identify()["compatibility_fingerprint"])
+                compiler.write_bytes(b"compiler-v2")
+                self.assertNotEqual(after["compatibility_fingerprint"], identify()["compatibility_fingerprint"])
+
     def test_shared_cargo_entry_uses_manifest_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

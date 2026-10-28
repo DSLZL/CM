@@ -141,14 +141,17 @@ def identify(root, logs, cfg):
         "units": [{"id": u["id"], "packages": u["packages"], "features": u.get("features", []), "no_default_features": u.get("no_default_features", False)} for u in cfg["units"]]}
     lock_hash = digest({u["lockfile"]: digest(source_file(root, u["lockfile"]).read_bytes()) for u in cfg["units"]})
     compiler_hash = digest({"rustc": rustc, "cargo": cargo})
-    fingerprint = digest(compatibility)
+    # Image release numbers are provenance; compiler bytes, inputs and flags determine reuse.
+    fingerprint = digest({key: value for key, value in compatibility.items() if key != "image_version"})
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     platform = "Linux-X64-" + TARGET
     epoch = os.environ.get("CM_CACHE_EPOCH", "v1")
     cargo_prefix = "cm-cargo-" + epoch + "-" + platform + "-" + compiler_hash + "-"
-    sccache_prefix = "cm-sccache-" + epoch + "-" + platform + "-" + SCCACHE_VERSION + "-" + fingerprint + "-"
+    sccache_base = "cm-sccache-" + epoch + "-" + platform + "-" + SCCACHE_VERSION + "-"
+    sccache_prefix = sccache_base + fingerprint + "-"
     values = {"cargo_key": cargo_prefix + lock_hash, "cargo_prefix": cargo_prefix,
-              "sccache_key": sccache_prefix + head, "sccache_prefix": sccache_prefix}
+              "sccache_key": sccache_prefix + head, "sccache_prefix": sccache_prefix,
+              "sccache_legacy_prefix": sccache_base + digest(compatibility) + "-"}
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
         for key, value in values.items():
             stream.write(key + "=" + value + "\n")
