@@ -128,6 +128,16 @@ def identity(process, expected):
     return {"pid": process.pid, "proc_exe": actual, "executable_sha256": sha(path)}
 
 
+def tui_configuration(arguments, directory):
+    flags = arguments[:arguments.index("exec")]
+    settings = [flags[index + 1] for index, flag in enumerate(flags) if flag == "-c"]
+    settings += ['model="gpt-5.4"', 'sandbox_mode="workspace-write"',
+                 'projects.' + json.dumps(str(directory)) + '.trust_level="trusted"']
+    text = "\n".join(settings) + "\n"
+    tomllib.loads(text)
+    return text
+
+
 def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=None):
     directory = EVIDENCE / name
     directory.mkdir(parents=True)
@@ -153,11 +163,7 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
     try:
         if tui:
             # An empty argv enters the real terminal UI. Provider/project settings live in its independent home.
-            flags = arguments[:arguments.index("exec")]
-            settings = [flags[index + 1] for index, flag in enumerate(flags) if flag == "-c"]
-            settings += ['model="gpt-5.4"', 'approval_policy="never"', 'sandbox_mode="workspace-write"',
-                         'projects.' + json.dumps(str(directory)) + '.trust_level="trusted"']
-            (home / "config.toml").write_text("\n".join(settings) + "\n")
+            (home / "config.toml").write_text(tui_configuration(arguments, directory))
             command = launch_command(binary, home, [])
             master, slave = pty.openpty()
             terminal = master
@@ -521,6 +527,12 @@ def backend_rejections(home):
 
 
 def self_check():
+    directory = Path("/evidence/m03/用户 空格")
+    arguments = sdk_module().command(directory, "http://127.0.0.1:1234", "embedded")[1:]
+    config = tomllib.loads(tui_configuration(arguments, directory))
+    assert config["approval_policy"] == "never" and config["sandbox_mode"] == "workspace-write"
+    assert config["model"] == "gpt-5.4" and config["projects"][str(directory)]["trust_level"] == "trusted"
+    assert config["model_providers"]["cm_fixture"]["base_url"] == "http://127.0.0.1:1234/v1"
     with tempfile.TemporaryDirectory() as directory:
         installation = Path(directory)
         binary = installation / "codex-x86_64-unknown-linux-musl"

@@ -281,7 +281,12 @@ def audit_network(lines, directory, ports, kernel_routes=(), tcp_connections=())
                 scoped = 'sun_path="' + str(directory) + '/' in address[1]
                 denied_nscd = (call[2] == "connect" and address[1] == '{sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}' and
                                line.endswith((' = -1 ENOENT (No such file or directory)', ' = -1 EPERM (Operation not permitted)')))
-                assert scoped or denied_nscd, line
+                # The fixed TUI fixture can probe its absent user session bus; no connection succeeds.
+                denied_session_bus = (call[2] == "connect" and
+                    address[1] == '{sa_family=AF_UNIX, sun_path="/run/user/1000/bus"}' and
+                    re.fullmatch(r'UNIX-STREAM:\[\d+\]', descriptor) and
+                    line.endswith(' = -1 ENOENT (No such file or directory)'))
+                assert scoped or denied_nscd or denied_session_bus, line
                 if scoped:
                     inode = re.fullmatch(r'UNIX(?:-[A-Z]+)?:\[(\d+)[^\]]*\]', descriptor)
                     assert inode, "Missing Unix socket identity: " + line
@@ -419,6 +424,8 @@ def check_network_audit():
         assert not provider_tcp_connections(invalid, {"8080"}), invalid
     nscd = '3 connect(8<UNIX-STREAM:[51]>, {sa_family=AF_UNIX, sun_path="/var/run/nscd/socket"}, 110) = -1 ENOENT (No such file or directory)'
     audit_network([nscd, nscd.replace('ENOENT (No such file or directory)', 'EPERM (Operation not permitted)')], directory, set())
+    dbus = '8430 connect(10<UNIX-STREAM:[81562]>, {sa_family=AF_UNIX, sun_path="/run/user/1000/bus"}, 21) = -1 ENOENT (No such file or directory)'
+    audit_network([dbus], directory, set())
     route = '4 socket(AF_NETLINK, SOCK_RAW|SOCK_CLOEXEC, NETLINK_ROUTE) = 5<NETLINK:[123]>'
     tail = ', 40, 0, {sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, 12) = 40'
     structured = '4 sendto(5<NETLINK:[123]>, [{nlmsg_type=RTM_NEWLINK}, ["observer-secret]", "escaped\\\"quote"]]' + tail
@@ -456,6 +463,12 @@ def check_network_audit():
                     [nscd.replace('/var/run/nscd/socket', '/outside/nscd/socket')],
                     [nscd.replace('ENOENT (No such file or directory)', 'EACCES (Permission denied)')],
                     [nscd, ipc],
+                    [dbus.replace(' = -1 ENOENT (No such file or directory)', ' = 0')],
+                    [dbus.replace('ENOENT (No such file or directory)', 'EPERM (Operation not permitted)')],
+                    [dbus.replace('/run/user/1000/bus', '/run/user/1001/bus')],
+                    [dbus.replace('/run/user/1000/bus', '/run/user/1000/bus-extra')],
+                    [dbus.replace('connect(', 'sendto(')], [dbus.replace('UNIX-STREAM', 'UNIX-DGRAM')],
+                    [dbus, bare_ipc.replace('[51]', '[81562]')],
                     [connect, send.replace("<UNIX-STREAM:[41->42]>", "")],
                     [tcp.replace(":8080]", ":8081]")], [tcp.replace("->127.0.0.1", "->198.51.100.1")],
                     [connect.replace("/fixture/", "/outside/")], [ipc],
