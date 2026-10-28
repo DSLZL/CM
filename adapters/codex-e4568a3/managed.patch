@@ -146,14 +146,14 @@ index 7bd8ec8..f99aab2 100644
          None
      };
 diff --git a/codex-rs/tui/Cargo.toml b/codex-rs/tui/Cargo.toml
-index 47968b8..fb0e223 100644
+index 47968b8..aa4f884 100644
 --- a/codex-rs/tui/Cargo.toml
 +++ b/codex-rs/tui/Cargo.toml
 @@ -22,6 +22,7 @@ doctest = false
  workspace = true
  
  [dependencies]
-+cm-runtime = { workspace = true }
++cm-runtime = { path = "../cm" }
  codex-build-info = { workspace = true }
  anyhow = { workspace = true }
  axum = { workspace = true, default-features = false, features = ["http1", "tokio"] }
