@@ -443,7 +443,8 @@ def ownership(m, sdk):
     mod_manifest.write_toml(home / "cm-runtime.toml", {"format_version": 2,
         "enabled": [OWNER, "lifecycle-audit"], "mods": {OWNER: {"mode": "basic"}}})
     config_before = {name: (home / name).read_bytes() for name in ("config.toml", "cm-runtime.toml")}
-    external = WORK / "external"
+    # Hard-link counterexamples must stay within the same consumer bind mount.
+    external = PROFILE / "external"
     external.mkdir(mode=0o700)
     private_file(external / "preserve", b"outside-state")
     external_before = m.protected_inventory(external)
@@ -460,11 +461,16 @@ def ownership(m, sdk):
             path.symlink_to(external / "preserve")
         elif kind == "hardlink":
             os.link(external / "preserve", path)
+            assert path.stat().st_nlink == 2
         elif kind == "fifo":
             os.mkfifo(path, 0o600)
         elif kind == "socket":
             listener = socket.socket(socket.AF_UNIX)
-            listener.bind(str(path))
+            # Bind a short name before moving the real socket into the deep state tree.
+            socket_path = PROFILE / "ownership-socket"
+            listener.bind(str(socket_path))
+            socket_path.rename(path)
+            assert path.is_socket()
         elif kind == "sparse-budget":
             private_file(path, b"")
             with path.open("wb") as stream:
