@@ -532,7 +532,7 @@ def matrix():
     shutil.copytree(INPUTS / "official/profile", m.OFFICIAL_PROFILE, symlinks=True)
     sdk = m.sdk_module()
     frozen = m.sha(BINARY)
-    authored = m.read(INPUTS / "fixture/m04-producer.json")
+    authored = m.read(Path("/fixture/m04-producer.json"))
     assert authored["status"] == "pass" and authored["host_executable_sha256"] == frozen
     official_before = m.protected_inventory(INPUTS / "official")
     writable_official_before = m.protected_inventory(m.OFFICIAL_PROFILE)
