@@ -290,6 +290,14 @@ def system_package_owners(path):
     raise RuntimeError("Unowned runtime input: " + str(path) + " -> " + str(path.resolve()))
 
 
+def copy_runtime_tree(source, destination):
+    # Managed package readers require independent, single-link regular files.
+    shutil.copytree(source, destination, symlinks=True)
+    for path in destination.rglob("*"):
+        if path.is_file() and not path.is_symlink():
+            assert path.stat().st_nlink == 1, "Hard-linked runtime input: " + str(path)
+
+
 def rootfs(inputs, root):
     root.mkdir()
     packages = {}
@@ -336,9 +344,8 @@ def rootfs(inputs, root):
         destination.chmod(0o644)
         for dependency in elf_dependencies(path):
             system(dependency)
-    shutil.copytree(inputs / "host", root / "inputs/host", copy_function=os.link, symlinks=True)
-    shutil.copytree(inputs / "mods", root / "inputs/mods", copy_function=os.link, symlinks=True)
-    shutil.copytree(inputs / "official", root / "inputs/official", copy_function=os.link, symlinks=True)
+    for name in ("host", "mods", "official"):
+        copy_runtime_tree(inputs / name, root / "inputs" / name)
     shutil.copytree(inputs / "fixture", root / "fixture")
     shutil.copyfile(inputs / "producer.json", root / "inputs/producer.json")
     for path in (root / "inputs").rglob("*"):
@@ -377,6 +384,24 @@ def self_check():
     runtime_sdk.self_check()
     import managed_package
     managed_package.self_check()
+    with tempfile.TemporaryDirectory() as directory:
+        base = Path(directory)
+        source = base / "source"
+        source.mkdir()
+        payload = source / "payload"
+        payload.write_bytes(b"runtime input")
+        payload.chmod(0o755)
+        os.link(payload, source / "alias")
+        (source / "relative-link").symlink_to("payload")
+        copied, cloned = base / "rootfs", base / "missing-library-root"
+        copy_runtime_tree(source, copied)
+        copy_runtime_tree(copied, cloned)
+        assert payload.stat().st_nlink == 2
+        assert stat.S_IMODE((copied / "payload").stat().st_mode) == 0o755
+        assert os.readlink(cloned / "relative-link") == "payload"
+        (copied / "payload").write_bytes(b"changed")
+        assert all(path.read_bytes() == b"runtime input" for path in
+                   (payload, copied / "alias", cloned / "payload"))
     import runtime_composition as composition
     observer_text = runtime_observer_source(composition)
     observer = types.ModuleType("observer")
@@ -927,7 +952,7 @@ def consume():
             if result.returncode == 0:
                 stage = "actual removed runtime library"
                 missing_root = temp / "missing-library-root"
-                shutil.copytree(root, missing_root, copy_function=os.link, symlinks=True)
+                copy_runtime_tree(root, missing_root)
                 candidates = [path for path in closure["system_paths"]
                     if Path(path).name in ("libcap.so.2", "libasound.so.2", "libstdc++.so.6")]
                 assert candidates, "No removable packaged runtime dependency counterexample"
