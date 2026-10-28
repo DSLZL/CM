@@ -393,6 +393,16 @@ def copy_evidence(source, destination):
         target.write_text(mod_manifest.redact(data.decode("utf-8")), encoding="utf-8")
 
 
+@ci_progress.case()
+def check_evidence_redaction(paths):
+    import mod_manifest
+    for path in paths:
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert all(secret not in text for secret in mod_manifest.CANARIES), "Configuration value leaked into evidence"
+
+
 def self_check():
     from unittest.mock import patch
     ci_progress.self_check()
@@ -424,6 +434,23 @@ def self_check():
                 "import runpy,sys; runpy.run_path(sys.argv[1])", str(root / relative)], cwd=directory, check=True)
     import mod_manifest
     mod_manifest.self_check()
+    with tempfile.TemporaryDirectory() as directory:
+        evidence = Path(directory)
+        nested = evidence / "missing-dependency-inventory.json"
+        nested.mkdir()
+        for name in ("report.json", "events.jsonl", "details.log"):
+            path = nested / name
+            path.write_text("safe evidence", encoding="utf-8")
+            paths = [nested, path]
+            check_evidence_redaction(paths)
+            path.write_text(mod_manifest.CANARIES[0], encoding="utf-8")
+            try:
+                check_evidence_redaction(paths)
+            except AssertionError as error:
+                assert str(error) == "Configuration value leaked into evidence"
+            else:
+                raise AssertionError("Evidence canary was not detected")
+            path.write_text("safe evidence", encoding="utf-8")
     import runtime_sdk
     runtime_sdk.self_check()
     import managed_package
@@ -1127,15 +1154,16 @@ def consume():
                 "outer_audit": audit, "release_ready": False}
             if producer["task_id"] in ("CM-M01", "CM-M02", "CM-M03"):
                 assert read(evidence / "m01/suite.json")["status"] == "pass"
-                for path in [*evidence.rglob("*.json"), *evidence.rglob("*.jsonl"), *evidence.rglob("*.log"),
-                             *logs.glob("*.log")]:
-                    assert all(secret not in path.read_text() for secret in mod_manifest.CANARIES), "Configuration value leaked into evidence"
+                stage = "evidence redaction audit"
+                check_evidence_redaction([*evidence.rglob("*.json"), *evidence.rglob("*.jsonl"),
+                                          *evidence.rglob("*.log"), *logs.glob("*.log")])
                 report = read(evidence / "metadata-only-resolution.json")
                 report["producer_source_attachment_audit"] = producer["metadata_source_attachment_audit"]
                 assert report["producer_source_attachment_audit"]["status"] == "pass"
                 write(evidence / "metadata-only-resolution.json", report)
             if producer["task_id"] in ("CM-M02", "CM-M03"):
                 assert read(evidence / "m02/suite.json")["status"] == "pass"
+            stage = "acceptance report promotion"
             report_sets = [p04_acceptance]
             if m01_acceptance is not None:
                 report_sets.append(m01_acceptance)
