@@ -99,7 +99,9 @@ pub(crate) fn managed_identity() -> Result<ManagedHost, LoadError> {
     validate(false)?;
     let executable = fs::canonicalize("/proc/self/exe")
         .map_err(|e| LoadError::input("package", "", &e.to_string()))?;
-    let inventory = executable.parent().and_then(Path::parent)
+    let inventory = executable
+        .parent()
+        .and_then(Path::parent)
         .ok_or_else(|| LoadError::input("package", "", "missing package root"))?
         .join("cm-runtime-files.json");
     let (_, pin) = loader::read_input(&inventory, 4 * 1024 * 1024)

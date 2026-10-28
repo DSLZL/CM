@@ -18,12 +18,12 @@ use serde_json::Value;
 use serde_json::json;
 
 pub mod config;
+pub mod launcher;
 mod loader;
 mod manifest;
 pub mod metadata;
 pub mod mod_install;
 pub mod mod_lock;
-pub mod launcher;
 pub mod output_limit;
 pub mod package;
 pub mod profile;
@@ -210,7 +210,8 @@ pub fn defer_tui(home: &Path, options: &config::Options) -> Result<ShutdownGuard
     if prepared.plan().mods.is_empty() && !profile::managed(home)? {
         return initialize_prepared(prepared, false);
     }
-    PENDING_TUI.set(Mutex::new(Some(prepared)))
+    PENDING_TUI
+        .set(Mutex::new(Some(prepared)))
         .map_err(|_| LoadError::new("startup", false, "TUI preparation is terminal"))?;
     Ok(ShutdownGuard { active: true })
 }
@@ -221,15 +222,26 @@ pub fn tui_embedded_required() -> bool {
 
 /// Called only on the real Embedded start branch, before opening Core sessions.
 pub fn initialize_tui_embedded() -> Result<(), LoadError> {
-    let Some(pending) = PENDING_TUI.get() else { return Ok(()); };
+    let Some(pending) = PENDING_TUI.get() else {
+        return Ok(());
+    };
     if STARTED.load(Ordering::Acquire) {
         return match RUNTIME.get() {
             Some(Ok(_)) => Ok(()),
-            _ => Err(LoadError::new("startup", false, "previous TUI initialization failed")),
+            _ => Err(LoadError::new(
+                "startup",
+                false,
+                "previous TUI initialization failed",
+            )),
         };
     }
-    let prepared = pending.lock().map_err(|_| LoadError::new("startup", false, "poisoned TUI preparation"))?
-        .take().ok_or_else(|| LoadError::new("startup", false, "TUI initialization was already consumed"))?;
+    let prepared = pending
+        .lock()
+        .map_err(|_| LoadError::new("startup", false, "poisoned TUI preparation"))?
+        .take()
+        .ok_or_else(|| {
+            LoadError::new("startup", false, "TUI initialization was already consumed")
+        })?;
     let mut guard = initialize_prepared(prepared, true)?;
     // The CLI owns the outer guard and drains on all normal TUI exit paths.
     guard.active = false;
@@ -238,7 +250,10 @@ pub fn initialize_tui_embedded() -> Result<(), LoadError> {
 
 pub fn confirm_tui_embedded() {
     if tui_embedded_required() {
-        event("backend-selected", json!({"backend":"Embedded", "transport":"InProcess", "pid":std::process::id()}));
+        event(
+            "backend-selected",
+            json!({"backend":"Embedded", "transport":"InProcess", "pid":std::process::id()}),
+        );
     }
 }
 

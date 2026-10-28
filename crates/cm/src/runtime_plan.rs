@@ -124,7 +124,9 @@ impl PreparedPlan {
     }
 
     pub(crate) fn validate_backend(&self) -> Result<(), LoadError> {
-        if self.managed() { crate::profile::validate_environment(&self.home)?; }
+        if self.managed() {
+            crate::profile::validate_environment(&self.home)?;
+        }
         Ok(())
     }
 
@@ -136,7 +138,8 @@ impl PreparedPlan {
         let drift = |owner: &str, text: &str| LoadError::input("input_drift", owner, text);
         if let Some(managed) = &self.managed {
             managed.revalidate()?;
-        } else if Some(loader::inventory(&self.home).map_err(|e| drift("", &e))?) != self.inventory {
+        } else if Some(loader::inventory(&self.home).map_err(|e| drift("", &e))?) != self.inventory
+        {
             return Err(drift("", "candidate inventory changed"));
         }
         for (owner, pin) in &self.pins {
@@ -711,12 +714,23 @@ fn prepare_snapshot(
 ) -> Result<PreparedPlan, LoadError> {
     let inventory = if managed.is_none() {
         Some(loader::inventory(home).map_err(|e| failure("inventory", "", None, &e))?)
-    } else { None };
-    let packages: Vec<_> = if let Some(snapshot) = &managed {
-        snapshot.packages().into_iter().map(|(id, path, sha)| (id, path, Some(sha))).collect()
     } else {
-        inventory.as_ref().expect("unmanaged inventory").packages.keys()
-            .map(|slot| (slot.clone(), home.join("mods").join(slot), None)).collect()
+        None
+    };
+    let packages: Vec<_> = if let Some(snapshot) = &managed {
+        snapshot
+            .packages()
+            .into_iter()
+            .map(|(id, path, sha)| (id, path, Some(sha)))
+            .collect()
+    } else {
+        inventory
+            .as_ref()
+            .expect("unmanaged inventory")
+            .packages
+            .keys()
+            .map(|slot| (slot.clone(), home.join("mods").join(slot), None))
+            .collect()
     };
     let mut candidates = BTreeMap::new();
     let mut pins = Vec::new();
@@ -736,12 +750,19 @@ fn prepare_snapshot(
             } else {
                 let full = loader::installation_snapshot(&package)?;
                 pins.extend(full.pins.into_iter().map(|pin| (manifest.id.clone(), pin)));
-                if let Some(tree) = full.tree { trees.push((package.clone(), tree)); }
+                if let Some(tree) = full.tree {
+                    trees.push((package.clone(), tree));
+                }
                 snapshot_bytes += full.files.values().map(Vec::len).sum::<usize>();
                 full.sha256
             };
             if actual != expected || manifest.id != directory {
-                return Err(failure("input_drift", &directory, None, "managed object content/ID differs from its address"));
+                return Err(failure(
+                    "input_drift",
+                    &directory,
+                    None,
+                    "managed object content/ID differs from its address",
+                ));
             }
             candidate.content_sha256 = actual;
         }
@@ -791,7 +812,12 @@ fn prepare_snapshot(
     };
     if let Some(snapshot) = &managed {
         if snapshot.generation.config_sha256 != config_sha {
-            return Err(failure("input_drift", "", None, "managed configuration changed; use cm launch to validate the next generation"));
+            return Err(failure(
+                "input_drift",
+                "",
+                None,
+                "managed configuration changed; use cm launch to validate the next generation",
+            ));
         }
         selection.enabled = snapshot.generation.enabled.iter().cloned().collect();
         selection.format_version = 2;
@@ -811,7 +837,11 @@ fn prepare_snapshot(
         .iter()
         .map(|(id, candidate)| (id.clone(), candidate.manifest.clone()))
         .collect();
-    let original = if managed.is_some() { b"cm.managed.v1".as_slice() } else { &config };
+    let original = if managed.is_some() {
+        b"cm.managed.v1".as_slice()
+    } else {
+        &config
+    };
     let (config_values, config_identities) = selection.resolve(options, &manifests, original)?;
     let selected: BTreeMap<_, _> = candidates
         .iter()

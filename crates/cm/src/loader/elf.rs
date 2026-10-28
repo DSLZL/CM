@@ -35,19 +35,31 @@ pub(super) fn check_declared(data: &[u8], minimum: &str) -> Result<Vec<String>, 
 }
 
 fn string(strings: &[u8], position: u64) -> Result<&str, String> {
-    let tail = strings.get(usize::try_from(position).map_err(|_| "ELF string offset overflow")?..)
+    let tail = strings
+        .get(usize::try_from(position).map_err(|_| "ELF string offset overflow")?..)
         .ok_or("ELF string outside table")?;
-    let end = tail.iter().position(|b| *b == 0).ok_or("unterminated ELF string")?;
+    let end = tail
+        .iter()
+        .position(|b| *b == 0)
+        .ok_or("unterminated ELF string")?;
     std::str::from_utf8(&tail[..end]).map_err(|_| "non-UTF8 ELF string".into())
 }
 
 fn version(value: &str) -> Result<Vec<u32>, String> {
     let parts: Vec<_> = value.split('.').collect();
-    if value.len() > 32 || !(2..=3).contains(&parts.len()) { return Err("invalid ELF GLIBC version".into()); }
-    let mut result: Vec<u32> = parts.into_iter().map(|part| {
-        if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) { return Err("invalid ELF GLIBC version".into()); }
-        part.parse().map_err(|_| "ELF GLIBC version overflow".into())
-    }).collect::<Result<_, String>>()?;
+    if value.len() > 32 || !(2..=3).contains(&parts.len()) {
+        return Err("invalid ELF GLIBC version".into());
+    }
+    let mut result: Vec<u32> = parts
+        .into_iter()
+        .map(|part| {
+            if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+                return Err("invalid ELF GLIBC version".into());
+            }
+            part.parse()
+                .map_err(|_| "ELF GLIBC version overflow".into())
+        })
+        .collect::<Result<_, String>>()?;
     result.resize(3, 0);
     Ok(result)
 }
@@ -58,7 +70,9 @@ fn cpu_notes(data: &[u8]) -> Result<(), String> {
         let names = number(data, position, 4)?;
         let size = number(data, position + 4, 4)?;
         let kind = number(data, position + 8, 4)?;
-        if names > 64 * 1024 || size > 64 * 1024 { return Err("ELF note exceeds bound".into()); }
+        if names > 64 * 1024 || size > 64 * 1024 {
+            return Err("ELF note exceeds bound".into());
+        }
         let name = bytes(data, position + 12, names)?;
         let start = position + 12 + names.next_multiple_of(4);
         let descriptor = bytes(data, start, size)?;
@@ -75,12 +89,18 @@ fn cpu_notes(data: &[u8]) -> Result<(), String> {
                 } else if (0xc000_8000..=0xc000_ffff).contains(&kind) {
                     return Err("unsupported mandatory ELF CPU property".into());
                 }
-                property = property.checked_add(8 + length.next_multiple_of(8)).ok_or("ELF property overflow")?;
-                if property > size { return Err("truncated aligned ELF property".into()); }
+                property = property
+                    .checked_add(8 + length.next_multiple_of(8))
+                    .ok_or("ELF property overflow")?;
+                if property > size {
+                    return Err("truncated aligned ELF property".into());
+                }
             }
         }
         position = start + size.next_multiple_of(4);
-        if position > data.len() as u64 { return Err("truncated aligned ELF note".into()); }
+        if position > data.len() as u64 {
+            return Err("truncated aligned ELF note".into());
+        }
     }
     Ok(())
 }
@@ -145,7 +165,9 @@ fn inspect(data: &[u8], declared: Option<&str>) -> Result<Vec<String>, String> {
             14 if soname.is_none() => soname = Some(value),
             0x6fff_fffe if version_table.is_none() => version_table = Some(value),
             0x6fff_ffff if version_count.is_none() => version_count = Some(value),
-            14 | 0x6fff_fffe | 0x6fff_ffff => return Err("duplicate ELF version/SONAME declaration".into()),
+            14 | 0x6fff_fffe | 0x6fff_ffff => {
+                return Err("duplicate ELF version/SONAME declaration".into());
+            }
             5 | 10 => return Err("duplicate ELF string-table declaration".into()),
             15 | 29 | 0x7fff_fffd | 0x7fff_ffff | 0x6fff_fefb | 0x6fff_fefc => {
                 return Err(
@@ -181,54 +203,82 @@ fn inspect(data: &[u8], declared: Option<&str>) -> Result<Vec<String>, String> {
         }
     }
     let mapped = |address: u64, size: u64| -> Result<u64, String> {
-        loads.iter().find_map(|(base, offset, length)| {
-            let relative = address.checked_sub(*base)?;
-            if relative.checked_add(size)? > *length { return None; }
-            offset.checked_add(relative)
-        }).ok_or_else(|| "ELF version requirement is not file-backed".into())
+        loads
+            .iter()
+            .find_map(|(base, offset, length)| {
+                let relative = address.checked_sub(*base)?;
+                if relative.checked_add(size)? > *length {
+                    return None;
+                }
+                offset.checked_add(relative)
+            })
+            .ok_or_else(|| "ELF version requirement is not file-backed".into())
     };
     match (version_table, version_count) {
         (None, None) => {}
         (Some(mut address), Some(requirement_count)) if (1..=32).contains(&requirement_count) => {
             let actual = unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) }
-                .to_str().map_err(|_| "glibc identity")?;
+                .to_str()
+                .map_err(|_| "glibc identity")?;
             let actual = version(actual)?;
             let declared = declared.map(version).transpose()?;
             let mut total = 0;
             for index in 0..requirement_count {
                 let entry = mapped(address, 16)?;
-                if number(data, entry, 2)? != 1 { return Err("unsupported ELF Verneed version".into()); }
+                if number(data, entry, 2)? != 1 {
+                    return Err("unsupported ELF Verneed version".into());
+                }
                 let count = number(data, entry + 2, 2)?;
                 let dependency = string(strings, number(data, entry + 4, 4)?)?;
                 if !SYSTEM_LIBRARIES.contains(&dependency) || !(1..=256).contains(&count) {
                     return Err("unsupported ELF version dependency/count".into());
                 }
                 total += count;
-                if total > 1024 { return Err("ELF version requirement budget".into()); }
+                if total > 1024 {
+                    return Err("ELF version requirement budget".into());
+                }
                 let relative = number(data, entry + 8, 4)?;
-                if relative < 16 { return Err("invalid ELF Vernaux offset".into()); }
-                let mut auxiliary = address.checked_add(relative).ok_or("ELF version offset overflow")?;
+                if relative < 16 {
+                    return Err("invalid ELF Vernaux offset".into());
+                }
+                let mut auxiliary = address
+                    .checked_add(relative)
+                    .ok_or("ELF version offset overflow")?;
                 for number_index in 0..count {
                     let item = mapped(auxiliary, 16)?;
                     let name = string(strings, number(data, item + 8, 4)?)?;
                     if let Some(requirement) = name.strip_prefix("GLIBC_") {
                         let requirement = version(requirement)?;
-                        if requirement > actual || declared.as_ref().is_some_and(|minimum| &requirement > minimum) {
-                            return Err("ELF GLIBC requirement exceeds the declared or current baseline".into());
+                        if requirement > actual
+                            || declared
+                                .as_ref()
+                                .is_some_and(|minimum| &requirement > minimum)
+                        {
+                            return Err(
+                                "ELF GLIBC requirement exceeds the declared or current baseline"
+                                    .into(),
+                            );
                         }
                     }
                     let next = number(data, item + 12, 4)?;
-                    if (number_index + 1 == count && next != 0) || (number_index + 1 < count && next < 16) {
+                    if (number_index + 1 == count && next != 0)
+                        || (number_index + 1 < count && next < 16)
+                    {
                         return Err("invalid ELF Vernaux chain".into());
                     }
-                    auxiliary = auxiliary.checked_add(next).ok_or("ELF version offset overflow")?;
+                    auxiliary = auxiliary
+                        .checked_add(next)
+                        .ok_or("ELF version offset overflow")?;
                 }
                 let next = number(data, entry + 12, 4)?;
                 if (index + 1 == requirement_count && next != 0)
-                    || (index + 1 < requirement_count && next < 16) {
+                    || (index + 1 < requirement_count && next < 16)
+                {
                     return Err("invalid ELF Verneed chain".into());
                 }
-                address = address.checked_add(next).ok_or("ELF version offset overflow")?;
+                address = address
+                    .checked_add(next)
+                    .ok_or("ELF version offset overflow")?;
             }
         }
         _ => return Err("invalid ELF version table/count".into()),
@@ -261,16 +311,24 @@ mod tests {
     fn actual_cpu_requirements_and_glibc_versions_are_bounded() {
         assert!(version("2.2.5").unwrap() > version("2.2").unwrap());
         assert!(version("2.39").unwrap() > version("2.34").unwrap());
-        for bad in ["PRIVATE", "2", "2..3", "2.3.bad", "2.3.4.5"] { assert!(version(bad).is_err()); }
+        for bad in ["PRIVATE", "2", "2..3", "2.3.bad", "2.3.4.5"] {
+            assert!(version(bad).is_err());
+        }
         let mut note = Vec::new();
-        for value in [4_u32, 16, 5] { note.extend_from_slice(&value.to_le_bytes()); }
+        for value in [4_u32, 16, 5] {
+            note.extend_from_slice(&value.to_le_bytes());
+        }
         note.extend_from_slice(b"GNU\0");
-        for value in [0xc000_8002_u32, 4, 1, 0] { note.extend_from_slice(&value.to_le_bytes()); }
+        for value in [0xc000_8002_u32, 4, 1, 0] {
+            note.extend_from_slice(&value.to_le_bytes());
+        }
         cpu_notes(&note).unwrap();
         note[24] = 2;
         assert!(cpu_notes(&note).is_err());
         note[24] = 1;
-        for end in 1..note.len() { assert!(cpu_notes(&note[..end]).is_err()); }
+        for end in 1..note.len() {
+            assert!(cpu_notes(&note[..end]).is_err());
+        }
     }
 
     #[test]

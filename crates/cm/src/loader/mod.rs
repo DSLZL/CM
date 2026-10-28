@@ -489,7 +489,9 @@ fn prepare_bytes(
     }
     let needed = if let Some(binary) = &manifest.binary_manifest {
         elf::check_declared(&bytes, &binary.binary.glibc_min)?
-    } else { elf::check(&bytes)? };
+    } else {
+        elf::check(&bytes)?
+    };
     let snapshot = sealed_snapshot(&bytes)?;
     let mut resources = Vec::new();
     for resource in &manifest.resources {
@@ -539,7 +541,9 @@ pub(crate) struct InstallationSnapshot {
 }
 
 /// Same parser and native preflight as startup; never calls dlopen or an entry point.
-pub(crate) fn installation_snapshot(package: &Path) -> Result<InstallationSnapshot, crate::LoadError> {
+pub(crate) fn installation_snapshot(
+    package: &Path,
+) -> Result<InstallationSnapshot, crate::LoadError> {
     let candidate = candidate(package)?;
     let invalid = |e: String| crate::LoadError::input("installation", &candidate.manifest.id, &e);
     let mut captured = candidate.pins.clone();
@@ -553,28 +557,64 @@ pub(crate) fn installation_snapshot(package: &Path) -> Result<InstallationSnapsh
     } else {
         let mut files = BTreeMap::new();
         let mut total = 0_u64;
-        for path in tree.as_ref().expect("directory inventory").iter().filter(|s| !s.ends_with('/')) {
-            let limit = if path == &candidate.manifest.payload { MAX_PAYLOAD }
-                else if path == "mod.toml" { MAX_MANIFEST } else { MAX_RESOURCE };
-            let (bytes, pin) = read_input(&payload_path(package, path).map_err(&invalid)?, limit).map_err(&invalid)?;
+        for path in tree
+            .as_ref()
+            .expect("directory inventory")
+            .iter()
+            .filter(|s| !s.ends_with('/'))
+        {
+            let limit = if path == &candidate.manifest.payload {
+                MAX_PAYLOAD
+            } else if path == "mod.toml" {
+                MAX_MANIFEST
+            } else {
+                MAX_RESOURCE
+            };
+            let (bytes, pin) = read_input(&payload_path(package, path).map_err(&invalid)?, limit)
+                .map_err(&invalid)?;
             captured.push(pin);
             total += bytes.len() as u64;
-            if total > MAX_PACKAGE { return Err(invalid("package: total byte limit".into())); }
+            if total > MAX_PACKAGE {
+                return Err(invalid("package: total byte limit".into()));
+            }
             files.insert(path.clone(), bytes);
         }
         files
     };
     let id = candidate.manifest.id.clone();
     let manifest_hash = candidate.manifest_sha256.clone();
-    let (_, pins) = candidate.prepare().map_err(|e| crate::LoadError::input("installation", &id, &e))?;
+    let (_, pins) = candidate
+        .prepare()
+        .map_err(|e| crate::LoadError::input("installation", &id, &e))?;
     captured.extend(pins);
-    for pin in &captured { pin.revalidate().map_err(|e| crate::LoadError::input("input_drift", &id, &e))?; }
-    if files.get("mod.toml").is_none_or(|raw| hash(raw) != manifest_hash)
-        || tree.as_ref().is_some_and(|before| directory_entries(package).as_ref() != Ok(before)) {
-        return Err(crate::LoadError::input("input_drift", &id, "installation snapshot changed"));
+    for pin in &captured {
+        pin.revalidate()
+            .map_err(|e| crate::LoadError::input("input_drift", &id, &e))?;
     }
-    let identities: BTreeMap<_, _> = files.iter().map(|(path, bytes)| (path, (bytes.len(), hash(bytes)))).collect();
-    Ok(InstallationSnapshot { id, sha256: hash(&serde_json::to_vec(&identities).expect("content identities serialize")), files, pins: captured, tree })
+    if files
+        .get("mod.toml")
+        .is_none_or(|raw| hash(raw) != manifest_hash)
+        || tree
+            .as_ref()
+            .is_some_and(|before| directory_entries(package).as_ref() != Ok(before))
+    {
+        return Err(crate::LoadError::input(
+            "input_drift",
+            &id,
+            "installation snapshot changed",
+        ));
+    }
+    let identities: BTreeMap<_, _> = files
+        .iter()
+        .map(|(path, bytes)| (path, (bytes.len(), hash(bytes))))
+        .collect();
+    Ok(InstallationSnapshot {
+        id,
+        sha256: hash(&serde_json::to_vec(&identities).expect("content identities serialize")),
+        files,
+        pins: captured,
+        tree,
+    })
 }
 
 impl Candidate {

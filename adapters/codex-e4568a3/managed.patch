@@ -11,10 +11,10 @@ index 2d19797..1bba7c7 100644
   "codex-app-server-client",
   "codex-app-server-daemon",
 diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
-index 7bd8ec8..f99aab2 100644
+index 7bd8ec8..1f4075e 100644
 --- a/codex-rs/cli/src/main.rs
 +++ b/codex-rs/cli/src/main.rs
-@@ -1017,12 +1017,26 @@ impl FeatureToggles {
+@@ -1017,12 +1017,34 @@ impl FeatureToggles {
  
  #[derive(Debug, Parser)]
  struct CmCli {
@@ -28,11 +28,19 @@ index 7bd8ec8..f99aab2 100644
  #[derive(Debug, Parser)]
  enum CmCommand {
 +    /// Validate and install a precompiled package; enable a new ID next startup.
-+    Install { package: std::path::PathBuf },
-+    Enable { id: String },
-+    Disable { id: String },
++    Install {
++        package: std::path::PathBuf,
++    },
++    Enable {
++        id: String,
++    },
++    Disable {
++        id: String,
++    },
 +    /// Remove the installed reference while preserving state and immutable objects.
-+    Remove { id: String },
++    Remove {
++        id: String,
++    },
 +    /// Scan complete drop-in packages, then launch this verified Host's TUI or exec.
 +    Launch {
 +        #[arg(last = true, allow_hyphen_values = true)]
@@ -41,13 +49,12 @@ index 7bd8ec8..f99aab2 100644
      List,
      Plan,
      Doctor,
-@@ -1067,6 +1081,18 @@ fn stage_str(stage: Stage) -> &'static str {
+@@ -1067,6 +1089,17 @@ fn stage_str(stage: Stage) -> &'static str {
  fn main() -> anyhow::Result<()> {
      codex_build_info::initialize!();
      let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
 +    // Management must not create arg0 aliases or load .env from an inherited official home.
-+    if MultitoolCli::try_parse()
-+        .is_ok_and(|cli| matches!(cli.subcommand, Some(Subcommand::Cm(_))))
++    if MultitoolCli::try_parse().is_ok_and(|cli| matches!(cli.subcommand, Some(Subcommand::Cm(_))))
 +    {
 +        return tokio::runtime::Builder::new_current_thread()
 +            .enable_all()
@@ -60,7 +67,7 @@ index 7bd8ec8..f99aab2 100644
      arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
          // Keep the CLI dispatcher off the runtime's stack while the TUI rebuilds a thread.
          Box::pin(cli_main(arg0_paths, remote_control_disabled)).await?;
-@@ -1126,20 +1152,45 @@ async fn cli_main(
+@@ -1126,20 +1159,68 @@ async fn cli_main(
          profile: cm_profile,
          overrides: cm_set,
      };
@@ -81,8 +88,14 @@ index 7bd8ec8..f99aab2 100644
 -            CmCommand::Doctor => cm_runtime::metadata::Command::Doctor,
 -            CmCommand::Lock { check: false } => cm_runtime::metadata::Command::Lock,
 -            CmCommand::Lock { check: true } => cm_runtime::metadata::Command::CheckLock,
-+        let management = matches!(&command.command, CmCommand::Install { .. } | CmCommand::Enable { .. }
-+            | CmCommand::Disable { .. } | CmCommand::Remove { .. } | CmCommand::Launch { .. });
++        let management = matches!(
++            &command.command,
++            CmCommand::Install { .. }
++                | CmCommand::Enable { .. }
++                | CmCommand::Disable { .. }
++                | CmCommand::Remove { .. }
++                | CmCommand::Launch { .. }
++        );
 +        let home = if let Some(home) = &command.home {
 +            home.clone()
 +        } else if management {
@@ -91,11 +104,28 @@ index 7bd8ec8..f99aab2 100644
 +            find_codex_home()?
 +        };
 +        let result = match &command.command {
-+            CmCommand::Install { package } => cm_runtime::mod_install::run(&home, cm_runtime::mod_install::Command::Install(package), &cm_options),
-+            CmCommand::Enable { id } => cm_runtime::mod_install::run(&home, cm_runtime::mod_install::Command::Enable(id), &cm_options),
-+            CmCommand::Disable { id } => cm_runtime::mod_install::run(&home, cm_runtime::mod_install::Command::Disable(id), &cm_options),
-+            CmCommand::Remove { id } => cm_runtime::mod_install::run(&home, cm_runtime::mod_install::Command::Remove(id), &cm_options),
-+            CmCommand::Launch { args } => cm_runtime::launcher::launch(&home, args, &cm_options).map(|()| serde_json::json!({})),
++            CmCommand::Install { package } => cm_runtime::mod_install::run(
++                &home,
++                cm_runtime::mod_install::Command::Install(package),
++                &cm_options,
++            ),
++            CmCommand::Enable { id } => cm_runtime::mod_install::run(
++                &home,
++                cm_runtime::mod_install::Command::Enable(id),
++                &cm_options,
++            ),
++            CmCommand::Disable { id } => cm_runtime::mod_install::run(
++                &home,
++                cm_runtime::mod_install::Command::Disable(id),
++                &cm_options,
++            ),
++            CmCommand::Remove { id } => cm_runtime::mod_install::run(
++                &home,
++                cm_runtime::mod_install::Command::Remove(id),
++                &cm_options,
++            ),
++            CmCommand::Launch { args } => cm_runtime::launcher::launch(&home, args, &cm_options)
++                .map(|()| serde_json::json!({})),
 +            _ => {
 +                let metadata = match &command.command {
 +                    CmCommand::List => cm_runtime::metadata::Command::List,
@@ -113,7 +143,7 @@ index 7bd8ec8..f99aab2 100644
              Ok(value) => println!("{}", serde_json::to_string(&value)?),
              Err(error) => {
                  eprintln!("{}", serde_json::to_string(&error)?);
-@@ -1157,7 +1208,7 @@ async fn cli_main(
+@@ -1157,7 +1238,7 @@ async fn cli_main(
      }
  
      // Metadata/helper commands never execute Mod code. Other Core entry points
@@ -122,7 +152,7 @@ index 7bd8ec8..f99aab2 100644
      let cm_business = matches!(
          &subcommand,
          None | Some(Subcommand::Agents(_))
-@@ -1176,11 +1227,17 @@ async fn cli_main(
+@@ -1176,11 +1257,22 @@ async fn cli_main(
              if command.subcommand.is_none() && !command.managed_daemon && !command.remote_control
                  && matches!(command.listen, codex_app_server::AppServerTransport::Stdio));
          let cm_supported_backend = root_remote.is_none() && (local_exec || local_stdio);
@@ -131,8 +161,13 @@ index 7bd8ec8..f99aab2 100644
 -            cm_supported_backend,
 -            &cm_options,
 -        )?)
-+        let cm_tui = root_remote.is_none() && matches!(&subcommand,
-+            None | Some(Subcommand::Agents(_)) | Some(Subcommand::Resume(_)) | Some(Subcommand::Fork(_)));
++        let cm_tui = root_remote.is_none()
++            && matches!(
++                &subcommand,
++                None | Some(Subcommand::Agents(_))
++                    | Some(Subcommand::Resume(_))
++                    | Some(Subcommand::Fork(_))
++            );
 +        if cm_tui {
 +            Some(cm_runtime::defer_tui(&find_codex_home()?, &cm_options)?)
 +        } else {
@@ -158,7 +193,7 @@ index 47968b8..aa4f884 100644
  anyhow = { workspace = true }
  axum = { workspace = true, default-features = false, features = ["http1", "tokio"] }
 diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
-index 8dd93b2..363d9ec 100644
+index 8dd93b2..4fd17bf 100644
 --- a/codex-rs/tui/src/lib.rs
 +++ b/codex-rs/tui/src/lib.rs
 @@ -537,6 +537,9 @@ async fn connect_remote_app_server(
@@ -171,25 +206,28 @@ index 8dd93b2..363d9ec 100644
      let socket_path = codex_app_server_client::app_server_control_socket_path(codex_home).ok()?;
      #[cfg(windows)]
      let (validated_path, _directory) =
-@@ -588,6 +591,9 @@ async fn start_app_server(
+@@ -588,6 +591,11 @@ async fn start_app_server(
      environment_manager: Arc<EnvironmentManager>,
      embedded_network_policy: codex_app_server_client::EmbeddedNetworkPolicy,
  ) -> color_eyre::Result<AppServerClient> {
 +    if cm_runtime::tui_embedded_required() && !matches!(target, AppServerTarget::Embedded) {
-+        return Err(color_eyre::eyre::eyre!("CM requires this Host's Embedded Core before any backend connection"));
++        return Err(color_eyre::eyre::eyre!(
++            "CM requires this Host's Embedded Core before any backend connection"
++        ));
 +    }
      let connection = if matches!(target, AppServerTarget::Embedded) {
          None
      } else {
-@@ -618,6 +624,7 @@ async fn start_app_server(
+@@ -618,6 +626,8 @@ async fn start_app_server(
              Err(err) => return Err(err),
          }
      }
-+    cm_runtime::initialize_tui_embedded().map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
++    cm_runtime::initialize_tui_embedded()
++        .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
      start_embedded_app_server(
          arg0_paths,
          config,
-@@ -632,7 +639,10 @@ async fn start_app_server(
+@@ -632,7 +642,10 @@ async fn start_app_server(
          embedded_network_policy,
      )
      .await
@@ -201,14 +239,16 @@ index 8dd93b2..363d9ec 100644
  }
  
  pub(crate) async fn start_app_server_for_picker(
-@@ -1059,6 +1069,14 @@ fn latest_session_cwd_filter<'a>(
+@@ -1059,6 +1072,16 @@ fn latest_session_cwd_filter<'a>(
      }
  }
  
 +fn cm_embedded_target(required: bool, remote: bool, executor: bool) -> std::io::Result<bool> {
 +    if required && (remote || executor) {
-+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,
-+            "CM Embedded Core rejects remote/daemon endpoints and executor overrides"));
++        return Err(std::io::Error::new(
++            std::io::ErrorKind::InvalidInput,
++            "CM Embedded Core rejects remote/daemon endpoints and executor overrides",
++        ));
 +    }
 +    Ok(required)
 +}
@@ -216,17 +256,21 @@ index 8dd93b2..363d9ec 100644
  fn app_server_target_for_launch(
      explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
      default_daemon_socket: Option<AbsolutePathBuf>,
-@@ -1066,6 +1084,9 @@ fn app_server_target_for_launch(
+@@ -1066,6 +1089,13 @@ fn app_server_target_for_launch(
      workload_identity_selected: bool,
      exec_server_url: Option<&std::ffi::OsStr>,
  ) -> std::io::Result<AppServerTarget> {
-+    if cm_embedded_target(cm_runtime::tui_embedded_required(), explicit_remote_endpoint.is_some(), exec_server_url.is_some())? {
++    if cm_embedded_target(
++        cm_runtime::tui_embedded_required(),
++        explicit_remote_endpoint.is_some(),
++        exec_server_url.is_some(),
++    )? {
 +        return Ok(AppServerTarget::Embedded);
 +    }
      if workload_identity_selected {
          if explicit_remote_endpoint.is_some() {
              return Err(std::io::Error::new(
-@@ -3274,6 +3295,16 @@ requires_openai_auth = {requires_openai_auth}
+@@ -3274,6 +3304,16 @@ requires_openai_auth = {requires_openai_auth}
          Ok(())
      }
  
