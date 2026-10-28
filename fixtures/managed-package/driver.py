@@ -387,15 +387,20 @@ def process_contracts(home, sdk):
     return rows
 
 
+def m01_rejection_inputs(work):
+    archives = sorted((work / "zip").glob("zip-*/mods/bad.cmod"))
+    assert len(archives) == 19, ("Missing M01 archive rejection fixtures", archives)
+    directories = [work / "rejections" / name / "mods/output-fixture" for name in
+        ("missing-payload", "ordinary-executable", "directory-link", "directory-hardlink", "directory-special")]
+    assert all(path.is_dir() for path in directories), ("Missing M01 directory rejection fixtures", directories)
+    return archives + directories
+
+
 def rejections(home):
     result = []
     # Reuse the exact malformed files already rejected by the current-source M01 matrix.
-    bad_archives = sorted(Path("/work/m01").glob("zip-*/mods/bad.cmod"))
-    assert len(bad_archives) == 19
-    for package in bad_archives:
+    for package in m01_rejection_inputs(Path("/work/m01")):
         result.append(reject_install(home, package, package.parents[1].name))
-    for name in ("missing-payload", "ordinary-executable", "directory-link", "directory-hardlink", "directory-special"):
-        result.append(reject_install(home, Path("/work/m01") / name / "mods/output-fixture", name))
     import mod_manifest
     for name, change in (
         ("target", lambda fields: fields["binary"].update(target="aarch64-unknown-linux-gnu")),
@@ -564,6 +569,27 @@ def backend_rejections(home):
 
 
 def self_check():
+    with tempfile.TemporaryDirectory() as directory:
+        work = Path(directory)
+        archives = [work / "zip" / ("zip-" + str(index)) / "mods/bad.cmod" for index in range(19)]
+        directories = [work / "rejections" / name / "mods/output-fixture" for name in
+            ("missing-payload", "ordinary-executable", "directory-link", "directory-hardlink", "directory-special")]
+        for path in archives:
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"malformed fixture")
+        for path in directories:
+            path.mkdir(parents=True)
+        assert set(m01_rejection_inputs(work)) == set(archives + directories)
+        for missing in (archives[0], directories[0]):
+            saved = missing.with_name(missing.name + ".saved")
+            missing.rename(saved)
+            try:
+                m01_rejection_inputs(work)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError("Incomplete M01 rejection fixtures accepted")
+            saved.rename(missing)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen()
