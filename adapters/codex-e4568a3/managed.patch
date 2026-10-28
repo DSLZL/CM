@@ -193,7 +193,7 @@ index 47968b8..aa4f884 100644
  anyhow = { workspace = true }
  axum = { workspace = true, default-features = false, features = ["http1", "tokio"] }
 diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
-index 8dd93b2..4fd17bf 100644
+index 8dd93b2..d6c5c72 100644
 --- a/codex-rs/tui/src/lib.rs
 +++ b/codex-rs/tui/src/lib.rs
 @@ -537,6 +537,9 @@ async fn connect_remote_app_server(
@@ -270,7 +270,22 @@ index 8dd93b2..4fd17bf 100644
      if workload_identity_selected {
          if explicit_remote_endpoint.is_some() {
              return Err(std::io::Error::new(
-@@ -3274,6 +3304,16 @@ requires_openai_auth = {requires_openai_auth}
+@@ -1141,11 +1171,13 @@ fn restore_terminal_before_fatal_exit() {
+ }
+ 
+ pub async fn run_main(
+-    cli: Cli,
++    mut cli: Cli,
+     arg0_paths: Arg0DispatchPaths,
+     loader_overrides: LoaderOverrides,
+     explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
+ ) -> std::io::Result<AppExitInfo> {
++    // Pin startup policy before orchestration can install or start a managed daemon.
++    cli.no_daemon |= cm_runtime::tui_embedded_required();
+     system_motion::initialize().await;
+     startup_recovery::scope(async move {
+         // Startup retains a large future for the whole session. Keep it off callers' stacks,
+@@ -3274,6 +3306,16 @@ requires_openai_auth = {requires_openai_auth}
          Ok(())
      }
  

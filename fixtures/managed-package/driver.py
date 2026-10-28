@@ -197,7 +197,10 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
             sdk.core.await_barrier(lambda: any(row["event"] == "backend-selected" for row in
                 sdk.rows(directory / "native.jsonl")), process, "actual TUI Embedded InProcess start")
             observed = identity(process, sha(binary))
-            os.write(master, expected_input.encode() + b"\r")
+            os.write(master, expected_input.encode())
+            # A separate Enter follows the upstream 120 ms paste-suppression window.
+            time.sleep(0.2)
+            os.write(master, b"\r")
         else:
             command = launch_command(binary, home, arguments)
             stdout = (directory / "stdout.jsonl").open("w")
@@ -218,7 +221,9 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
             else bool(provider.requests), process, "actual model/native round trip")
         if tui:
             sdk.core.await_barrier(lambda: b"M02 complete" in output, process, "TUI displayed final model message")
-            os.write(terminal, b"/quit\r")
+            os.write(terminal, b"/quit")
+            time.sleep(0.2)
+            os.write(terminal, b"\r")
         code = process.wait(timeout=45)
         if not tui:
             stdout.close()
@@ -635,6 +640,7 @@ def matrix():
     implicit.listen()
     try:
         terminal = business("actual-tui", tui_home, sdk, tui=True)
+        assert not (tui_home / "packages/app-server-daemon").exists(), "TUI attempted managed daemon installation"
         assert not select.select([implicit], [], [], 0)[0], "TUI probed the old daemon"
     finally:
         implicit.close()
@@ -694,7 +700,8 @@ def matrix():
          "two_real_writers": concurrent, "recovery": recovered, "dependency_breaking_changes_rejected": True,
          "constructor_entry_and_postinstall_executions_during_install": 0},
         {"actual_tui": terminal, "actual_exec": independent, "reachable_old_backend_rejections": backends,
-         "implicit_daemon_listener_connections": 0, "transport": "InProcess", "implicit_daemon_socket": str(implicit_path)},
+         "implicit_daemon_listener_connections": 0, "implicit_daemon_installations": 0,
+         "transport": "InProcess", "implicit_daemon_socket": str(implicit_path)},
         {"native_rejections": [row for row in rejected if row["case"] in
             ("target", "cpu", "glibc-understated", "elf-architecture", "runpath", "actual-glibc", "actual-cpu-property")],
          "actual_removed_library": read(Path("/evidence/missing-library.json")),
