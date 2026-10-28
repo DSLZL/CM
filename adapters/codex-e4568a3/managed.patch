@@ -11,7 +11,7 @@ index 2d19797..1bba7c7 100644
   "codex-app-server-client",
   "codex-app-server-daemon",
 diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
-index 7bd8ec8..1f4075e 100644
+index 7bd8ec8..cd27673 100644
 --- a/codex-rs/cli/src/main.rs
 +++ b/codex-rs/cli/src/main.rs
 @@ -1017,12 +1017,34 @@ impl FeatureToggles {
@@ -101,7 +101,7 @@ index 7bd8ec8..1f4075e 100644
 +        } else if management {
 +            anyhow::bail!("CM package management requires --home ABSOLUTE_PATH");
 +        } else {
-+            find_codex_home()?
++            find_codex_home()?.to_path_buf()
 +        };
 +        let result = match &command.command {
 +            CmCommand::Install { package } => cm_runtime::mod_install::run(
