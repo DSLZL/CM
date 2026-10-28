@@ -8,7 +8,7 @@ The package targets `x86_64-unknown-linux-gnu`. The qualified runtime is the act
 
 Keep the complete package together, including `bin/codex`, `bin/codex-code-mode-host`, `codex-resources/bwrap`, `codex-path/rg`, `cm-host.json`, `cm-runtime-files.json`, `dependency-inventory.json` and license notices. Component modes, hashes and resolved system-library paths are checked. An executable copied out of its package cannot serve as the managed launcher.
 
-Use the package's absolute executable path. No global installation, shell wrapper or `PATH` change is required. Host release `cm-host-0.6.0-m03` retains Host API 0.5.0 and the existing six capabilities; this manager adds no new native ABI.
+Use the package's absolute executable path. No global installation, shell wrapper or `PATH` change is required. The M04 source candidate is `cm-host-0.7.0-m04`, Host API 0.6.0, adding `state.files.v1` without changing native ABI layouts. M04 implementation and acceptance remain unverified; the linked M03 run qualifies the earlier 0.6.0/0.5.0 package.
 
 ## Independent home and commands
 
@@ -27,7 +27,7 @@ Choose a new or empty absolute directory whose parent already exists. CM marks i
 
 `install` accepts an absolute path to a complete ZIP `.cmod` or an equivalent directory. After the home exists, a completed package may instead be copied into its `mods/` inbox. `launch` validates and imports completed inbox packages before starting the selected generation. Names ending in `.part`, `.tmp` or `.partial` are ignored. Use a temporary name until copying finishes. Other incomplete or invalid inputs reject the launch; there is no partial activation.
 
-Installing the same ID and content is idempotent. A different content hash under an installed ID is rejected; remove that reference explicitly before installing its replacement. Dependencies are neither downloaded nor enabled implicitly. Disable or remove fails if it breaks the enabled collection. Consumed inbox content cannot silently re-enable or reinstall a disabled or removed package; explicit management remains available.
+Installing the same ID and content is idempotent. A different content hash under an installed ID is rejected. M04 adds explicit `replace ID PACKAGE --from OLD_CONTENT_SHA256`, preserving the enabled state and checking state compatibility before commit. The expected hash is the installed content-tree SHA, distinct from archive or payload SHA. Dependencies are neither downloaded nor enabled implicitly. Disable or remove fails if it breaks the enabled collection. Consumed inbox content cannot silently re-enable or reinstall a disabled or removed package; explicit management remains available.
 
 An empty launch argument list enters the real TUI. Arguments after `--` remain separate OS arguments, without a shell or global command lookup. Only TUI and local `exec` business entry points are supported by this launcher. It replaces itself with the verified Host, preserving PID, exit status and signals. The child receives the independent `CODEX_HOME` and `CODEX_SQLITE_HOME`. Management bypasses upstream helper/.env initialization in an inherited official home.
 
@@ -37,9 +37,11 @@ An empty launch argument list enters the real TUI. Arguments after `--` remain s
 
 A writer holds the home lock, validates the existing resolver/configuration/two graphs, stages and syncs files, publishes immutable objects and a generation without replacement, then atomically renames the active descriptor. It revalidates inputs and directory identities before that rename. A pre-commit error retains the previous active descriptor. If rename succeeds but directory sync fails, `committed_durability` explicitly reports that the new descriptor is committed with uncertain durability; it does not claim rollback.
 
-`enable`, `disable` and `remove` change references for the next process. A running process keeps owned snapshots, its generation and native libraries until shutdown. Removal preserves state, sessions, prior generations and object bytes. No garbage collection or state migration is provided. A terminated writer can leave unreachable staging files, which are never discovered as packages.
+`enable`, `disable` and `remove` change references for the next process and report `restart_required`. A running process keeps owned snapshots, its generation and native libraries until process exit. Removal preserves configuration, state, sessions, prior generations and object bytes. M04's bounded offline checkpoint/restore and explicit current-data cleanup are described in [file-state.md](file-state.md); immutable history has no garbage collection. A terminated writer can leave unreachable staging files, which are never discovered as packages.
 
 `cm-runtime.toml` retains the configuration layers described in [the manifest contract](mod-manifest.md). For managed homes the generation owns the enabled set; `enabled` in that TOML does not override management commands. Use `--cm-profile` and repeated `--cm-set` on both management and launch when choosing those configuration layers. A changed configuration needs `launch` or a management transaction to validate the next generation. Managed `cm lock` refreshes that generation; `cm lock --check` compares the current canonical plan without executing Mods. Unmanaged M01 metadata behavior remains available.
+
+Managed homes retain configuration namespaces for removed packages as inert data, including named profiles. Only installed contracts are resolved or supplied to native code. Reinstall and rollback validate those retained values against the selected artifact's current contract; an incompatible value rejects the transaction. Explicit command-line overrides still require an installed namespace, and unmanaged homes still reject unknown namespaces.
 
 ## Backend and native requirements
 

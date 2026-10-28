@@ -275,6 +275,7 @@ impl CompositionMod {
         let mut capabilities = vec![
             Bytes::from_static(v2::CAPABILITY),
             Bytes::from_static(v21::CAPABILITY),
+            Bytes::from_static(crate::state::CAPABILITY),
         ];
         let instance = if manifest.abi_minor == 2 {
             Some(crate::runtime::new_instance(&manifest.id)?)

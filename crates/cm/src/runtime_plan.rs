@@ -116,9 +116,23 @@ pub struct PreparedPlan {
     trees: Vec<(PathBuf, BTreeSet<String>)>,
     plan: RuntimePlan,
     modules: BTreeMap<String, Preflighted>,
+    state_contracts: BTreeMap<String, crate::state::Owner>,
 }
 
 impl PreparedPlan {
+    pub(crate) fn state_contracts(&self) -> &BTreeMap<String, crate::state::Owner> {
+        &self.state_contracts
+    }
+
+    pub(crate) fn acquire_state(&self) -> Result<Option<crate::state::Guard>, LoadError> {
+        crate::state::acquire_runtime(
+            &self.home,
+            self.managed.as_ref(),
+            &self.state_contracts,
+            &self.plan.initialization_order,
+        )
+    }
+
     pub(crate) fn managed(&self) -> bool {
         self.managed.is_some()
     }
@@ -837,12 +851,20 @@ fn prepare_snapshot(
         .iter()
         .map(|(id, candidate)| (id.clone(), candidate.manifest.clone()))
         .collect();
+    let state_contracts = candidates
+        .iter()
+        .filter_map(|(id, candidate)| {
+            crate::state::declaration(&candidate.manifest, &candidate.content_sha256)
+                .transpose()
+                .map(|result| result.map(|owner| (id.clone(), owner)))
+        })
+        .collect::<Result<BTreeMap<_, _>, LoadError>>()?;
     let original = if managed.is_some() {
         b"cm.managed.v1".as_slice()
     } else {
         &config
     };
-    let (config_values, config_identities) = selection.resolve(options, &manifests, original)?;
+    let (config_values, config_identities) = selection.resolve(options, &manifests, original, managed.is_some())?;
     let selected: BTreeMap<_, _> = candidates
         .iter()
         .filter(|(id, _)| enabled.contains(*id))
@@ -907,6 +929,7 @@ fn prepare_snapshot(
         trees,
         plan,
         modules,
+        state_contracts,
     })
 }
 

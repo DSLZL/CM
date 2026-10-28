@@ -28,7 +28,7 @@ def recipes(root):
         "mod-pinned-snapshot-build": (root, cargo_args(runtime, "test", cfg, cfg["test_profile"]) +
             ["--lib", "--no-run", "--message-format=json"], target / "host", "cm_runtime"),
     }
-    if cfg["task_id"] in ("CM-M02", "CM-M03"):
+    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04"):
         probe = Path(os.environ["RUNNER_TEMP"]) / "cm-m02-native-probe-source"
         specs["m02-native-probe-build"] = (probe, ["cargo", "test", "--locked", "--manifest-path",
             "codex-rs/Cargo.toml", "--target", TARGET, "--profile", cfg["test_profile"],

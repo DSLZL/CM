@@ -77,6 +77,33 @@
     "contributions",
     "provenance"
   ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "compat": {
+            "properties": {
+              "required_capabilities": { "contains": { "const": "state.files.v1" } }
+            },
+            "required": ["required_capabilities"]
+          }
+        },
+        "required": ["compat"]
+      },
+      "then": {
+        "required": ["state"],
+        "properties": {
+          "compat": { "properties": { "abi_major": { "const": 2 } } },
+          "state": {
+            "properties": {
+              "owner": { "not": { "enum": [".", ".."] } },
+              "schema": { "not": { "enum": [".", ".."] } }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "binary": {
       "type": "object",
@@ -179,7 +206,7 @@
           "items": {
             "type": "string"
           },
-          "maxItems": 6,
+          "maxItems": 7,
           "minItems": 1,
           "uniqueItems": true
         },

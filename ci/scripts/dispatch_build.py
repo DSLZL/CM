@@ -125,7 +125,7 @@ def main():
     receipt_record = exact(receipt_name)
     artifact = exact(artifact_name)
     source_config = api("repos/" + source + "/contents/.github/cm-ci.json?ref=" + source_sha)
-    consumer_required = json.loads(base64.b64decode(source_config["content"]))["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03")
+    consumer_required = json.loads(base64.b64decode(source_config["content"]))["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04")
     consumer_artifact = exact("cm-linux-x64-consumer-artifacts-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
     input_artifact = exact("cm-linux-x64-runtime-inputs-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
     jobs = get_run(run_path + "/attempts/" + str(run["run_attempt"]) + "/jobs?per_page=100")["jobs"]

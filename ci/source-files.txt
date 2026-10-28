@@ -22,6 +22,7 @@ ci/scripts/record_run.py
 ci/scripts/runtime_composition.py
 ci/scripts/runtime_consumer.py
 ci/scripts/runtime_sdk.py
+ci/scripts/runtime_state.py
 ci/scripts/worker_policy.py
 ci/source-files.txt
 ci/worker-files.json
@@ -61,10 +62,12 @@ crates/cm/src/package.rs
 crates/cm/src/profile.rs
 crates/cm/src/runtime.rs
 crates/cm/src/runtime_plan.rs
+crates/cm/src/state.rs
 crates/cm/src/tool_policy.rs
 docs/mod-manifest.md
 docs/managed-package.md
 docs/runtime-sdk.md
+docs/file-state.md
 fixtures/host-baseline/acceptance.sh
 fixtures/host-baseline/test_identity.py
 fixtures/managed-package/acceptance.sh
@@ -104,6 +107,8 @@ fixtures/runtime-sdk/driver.py
 fixtures/runtime-sdk/fixture.rs
 fixtures/runtime-sdk/host_scopes.rs
 fixtures/runtime-sdk/layout.c
+fixtures/state/acceptance.sh
+fixtures/state/driver.py
 schemas/cm-runtime.schema.json
 schemas/mod-lock.schema.json
 schemas/mod.schema.json

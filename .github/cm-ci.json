@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "configured": true,
-  "task_id": "CM-M03",
+  "task_id": "CM-M04",
   "required_checks": [
-    "CM-M03-AC01",
-    "CM-M03-AC02",
-    "CM-M03-AC03",
-    "CM-M03-AC04",
-    "CM-M03-AC05",
-    "CM-M03-AC06"
+    "CM-M04-AC01",
+    "CM-M04-AC02",
+    "CM-M04-AC03",
+    "CM-M04-AC04",
+    "CM-M04-AC05",
+    "CM-M04-AC06"
   ],
   "target": "x86_64-unknown-linux-gnu",
   "rust_toolchain": "1.95.0",
@@ -38,7 +38,7 @@
       "no_default_features": false
     }
   ],
-  "acceptance_script": "fixtures/managed-package/acceptance.sh",
+  "acceptance_script": "fixtures/state/acceptance.sh",
   "cargo_config_files": [
     "adapters/codex-e4568a3/host/codex-rs/.cargo/config.toml"
   ],
@@ -81,7 +81,8 @@
     "adapters/codex-e4568a3/managed.patch",
     "crates/cm/src/profile.rs",
     "crates/cm/src/mod_install.rs",
-    "crates/cm/src/launcher.rs"
+    "crates/cm/src/launcher.rs",
+    "crates/cm/src/state.rs"
   ],
   "generated_native_identity_files": [
     "adapters/codex-e4568a3/inputs/native.json"

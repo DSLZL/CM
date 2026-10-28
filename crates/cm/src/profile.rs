@@ -80,6 +80,8 @@ pub(crate) struct Generation {
     pub consumed: BTreeSet<String>,
     pub config_sha256: Option<String>,
     pub lock_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<crate::state::View>,
 }
 
 impl Default for Generation {
@@ -92,14 +94,19 @@ impl Default for Generation {
             consumed: BTreeSet::new(),
             config_sha256: None,
             lock_sha256: String::new(),
+            state: None,
         }
     }
 }
 
 impl Generation {
-    fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 1
-            || self.domain != "cm.generation.v1"
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        let format = match (self.schema_version, self.domain.as_str(), &self.state) {
+            (1, "cm.generation.v1", None) => true,
+            (2, "cm.generation.v2", Some(state)) => state.validate().is_ok(),
+            _ => false,
+        };
+        if !format
             || self.installed.len() > 32
             || self.consumed.len() > 4096
             || self
@@ -225,7 +232,7 @@ pub(crate) fn snapshot(home: &Path) -> Result<Option<Snapshot>, LoadError> {
     snapshot_for(home, true)
 }
 
-fn snapshot_for(home: &Path, honor_launch: bool) -> Result<Option<Snapshot>, LoadError> {
+pub(crate) fn snapshot_for(home: &Path, honor_launch: bool) -> Result<Option<Snapshot>, LoadError> {
     if !managed(home)? {
         return Ok(None);
     }
@@ -420,9 +427,33 @@ pub(crate) struct Transaction {
     old: Option<InputPin>,
     pinned_inputs: Vec<InputPin>,
     pinned_directories: Vec<Directory>,
+    pub(crate) state_guard: Option<crate::state::Guard>,
 }
 
 impl Transaction {
+    pub(crate) fn revalidate(&self) -> Result<(), LoadError> {
+        for directory in [&self.root, &self.objects, &self.generations]
+            .into_iter()
+            .chain(self.pinned_directories.iter())
+        {
+            directory.check().map_err(|e| failure(&e))?;
+        }
+        let current_lock = loader::open_at(&self.root.file, OsStr::new(".cm-write.lock"), false)
+            .map_err(|e| failure(&e))?;
+        if identity(&self.lock)? != identity(&current_lock)? {
+            return Err(failure("write lock identity changed"));
+        }
+        for pin in &self.pinned_inputs {
+            pin.revalidate().map_err(|e| failure(&e))?;
+        }
+        if let Some(old) = &self.old {
+            old.revalidate().map_err(|e| failure(&e))?;
+        } else if present(&self.root.path.join("cm-profile.json"))? {
+            return Err(failure("concurrent active descriptor appeared"));
+        }
+        Ok(())
+    }
+
     pub(crate) fn begin(home: &Path, host: ManagedHost) -> Result<Self, LoadError> {
         let result = (|| -> Result<Self, String> {
             if !home.is_absolute() || home == Path::new("/") {
@@ -535,19 +566,19 @@ impl Transaction {
                 next,
                 pinned_inputs,
                 pinned_directories: vec![store, inbox],
+                state_guard: None,
             })
         })();
         result.map_err(|e| failure(&e))
     }
 
     pub(crate) fn commit(
-        self,
+        mut self,
         options: &crate::config::Options,
     ) -> Result<serde_json::Value, LoadError> {
         let config = self.root.path.join("cm-runtime.toml");
         self.next.validate().map_err(|e| failure(&e))?;
-        let mut next = self.next.clone();
-        next.config_sha256 = if present(&config)? {
+        self.next.config_sha256 = if present(&config)? {
             Some(
                 loader::read_input(&config, loader::MAX_MANIFEST)
                     .map_err(|e| failure(&e))?
@@ -557,9 +588,11 @@ impl Transaction {
         } else {
             None
         };
-        let snapshot = Snapshot::candidate(&self.root.path, self.host.clone(), next.clone())?;
+        let snapshot = Snapshot::candidate(&self.root.path, self.host.clone(), self.next.clone())?;
         let prepared = crate::runtime_plan::prepare_managed(&self.root.path, options, snapshot)?;
         prepared.revalidate()?;
+        crate::state::reconcile(&mut self, prepared.state_contracts())?;
+        let mut next = self.next.clone();
         next.lock_sha256 = loader::hash(&crate::mod_lock::canonical(prepared.plan()));
         let bytes = canonical(&next);
         if bytes.len() as u64 > LIMIT {
@@ -593,7 +626,7 @@ impl Transaction {
         let active = Active {
             schema_version: 1,
             domain: "cm.profile.v1".into(),
-            host: self.host,
+            host: self.host.clone(),
             generation,
         };
         let name = temporary("profile");
@@ -602,27 +635,11 @@ impl Transaction {
                 .create_file(&name, &canonical(&active))
                 .map_err(|e| failure(&e))?;
             prepared.revalidate()?;
-            for directory in [&self.root, &self.objects, &self.generations]
-                .into_iter()
-                .chain(self.pinned_directories.iter())
-            {
-                directory.check().map_err(|e| failure(&e))?;
-            }
-            let current_lock =
-                loader::open_at(&self.root.file, OsStr::new(".cm-write.lock"), false)
-                    .map_err(|e| failure(&e))?;
-            if identity(&self.lock)? != identity(&current_lock)? {
-                return Err(failure("write lock identity changed"));
-            }
-            for pin in &self.pinned_inputs {
-                pin.revalidate().map_err(|e| failure(&e))?;
-            }
-            if let Some(old) = &self.old {
-                old.revalidate().map_err(|e| failure(&e))?;
-            } else if present(&self.root.path.join("cm-profile.json"))? {
-                return Err(failure("concurrent active descriptor appeared"));
-            }
+            self.revalidate()?;
             fault(3)?;
+            if let Some(guard) = &self.state_guard {
+                guard.revalidate()?;
+            }
             let source = CString::new(name.as_str()).expect("temporary name");
             if unsafe {
                 libc::renameat(
@@ -650,7 +667,8 @@ impl Transaction {
         result?;
         Ok(
             serde_json::json!({"schema_version":1, "committed":true, "generation":active.generation,
-            "installed":next.installed, "enabled":next.enabled, "data_preserved":true, "already_native_executed":false}),
+            "installed":next.installed, "enabled":next.enabled, "restart_required":true,
+            "data_preserved":true, "already_native_executed":false}),
         )
     }
 }

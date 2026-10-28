@@ -280,7 +280,7 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
             "generation_before": initial[0].decode(),
             "descriptor_before_launch": before_launch[0].decode(),
             "generation_after": state(home)[0].decode(), "business": sdk.business_evidence(provider, tool=tool),
-            "lifetime": sdk.settled(directory, modules=2 if tool else 1)}
+            "lifetime": sdk.settled(directory, modules=len(ready["plan"]["mods"]))}
         write(directory / "result.json", result)
         return result
     finally:

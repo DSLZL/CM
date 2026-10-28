@@ -70,7 +70,8 @@ jobs:
 
           scripts = [*Path("ci/scripts").glob("*.py"), *Path("fixtures/runtime-consumer").glob("*.py"),
                      *Path("fixtures/native-loader").glob("*.py"), *Path("fixtures/host-baseline").glob("*.py"),
-                     *Path("fixtures/runtime-sdk").glob("*.py"), *Path("fixtures/managed-package").glob("*.py")]
+                     *Path("fixtures/runtime-sdk").glob("*.py"), *Path("fixtures/managed-package").glob("*.py"),
+                     *Path("fixtures/state").glob("*.py")]
           for script in scripts:
               py_compile.compile(str(script), cfile=str(Path(os.environ["RUNNER_TEMP"]) / (script.stem + ".pyc")),
                                  doraise=True)

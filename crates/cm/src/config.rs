@@ -402,13 +402,14 @@ impl Selection {
         options: &Options,
         manifests: &BTreeMap<String, loader::Manifest>,
         original: &[u8],
+        retain_uninstalled: bool,
     ) -> Result<Resolution, crate::LoadError> {
         for id in self
             .mods
             .keys()
             .chain(self.profiles.values().flat_map(|p| p.mods.keys()))
         {
-            if !manifests.contains_key(id) {
+            if !loader::identifier(id) || (!retain_uninstalled && !manifests.contains_key(id)) {
                 return Err(failure("", "config: unknown Mod namespace"));
             }
         }
@@ -519,6 +520,30 @@ impl Selection {
             }
         }
         Ok((values, identities))
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+
+    #[test]
+    fn managed_removed_configuration_is_inert_and_unmanaged_remains_strict() {
+        let bytes = br#"format_version = 2
+enabled = []
+[mods.removed]
+value = "preserved"
+[profiles.review.mods.removed]
+value = "also-preserved"
+"#;
+        let selection = Selection::parse(bytes).unwrap();
+        let manifests = BTreeMap::new();
+        assert!(selection.resolve(&Options::default(), &manifests, bytes, false).is_err());
+        let options = Options { profile: Some("review".into()), overrides: Vec::new() };
+        let (values, identities) = selection.resolve(&options, &manifests, bytes, true).unwrap();
+        assert!(values.is_empty() && identities.is_empty());
+        let options = Options { overrides: vec!["removed.value=1".into()], ..Options::default() };
+        assert!(selection.resolve(&options, &manifests, bytes, true).is_err());
     }
 }
 

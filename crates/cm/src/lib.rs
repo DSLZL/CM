@@ -29,6 +29,7 @@ pub mod package;
 pub mod profile;
 pub mod runtime;
 pub mod runtime_plan;
+pub mod state;
 pub mod tool_policy;
 
 use loader::registration::RegistrationSet;
@@ -202,6 +203,8 @@ pub struct ShutdownGuard {
 }
 
 static PENDING_TUI: OnceLock<Mutex<Option<runtime_plan::PreparedPlan>>> = OnceLock::new();
+// Retain through startup failure and drain: native libraries/work may remain pinned.
+static STATE_LEASE: OnceLock<Option<state::Guard>> = OnceLock::new();
 
 /// Prepare without executing native code until the actual TUI backend is known.
 pub fn defer_tui(home: &Path, options: &config::Options) -> Result<ShutdownGuard, LoadError> {
@@ -319,6 +322,9 @@ fn initialize_with(
                 "CM requires local Embedded execution; other backends lack a verified handshake",
             ));
         }
+        let state_lease = prepared.acquire_state()?;
+        STATE_LEASE.set(state_lease)
+            .map_err(|_| LoadError::new("startup", false, "state lease was already initialized"))?;
         let (plan, modules, config) = prepared.commit()?;
         let _call = NativeCall::enter().map_err(|e| LoadError::new("startup", false, &e))?;
         let registration = RegistrationSet::load(plan, modules, config)?;

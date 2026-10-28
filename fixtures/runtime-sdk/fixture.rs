@@ -2,6 +2,7 @@
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -77,6 +78,56 @@ fn code(result: Result<(), cm_sdk::Error>) -> u32 {
 }
 
 impl Fixture {
+    fn file_state(&self, request: &Request) -> Result<Option<String>, String> {
+        let Some(version) = option_env!("CM_FILE_STATE_VERSION") else {
+            return Ok(None);
+        };
+        if self.owner != "example-tool" || request.event != v22::TOOL_CALL {
+            return Ok(None);
+        }
+        let root = std::env::var_os("CM_MOD_STATE_ROOT").ok_or("missing managed file state root")?;
+        let path = std::path::PathBuf::from(root)
+            .join(self.owner).join("fixture-state").join(version).join("值 value.json");
+        let before = match std::fs::read_to_string(&path) {
+            Ok(value) => value,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error.to_string()),
+        };
+        let operation = std::env::var("CM_FILE_STATE_ACTION").unwrap_or_else(|_| "read".into());
+        let value = if operation == "write" {
+            let value = std::env::var("CM_FILE_STATE_VALUE").map_err(|_| "missing fixture state value")?;
+            let value = format!("v{version}:{value}");
+            let mut file = OpenOptions::new().write(true).create(true).truncate(true).mode(0o600)
+                .open(&path).map_err(|error| error.to_string())?;
+            file.write_all(value.as_bytes()).and_then(|()| file.sync_all())
+                .map_err(|error| error.to_string())?;
+            if let Ok(bytes) = std::env::var("CM_FILE_STATE_BLOB_BYTES") {
+                let bytes: usize = bytes.parse().map_err(|_| "invalid fixture blob size")?;
+                if bytes > 64 * 1024 * 1024 { return Err("fixture blob exceeds 64 MiB".into()); }
+                let mut blob = OpenOptions::new().write(true).create(true).truncate(true).mode(0o600)
+                    .open(path.with_file_name("bounded-blob")).map_err(|error| error.to_string())?;
+                let block = [0x5a_u8; 64 * 1024];
+                let mut remaining = bytes;
+                while remaining > 0 {
+                    let length = remaining.min(block.len());
+                    blob.write_all(&block[..length]).map_err(|error| error.to_string())?;
+                    remaining -= length;
+                }
+                blob.sync_all().map_err(|error| error.to_string())?;
+            }
+            value
+        } else if operation == "read" && before.starts_with(&format!("v{version}:")) {
+            before.clone()
+        } else {
+            return Err("fixture state version or operation differs".into());
+        };
+        record(self.owner, "file-state", &format!(
+            ",\"version\":{version:?},\"build\":{:?},\"operation\":{operation:?},\"before\":{before:?},\"value\":{value:?},\"request\":{:?},\"call\":{:?}",
+            option_env!("CM_FILE_STATE_BUILD").unwrap_or("normal"), handle(request.handle), request.call_id,
+        ));
+        Ok(Some(value))
+    }
+
     pub fn new(owner: &'static str, init: Init) -> Result<Self, String> {
         record(
             owner,
@@ -403,6 +454,7 @@ impl Fixture {
             }
             return Err("controlled native callback error".into());
         }
+        let file_state = self.file_state(&request)?;
         let output = if request.event == v22::SECTION {
             format!(
                 "CM_SECTION_{} thread={} turn={}",
@@ -410,8 +462,9 @@ impl Fixture {
             )
             .into_bytes()
         } else if request.event == v22::TOOL_CALL {
-            format!("{{\"owner\":{:?},\"arguments\":{},\"mod_before\":{mod_calls},\"thread_before\":{thread_calls},\"turn_before\":{turn_calls}}}",
-                self.owner, String::from_utf8_lossy(&request.input)).into_bytes()
+            format!("{{\"owner\":{:?},\"arguments\":{},\"mod_before\":{mod_calls},\"thread_before\":{thread_calls},\"turn_before\":{turn_calls},\"file_state\":{}}}",
+                self.owner, String::from_utf8_lossy(&request.input),
+                file_state.map_or_else(|| "null".into(), |value| format!("{value:?}"))).into_bytes()
         } else {
             b"{}".to_vec()
         };

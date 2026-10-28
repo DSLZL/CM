@@ -206,7 +206,7 @@ impl BinaryManifest {
             }
         }
         if abi.required_capabilities.is_empty()
-            || abi.required_capabilities.len() > 6
+            || abi.required_capabilities.len() > 7
             || abi
                 .required_capabilities
                 .iter()
@@ -265,6 +265,15 @@ impl BinaryManifest {
             && (state.owner != self.id || !loader::identifier(&state.schema) || state.version == 0)
         {
             return Err("state: invalid owner/schema/version".into());
+        }
+        if abi.required_capabilities.iter().any(|cap| cap == crate::state::CAPABILITY)
+            && (abi.abi_major != 2
+                || self.state.as_ref().is_none_or(|state| {
+                    !crate::state::component(&state.owner)
+                        || !crate::state::component(&state.schema)
+                }))
+        {
+            return Err("state.files.v1: requires ABI 2 and an owned state declaration".into());
         }
         if let Some(config) = &self.config {
             config.validate()?;

@@ -11,13 +11,14 @@ use crate::profile::{self, Directory, Transaction};
 #[derive(Clone, Copy)]
 pub enum Command<'a> {
     Install(&'a Path),
+    Replace { id: &'a str, package: &'a Path, from: &'a str },
     Enable(&'a str),
     Disable(&'a str),
     Remove(&'a str),
     Scan,
 }
 
-fn ingest(transaction: &mut Transaction, input: &Path) -> Result<(), LoadError> {
+fn ingest(transaction: &mut Transaction, input: &Path, replacement: Option<(&str, &str)>) -> Result<(), LoadError> {
     let input = std::path::absolute(input).map_err(|e| profile::failure(&e.to_string()))?;
     let home = &transaction.root.path;
     let host_root = transaction
@@ -43,18 +44,31 @@ fn ingest(transaction: &mut Transaction, input: &Path) -> Result<(), LoadError> 
         ));
     }
     let snapshot = loader::installation_snapshot(&input)?;
+    let was_enabled = transaction.next.enabled.contains(&snapshot.id);
+    if let Some((id, expected)) = replacement {
+        if snapshot.id != id || !loader::digest(expected)
+            || transaction.next.installed.get(id).map(String::as_str) != Some(expected)
+        {
+            return Err(LoadError::input("input_drift", id, "replacement ID or expected old object differs"));
+        }
+        if transaction.next.state.as_ref().is_some_and(|view| view.contains_owner(id)) {
+            crate::state::exclusive(transaction)?;
+        }
+    }
     if let Some(old) = transaction.next.installed.get(&snapshot.id) {
-        if old != &snapshot.sha256 {
+        if old != &snapshot.sha256 && replacement.is_none() {
             return Err(LoadError::input(
                 "installation_conflict",
                 &snapshot.id,
                 "same ID has different installed content",
             ));
         }
-        transaction.next.consumed.insert(snapshot.sha256);
-        return Ok(());
+        if old == &snapshot.sha256 {
+            transaction.next.consumed.insert(snapshot.sha256);
+            return Ok(());
+        }
     }
-    if transaction.next.installed.len() >= 32 {
+    if !transaction.next.installed.contains_key(&snapshot.id) && transaction.next.installed.len() >= 32 {
         return Err(profile::failure("installed set exceeds 32 packages"));
     }
     let name = profile::temporary("object");
@@ -124,7 +138,9 @@ fn ingest(transaction: &mut Transaction, input: &Path) -> Result<(), LoadError> 
         .next
         .installed
         .insert(snapshot.id.clone(), snapshot.sha256.clone());
-    transaction.next.enabled.insert(snapshot.id);
+    if replacement.is_none() || was_enabled {
+        transaction.next.enabled.insert(snapshot.id);
+    }
     transaction.next.consumed.insert(snapshot.sha256);
     Ok(())
 }
@@ -133,7 +149,8 @@ pub fn run(home: &Path, command: Command<'_>, options: &Options) -> Result<Value
     let host = crate::package::managed_identity()?;
     let mut transaction = Transaction::begin(home, host)?;
     match command {
-        Command::Install(input) => ingest(&mut transaction, input)?,
+        Command::Install(input) => ingest(&mut transaction, input, None)?,
+        Command::Replace { id, package, from } => ingest(&mut transaction, package, Some((id, from)))?,
         Command::Enable(id) | Command::Disable(id) | Command::Remove(id) => {
             if !transaction.next.installed.contains_key(id) {
                 return Err(LoadError::input(
@@ -186,7 +203,7 @@ pub fn run(home: &Path, command: Command<'_>, options: &Options) -> Result<Value
                     ));
                 }
                 if !transaction.next.consumed.contains(&candidate.sha256) {
-                    ingest(&mut transaction, &input)?;
+                    ingest(&mut transaction, &input, None)?;
                 }
             }
         }
