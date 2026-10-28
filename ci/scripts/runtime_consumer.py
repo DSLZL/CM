@@ -386,6 +386,12 @@ def copy_evidence(source, destination):
 
 def self_check():
     ci_progress.self_check()
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(__file__).resolve().parents[2]
+        for relative in ("fixtures/runtime-consumer/driver.py", "fixtures/runtime-sdk/driver.py",
+                         "fixtures/managed-package/driver.py"):
+            subprocess.run([sys.executable, "-I", "-B", "-c",
+                "import runpy,sys; runpy.run_path(sys.argv[1])", str(root / relative)], cwd=directory, check=True)
     import mod_manifest
     mod_manifest.self_check()
     import runtime_sdk

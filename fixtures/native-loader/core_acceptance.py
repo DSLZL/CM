@@ -8,9 +8,11 @@ from pathlib import Path
 import shlex
 import signal
 import subprocess
+import sys
 import threading
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ci/scripts"))
 import ci_progress
 
 _INPUT_ROOT = None
