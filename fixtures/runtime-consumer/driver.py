@@ -11,7 +11,7 @@ import sys
 import threading
 import tomllib
 
-sys.path.insert(0, "/fixture/fixtures/native-loader")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "native-loader"))
 import core_acceptance as core
 
 INPUTS = Path("/inputs")
