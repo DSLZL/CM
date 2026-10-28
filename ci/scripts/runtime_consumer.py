@@ -1,4 +1,5 @@
 """P04 producer and trusted outer consumer. Never copied into the runtime root."""
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import inspect
 import json
@@ -28,6 +29,14 @@ ENTRY_INVALID = ("short-prefix", "short-tail", "future-minor", "stride", "count"
 CALL_INVALID = ("callback-fail", "status", "cancelled", "increase", "zero", "keep-nonzero",
                 "decision", "output-header", "output-reserved", "output-canary", "error-length",
                 "error-null", "error-utf8", "error-canary")
+
+
+def parallel_matrices(logs, commands):
+    # These suites share read-only inputs and use separate profile/work/evidence paths.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        pending = {label: pool.submit(ci_progress.run, logs, label, command, timeout)
+                   for label, command, timeout in commands}
+        return {label: future.result() for label, future in pending.items()}
 
 
 def write(path, value):
@@ -385,7 +394,28 @@ def copy_evidence(source, destination):
 
 
 def self_check():
+    from unittest.mock import patch
     ci_progress.self_check()
+    for raises in (False, True):
+        barrier = threading.Barrier(3)
+        finished = []
+
+        def simulated(logs, label, command, timeout):
+            try:
+                barrier.wait(timeout=5)
+                if raises and label == "m01":
+                    raise RuntimeError("matrix self-check")
+                return types.SimpleNamespace(returncode=int(label == "m02"))
+            finally:
+                finished.append(label)
+
+        with patch.object(ci_progress, "run", side_effect=simulated):
+            try:
+                results = parallel_matrices(None, [(label, [], 5) for label in ("p04", "m01", "m02")])
+                assert not raises and results["m02"].returncode == 1
+            except RuntimeError as error:
+                assert raises and str(error) == "matrix self-check"
+        assert set(finished) == {"p04", "m01", "m02"}, "Audit started before all matrices exited"
     with tempfile.TemporaryDirectory() as directory:
         root = Path(__file__).resolve().parents[2]
         for relative in ("fixtures/runtime-consumer/driver.py", "fixtures/runtime-sdk/driver.py",
@@ -463,10 +493,23 @@ def self_check():
         calls = ['1 execve("' + name + '", ["codex"], 0x1) = 0' for name in copies]
         bound = bind_host_executables(calls, root)
         assert bound == {name: hashlib.sha256(content).hexdigest() for name, content in copies.items()}
-        from unittest.mock import patch
         with patch.object(sys.modules[__name__], "sha", wraps=sha) as hashes:
             assert bind_host_executables(calls * 3, root) == bound
             assert hashes.call_count == len(copies) + 1, "Repeated executions rehashed identical final paths"
+        trusted, evidence = root / "trusted", root / "evidence"
+        trusted.mkdir()
+        evidence.mkdir()
+        (trusted / "syscalls.100").write_text("\n".join([
+            *(line.split(" ", 1)[1] for line in calls), creation.split(" ", 1)[1],
+            'openat(AT_FDCWD, "/inputs/host/codex-resources/bwrap", O_RDONLY|O_CLOEXEC) = 3</inputs/host/codex-resources/bwrap>',
+            'execve("/proc/self/fd/3", ["bwrap", "--version"], 0x1) = 0',
+            'execve("/inputs/host/codex-path/rg", ["rg"], 0x1) = 0']) + "\n")
+        (trusted / "syscalls.101").write_text('openat(AT_FDCWD, "/inputs/host/bin/codex", O_RDONLY) = 4\n')
+        with patch.dict(sys.modules, observer=observer):
+            report = observe(trusted, evidence)
+        assert report["status"] == "pass" and report["trace_files"] == ["syscalls.100", "syscalls.101"]
+        assert report["bound_host_executables"] == bound and report["file_load_count"] == 2
+        assert report["sandbox_aliases"] == [{"path": alias, "target": unicode_host}]
         tui = {"command": ["/inputs/host/bin/codex", "cm", "--home", "/profile/m03/tui", "launch", "--"],
             "tui": True, "empty_launch_argv": True,
             "identity": {"proc_exe": "/inputs/host/bin/codex", "executable_sha256": bound["/inputs/host/bin/codex"]},
@@ -849,9 +892,9 @@ def observe(directory, evidence):
     executions = []
     file_count = 0
     executable_memory = []
-    paths = sorted(directory.glob("syscalls.*"))
+    trace_files = sorted(directory.glob("syscalls.*"))
     started = time.monotonic()
-    for index, path in enumerate(paths, 1):
+    for index, path in enumerate(trace_files, 1):
         assert path.suffix[1:].isdigit(), path
         pid = path.suffix[1:]
         text = redact_trace("\n".join(pid + " " + line for line in path.read_text().splitlines()) + "\n", observer)
@@ -869,8 +912,8 @@ def observe(directory, evidence):
         # This fixed native fixture has no supported in-process code generator.
         executable_memory.extend(line for line in calls if "PROT_EXEC" in line and
             ("MAP_ANONYMOUS" in line or re.match(r'\d+\s+mprotect\(', line)))
-        if index % 500 == 0 or index == len(paths):
-            ci_progress.emit("outer-audit/traces-" + str(index) + "-of-" + str(len(paths)), "running", started)
+        if index % 500 == 0 or index == len(trace_files):
+            ci_progress.emit("outer-audit/traces-" + str(index) + "-of-" + str(len(trace_files)), "running", started)
     hosts = ("/inputs/host/bin/codex", "/work/m03/独立 Host/bin/codex")
     aliases = observer.bound_sandbox_aliases(symlinks, hosts)
     alias_targets = {}
@@ -914,7 +957,7 @@ def observe(directory, evidence):
         "sandbox_aliases": [{"path": path, "target": alias_targets[path]} for path in sorted(aliases)],
         "packaged_bwrap_fd_executions": sorted(bwrap_executions),
         "bound_host_executables": bound_hosts,
-        "file_load_count": file_count, "trace_files": [path.name for path in paths],
+        "file_load_count": file_count, "trace_files": [path.name for path in trace_files],
         "compiler_linker_jit_build_service_calls": 0, "unclassified_executable_memory": executable_memory,
         "boundary": "fixed audited native fixtures; not a generic malicious-native JIT detector",
         "socket_payloads": "sendto/recvfrom redacted in both audit and export"}
@@ -1013,15 +1056,27 @@ def consume():
             assert not canary_hits
             trusted = temp / "trusted-observer"
             trusted.mkdir()
-            stage = "actual isolated matrix"
+            stage = "independent isolated matrices"
             trace = ["strace", "-ff", "-qq", "-yy", "-s", "1024", "-e",
                 "trace=execve,execveat,socket,getsockname,accept,accept4,connect,sendto,recvfrom,socketpair,symlink,symlinkat,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl,readlink,mmap,mprotect,memfd_create",
                 "-o", str(trusted / "syscalls"), "--"]
             write(logs / "consumer-command.json", {"command": [*trace, *base, "--", *driver, "matrix"],
                 "cache_mode": "none", "producer_input_manifest_sha256": manifest["sha256"], "provenance": provenance()})
-            result = ci_progress.run(logs, "consumer-matrix", [*trace, *base, "--", *driver, "matrix"], 1800)
+            commands = [("consumer-matrix", [*trace, *base, "--", *driver, "matrix"], 1800)]
+            if m01_acceptance is not None:
+                commands.append(("m01-consumer-matrix", [*trace, *base, "--", *CONSUMER_ENV_PREFIX,
+                    "/usr/bin/python3", "-B", "/fixture/ci/scripts/mod_manifest.py", "matrix"], 1200))
+            if m02_acceptance is not None:
+                commands.append(("m02-consumer-matrix", [*trace, *base, "--", *CONSUMER_ENV_PREFIX,
+                    "/usr/bin/python3", "-B", "/fixture/ci/scripts/runtime_sdk.py", "matrix"], 1200))
+            results = parallel_matrices(logs, commands)
+            result = results["consumer-matrix"]
             write(logs / "consumer-return.json", {"return_code": result.returncode, "stage": stage})
-            if result.returncode == 0:
+            for label in ("m01", "m02"):
+                if label + "-consumer-matrix" in results:
+                    write(logs / (label + "-consumer-return.json"), {
+                        "return_code": results[label + "-consumer-matrix"].returncode, "stage": stage})
+            if all(item.returncode == 0 for item in results.values()):
                 stage = "actual removed runtime library"
                 missing_root = temp / "missing-library-root"
                 copy_runtime_tree(root, missing_root)
@@ -1042,28 +1097,20 @@ def consume():
                     [*trace, *base, "--", *driver, "recovery"], 120)
                 write(logs / "consumer-library-recovery.json", {"return_code": recovery_result.returncode})
                 assert recovery_result.returncode == 0, "Known successful selection failed after the missing-library candidate"
-                if producer["task_id"] in ("CM-M01", "CM-M02", "CM-M03"):
-                    stage = "M01 actual packaged CLI and native configuration"
-                    m01_driver = [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "/fixture/ci/scripts/mod_manifest.py", "matrix"]
-                    result = ci_progress.run(logs, "m01-consumer-matrix", [*trace, *base, "--", *m01_driver], 1200)
-                    write(logs / "m01-consumer-return.json", {"return_code": result.returncode, "stage": stage})
-                    assert result.returncode == 0, "M01 current-source regression failed"
-                if producer["task_id"] in ("CM-M02", "CM-M03"):
-                    stage = "M02 actual runtime SDK and packaged Host adapter"
-                    m02_driver = [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "/fixture/ci/scripts/runtime_sdk.py", "matrix"]
-                    result = ci_progress.run(logs, "m02-consumer-matrix", [*trace, *base, "--", *m02_driver], 1200)
-                    write(logs / "m02-consumer-return.json", {"return_code": result.returncode, "stage": stage})
                 if producer["task_id"] == "CM-M03":
-                    assert result.returncode == 0, "M02 current-source regression failed"
                     stage = "M03 managed install and actual PTY TUI"
                     m03_driver = [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "/fixture/ci/scripts/managed_package.py", "matrix"]
                     result = ci_progress.run(logs, "m03-consumer-matrix", [*trace, *base, "--", *m03_driver], 1200)
                     write(logs / "m03-consumer-return.json", {"return_code": result.returncode, "stage": stage})
             # Audit and sanitize even on a failed matrix, before exporting any trace.
+            stage = "outer runtime audit"
             audit = observe(trusted, evidence)
             write(evidence / "outer-runtime-audit.json", audit)
+            stage = "isolated matrix results"
+            assert all(item.returncode == 0 for item in results.values()), "Independent isolated matrix failed"
             assert result.returncode == 0, "Isolated product matrix failed"
             assert not canary_hits
+            stage = "final read-only input audit"
             assert inventory(root) == closure["files"], "Read-only runtime inputs changed"
             suite = read(evidence / "suite.json")
             assert suite["status"] == "pass"

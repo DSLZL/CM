@@ -11,13 +11,15 @@ import threading
 import time
 
 PREFIX = "CM progress: "
+OUTPUT_LOCK = threading.Lock()
 
 
 def emit(label, status, started):
     assert re.fullmatch(r"[A-Za-z0-9_.:/ -]{1,160}", label)
-    print(PREFIX + json.dumps({"stage": label, "status": status,
-        "elapsed_seconds": round(time.monotonic() - started, 3),
-        "time_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}), flush=True)
+    with OUTPUT_LOCK:
+        print(PREFIX + json.dumps({"stage": label, "status": status,
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "time_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}), flush=True)
 
 
 @contextmanager
@@ -65,7 +67,8 @@ def run(logs, label, command, timeout):
                     assert re.fullmatch(r"[A-Za-z0-9_.:/ -]{1,160}", record["stage"])
                     assert isinstance(record["elapsed_seconds"], (int, float)) and 0 <= record["elapsed_seconds"] < 86400
                     assert isinstance(record["time_utc"], str) and re.fullmatch(r"[0-9T:.+Z-]{1,40}", record["time_utc"])
-                    print(line, end="", flush=True)
+                    with OUTPUT_LOCK:
+                        print(line, end="", flush=True)
                 if stopped.is_set():
                     return
                 if time.monotonic() - heartbeat >= 30:
@@ -89,11 +92,13 @@ def run(logs, label, command, timeout):
             with (logs / "consumer-phase-results.jsonl").open("a") as phases:
                 phases.write(json.dumps({"phase": label, "return_code": code,
                     "elapsed_seconds": elapsed, "log": logfile.name}) + "\n")
-        print("CM CI:", label, "return code", result.returncode, "log", logfile.name, flush=True)
+        with OUTPUT_LOCK:
+            print("CM CI:", label, "return code", result.returncode, "log", logfile.name, flush=True)
         return result
 
 
 def self_check():
+    from concurrent.futures import ThreadPoolExecutor
     import contextlib
     import io
     import sys
@@ -106,6 +111,16 @@ def self_check():
         assert "private product output" not in output.getvalue()
         assert '"stage": "case"' in output.getvalue()
         assert "private product output" in (Path(directory) / "progress-self-check.log").read_text()
+    with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()) as output:
+        labels = ["parallel-" + str(index) for index in range(3)]
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = [pool.submit(run, Path(directory), label, [sys.executable, "-c", "print('private')"], 5)
+                       for label in labels]
+            assert all(future.result().returncode == 0 for future in futures)
+        records = [json.loads(line[len(PREFIX):]) for line in output.getvalue().splitlines() if line.startswith(PREFIX)]
+        assert {record["stage"] for record in records} == set(labels) and len(records) == 6
+        phases = [json.loads(line) for line in (Path(directory) / "consumer-phase-results.jsonl").read_text().splitlines()]
+        assert {row["phase"] for row in phases} == set(labels) and len(phases) == 3
     try:
         with contextlib.redirect_stdout(io.StringIO()) as output, stage("failure-self-check"):
             raise ValueError("private exception detail")
