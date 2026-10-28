@@ -1,6 +1,6 @@
 # Managed Host and precompiled Mods
 
-CM-M03 is an implementation candidate. Its six acceptance checks require the exact published source and independent Linux x64 Actions results; local review does not qualify this revision.
+CM-M03's six acceptance checks passed at source `135e709064822e0c5004b2ee6d4f002e55559248` and worker `88560536e4c5a51aad097d54bfb08b56ff1f20cb`: [source CI](https://github.com/DSLZL/CM/actions/runs/40678252966) and [independent Linux x64 producer, runtime consumer and receipt](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/40678408254). This qualifies the managed-package scope below; full upstream Core tests and release qualification remain pending.
 
 The package targets `x86_64-unknown-linux-gnu`. The qualified runtime is the actual GitHub-hosted Ubuntu 24.04 X64 GNU environment used by the independent consumer. No glibc 2.17, other distribution, musl, Windows or macOS compatibility is claimed. Native Mods run with Host permissions; validation and `RTLD_LOCAL` provide no memory or process sandbox.
 
