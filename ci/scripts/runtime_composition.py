@@ -243,10 +243,11 @@ def provider_tcp_connections(lines, ports):
     listeners = set()
     connections = set()
     for line in lines:
-        local = re.fullmatch(r'\d+\s+getsockname\(\d+<TCP:\[(\d+)\]>, \{sa_family=AF_INET, sin_port=htons\((\d+)\), sin_addr=inet_addr\("127\.0\.0\.1"\)\}, \[\d+\]\) = 0', line)
+        local = re.fullmatch(r'\d+\s+getsockname\(\d+<TCP:\[(\d+)\]>, \{sa_family=AF_INET, sin_port=htons\((\d+)\), sin_addr=inet_addr\("127\.0\.0\.1"\)\}, \[\d+(?: => \d+)?\]\) = 0', line)
         if local and local[2] in ports:
             listeners.add(local[1])
-        accepted = re.fullmatch(r'\d+\s+accept4?\(\d+<TCP:\[(\d+)\]>, \{sa_family=AF_INET, sin_port=htons\(\d+\), sin_addr=inet_addr\("127\.0\.0\.1"\)\}, \[\d+\](?:, SOCK_CLOEXEC)?\) = \d+<TCP:\[(\d+)\]>', line)
+    for line in lines:
+        accepted = re.fullmatch(r'\d+\s+accept4?\(\d+<TCP:\[(\d+)\]>, \{sa_family=AF_INET, sin_port=htons\(\d+\), sin_addr=inet_addr\("127\.0\.0\.1"\)\}, \[\d+(?: => \d+)?\](?:, SOCK_CLOEXEC(?:\|SOCK_NONBLOCK)?)?\) = \d+<TCP:\[(\d+)\]>', line)
         if accepted and accepted[1] in listeners:
             connections.add(accepted[2])
     return connections
@@ -415,10 +416,14 @@ def check_network_audit():
     accepted = '4 accept4(6<TCP:[81]>, {sa_family=AF_INET, sin_port=htons(1234), sin_addr=inet_addr("127.0.0.1")}, [16], SOCK_CLOEXEC) = 5<TCP:[71]>'
     assert provider_tcp_connections([listener, accepted], {"8080"}) == {"71"}
     assert provider_tcp_connections([listener, accepted.replace('accept4(', 'accept(').replace(', SOCK_CLOEXEC)', ')')], {"8080"}) == {"71"}
+    resized = listener.replace('[16]', '[128 => 16]')
+    nonblocking = accepted.replace('SOCK_CLOEXEC)', 'SOCK_CLOEXEC|SOCK_NONBLOCK)')
+    assert provider_tcp_connections([nonblocking, resized], {"8080"}) == {"71"}
     audit_network([bare_tcp], directory, {"8080"}, tcp_connections=provider_tcp_connections([listener, accepted], {"8080"}))
     for invalid in ([accepted], [listener, accepted.replace('[81]', '[82]')],
                     [listener.replace('htons(8080)', 'htons(8081)'), accepted],
                     [listener.replace(' = 0', ' = -1 EBADF (Bad file descriptor)'), accepted],
+                    [resized.replace('127.0.0.1', '0.0.0.0'), nonblocking],
                     [listener, accepted.replace('127.0.0.1', '198.51.100.1')],
                     [listener, accepted.replace(' = 5<TCP:[71]>', ' = -1 EAGAIN (Resource temporarily unavailable)')]):
         assert not provider_tcp_connections(invalid, {"8080"}), invalid

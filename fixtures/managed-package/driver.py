@@ -138,6 +138,33 @@ def tui_configuration(arguments, directory):
     return text
 
 
+def tui_message_visible(output, token):
+    # Terminal redraws position words separately; window titles are not screen output.
+    text = re.sub(rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", b"", bytes(output))
+    text = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", text)
+    return ("M02complete" + token).encode() in re.sub(rb"\s+", b"", text)
+
+
+def tui_mcp_listener(pid):
+    owned = set()
+    for path in (Path("/proc") / str(pid) / "fd").iterdir():
+        try:
+            link = os.readlink(path)
+        except FileNotFoundError:
+            continue
+        match = re.fullmatch(r"socket:\[(\d+)\]", link)
+        if match:
+            owned.add(match[1])
+    listeners = []
+    for line in (Path("/proc") / str(pid) / "net/tcp").read_text().splitlines()[1:]:
+        row = line.split()
+        address, port = row[1].split(":")
+        if row[3] == "0A" and address == "0100007F" and row[9] in owned:
+            listeners.append({"inode": row[9], "port": int(port, 16)})
+    assert len(listeners) == 1, listeners
+    return listeners[0]
+
+
 def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=None):
     directory = EVIDENCE / name
     directory.mkdir(parents=True)
@@ -158,6 +185,7 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
     stderr = None
     process = None
     observed = None
+    mcp_listener = None
     output = bytearray()
     stop = threading.Event()
     try:
@@ -220,7 +248,9 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
         sdk.core.await_barrier(lambda: any(request["outputs"] for request in provider.requests) if tool
             else bool(provider.requests), process, "actual model/native round trip")
         if tui:
-            sdk.core.await_barrier(lambda: b"M02 complete" in output, process, "TUI displayed final model message")
+            assert any(item.get("name") == "mcp__codex_worktrees" for request in provider.requests for item in request["tools"])
+            mcp_listener = tui_mcp_listener(process.pid)
+            sdk.core.await_barrier(lambda: tui_message_visible(output, token), process, "TUI displayed final model message")
             os.write(terminal, b"/quit")
             time.sleep(0.2)
             os.write(terminal, b"\r")
@@ -241,7 +271,8 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
             assert "example-tool" in ready["plan"]["mods"]
         result = {"command": command, "provider_endpoint": provider.endpoint,
             "return_code": code, "provider_requests": provider.requests, "provider_errors": provider.errors,
-            "identity": observed, "tui": tui, "empty_launch_argv": tui, "generation_before": initial[0].decode(),
+            "identity": observed, "tui": tui, "empty_launch_argv": tui, "tui_mcp_listener": mcp_listener,
+            "generation_before": initial[0].decode(),
             "descriptor_before_launch": before_launch[0].decode(),
             "generation_after": state(home)[0].decode(), "business": sdk.business_evidence(provider, tool=tool),
             "lifetime": sdk.settled(directory, modules=2 if tool else 1)}
@@ -258,7 +289,8 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
         if process and not (directory / "result.json").exists():
             write(directory / "result.json", {"command": command, "provider_endpoint": provider.endpoint,
                 "return_code": process.returncode, "error": repr(sys.exc_info()[1]),
-                "provider_requests": provider.requests, "provider_errors": provider.errors})
+                "provider_requests": provider.requests, "provider_errors": provider.errors,
+                "identity": observed, "tui": tui, "empty_launch_argv": tui, "tui_mcp_listener": mcp_listener})
         stop.set()
         if reader:
             reader.join(timeout=2)
@@ -532,6 +564,15 @@ def backend_rejections(home):
 
 
 def self_check():
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        assert tui_mcp_listener(os.getpid())["port"] == listener.getsockname()[1]
+    assert tui_message_visible(b"M02 complete case", "case")
+    assert tui_message_visible(b"M02\x1b[9;7Hcomplete\x1b[9;16Hcase\x1b[0m", "case")
+    for output in (b"M02 complete other", b"M02 complete", b"\x1b]0;M02 complete case\x07",
+                   b"\x1b]0;M02 complete case\x1b\\"):
+        assert not tui_message_visible(output, "case"), output
     directory = Path("/evidence/m03/用户 空格")
     arguments = sdk_module().command(directory, "http://127.0.0.1:1234", "embedded")[1:]
     config = tomllib.loads(tui_configuration(arguments, directory))

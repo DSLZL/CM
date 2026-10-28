@@ -449,6 +449,32 @@ def self_check():
         calls = ['1 execve("' + name + '", ["codex"], 0x1) = 0' for name in copies]
         bound = bind_host_executables(calls, root)
         assert bound == {name: hashlib.sha256(content).hexdigest() for name, content in copies.items()}
+        tui = {"command": ["/inputs/host/bin/codex", "cm", "--home", "/profile/m03/tui", "launch", "--"],
+            "tui": True, "empty_launch_argv": True,
+            "identity": {"proc_exe": "/inputs/host/bin/codex", "executable_sha256": bound["/inputs/host/bin/codex"]},
+            "provider_requests": [{"tools": [{"name": "mcp__codex_worktrees"}]}],
+            "tui_mcp_listener": {"inode": "81", "port": 8080}}
+        metadata = [
+            '4 accept4(6<TCP:[81]>, {sa_family=AF_INET, sin_port=htons(1234), sin_addr=inet_addr("127.0.0.1")}, [128 => 16], SOCK_CLOEXEC|SOCK_NONBLOCK) = 5<TCP:[71]>',
+            '3 getsockname(6<TCP:[81]>, {sa_family=AF_INET, sin_port=htons(8080), sin_addr=inet_addr("127.0.0.1")}, [128 => 16]) = 0']
+        assert bind_tui_mcp_listener(tui, metadata, bound, observer) == {
+            "port": "8080", "listener_inode": "81", "accepted_socket_inodes": ["71"]}
+        for change in ({"tui": False}, {"empty_launch_argv": False},
+                       {"command": [*tui["command"], "exec"]}, {"provider_requests": []},
+                       {"identity": {**tui["identity"], "executable_sha256": "0" * 64}},
+                       {"tui_mcp_listener": {"inode": "82", "port": 8080}},
+                       {"tui_mcp_listener": {"inode": "81", "port": 8081}}):
+            try:
+                bind_tui_mcp_listener(tui | change, metadata, bound, observer)
+            except AssertionError:
+                continue
+            raise AssertionError("Unbound TUI MCP listener accepted: " + repr(change))
+        for invalid in (metadata[:1], metadata[1:], [line.replace('127.0.0.1', '198.51.100.1') for line in metadata]):
+            try:
+                bind_tui_mcp_listener(tui, invalid, bound, observer)
+            except AssertionError:
+                continue
+            raise AssertionError("Unobserved TUI MCP listener accepted: " + repr(invalid))
         for name in ("/work/m03/独立 Host/bin/codex", "/work/m01/integrity/changed-host/codex",
                      "/work/m01/integrity/changed-host-build-id/codex", "/work/m01/integrity/changed-host-extra/codex"):
             actual = root / name.lstrip("/")
@@ -770,6 +796,25 @@ def bind_host_executables(executions, root):
     return bound
 
 
+def bind_tui_mcp_listener(record, metadata, bound_hosts, observer):
+    command = ["/inputs/host/bin/codex", "cm", "--home", "/profile/m03/tui", "launch", "--"]
+    assert record["command"] == command and record["tui"] and record["empty_launch_argv"]
+    assert record["identity"]["proc_exe"] == command[0]
+    assert record["identity"]["executable_sha256"] == bound_hosts[command[0]]
+    assert any(item.get("name") == "mcp__codex_worktrees" for request in record["provider_requests"] for item in request["tools"])
+    listener = record["tui_mcp_listener"]
+    inode, port = listener["inode"], str(listener["port"])
+    assert re.fullmatch(r"[1-9][0-9]*", inode) and 0 < int(port) < 65536
+    # Bind the live TUI's /proc fd ownership to the outer kernel trace, not an arbitrary loopback port.
+    own = [line for line in metadata if "<TCP:[" + inode + "]>" in line]
+    assert any(re.fullmatch(r'\d+\s+getsockname\(\d+<TCP:\[' + inode +
+        r'\]>, \{sa_family=AF_INET, sin_port=htons\(' + port +
+        r'\), sin_addr=inet_addr\("127\.0\.0\.1"\)\}, \[\d+(?: => \d+)?\]\) = 0', line) for line in own)
+    connections = observer.provider_tcp_connections(own, {port})
+    assert connections, "TUI MCP listener has no matching successful loopback accept"
+    return {"port": port, "listener_inode": inode, "accepted_socket_inodes": sorted(connections)}
+
+
 def observe(directory, evidence):
     import observer
     observer.check_network_audit()
@@ -819,6 +864,11 @@ def observe(directory, evidence):
         record = read(path)
         ports.update(re.findall(r'http://127[.]0[.]0[.]1:(\d+)', " ".join(record.get("command", []))
             + " " + record.get("provider_endpoint", "")))
+    tui_mcp = None
+    tui_result = evidence / "m03/actual-tui/result.json"
+    if tui_result.exists() and read(tui_result).get("tui_mcp_listener"):
+        tui_mcp = bind_tui_mcp_listener(read(tui_result), tcp_metadata, bound_hosts, observer)
+        ports.add(tui_mcp["port"])
     # The outer observer also sees the provider's responses. Normalize only the
     # reverse half of an already identified loopback provider connection.
     normalized = []
@@ -835,6 +885,7 @@ def observe(directory, evidence):
     assert files, "File-load observer produced no records"
     return {"status": "pass", "executions": executions, "network": network, "kernel_route_sockets": sorted(routes),
         "provider_tcp_connections": sorted(tcp_connections), "provider_tcp_metadata": tcp_metadata,
+        "tui_mcp_listener": tui_mcp,
         "sandbox_aliases": [{"path": path, "target": alias_targets[path]} for path in sorted(aliases)],
         "packaged_bwrap_fd_executions": sorted(bwrap_executions),
         "bound_host_executables": bound_hosts,
