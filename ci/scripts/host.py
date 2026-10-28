@@ -635,11 +635,10 @@ def acceptance(root, logs, report_name="acceptance.json"):
             if expected not in (logs / (label + ".log")).read_text():
                 raise RuntimeError("Packaged CLI baseline output mismatch: " + label)
             behavior[" ".join(args)] = sha(logs / (label + ".log"))
-        core_args = ["cargo", "test", "--locked", "--manifest-path", cfg["units"][0]["manifest"],
-                     "--target", TARGET, "--profile", cfg["test_profile"], "-p", "codex-core", "--lib",
-                     "command_canonicalization::tests::", "--", "--nocapture"]
-        execute(root, logs, "host-core-baseline", core_args,
-                {**os.environ, "CARGO_TARGET_DIR": str(binaries.parents[1]), "CODEX_HOME": str(cm_home)})
+        import acceptance_cache
+        core_binary = acceptance_cache.run(root, logs, "host-core-baseline-build")
+        execute(host / "codex-rs/core", logs, "host-core-baseline", [str(core_binary),
+                "command_canonicalization::tests::", "--nocapture"], {**os.environ, "CODEX_HOME": str(cm_home)})
         if "4 passed; 0 failed" not in (logs / "host-core-baseline.log").read_text():
             raise RuntimeError("Representative unchanged Core behavior tests did not actually run")
         after_files = {"installation": manifest(installation), "profile": manifest(profile)}

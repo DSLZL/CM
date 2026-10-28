@@ -12,6 +12,8 @@ import sys
 import threading
 import time
 
+import ci_progress
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "native-loader"))
 import core_acceptance as core
 
@@ -242,6 +244,7 @@ class Client:
         write(self.directory / (label + "-native-maps.json"), {"pid": self.process.pid, "executable_mappings": mappings})
         return sorted(mappings)
 
+    @ci_progress.case()
     def turn(self, thread_id, token, *, interrupt=False, release=False, failure=False, mutate=None):
         result = self.call("turn/start", {"threadId": thread_id,
             "input": [{"type": "text", "text": "CM_M02_" + token, "text_elements": []}]})
@@ -261,6 +264,7 @@ class Client:
         assert status == ("interrupted" if interrupt else "failed" if failure else "completed"), completed
         return {"thread": thread_id, "turn": turn_id, "status": status}
 
+    @ci_progress.case()
     def close(self, *, failure=False):
         if self.process.poll() is None:
             self.process.stdin.close()
@@ -330,6 +334,7 @@ def business_evidence(provider, *, tool=True, historical_context=False):
         "prior_world_state_history_allowed": historical_context}
 
 
+@ci_progress.case("name")
 def embedded(name, home, *, mode="new", thread_id=None):
     directory = EVIDENCE / name
     directory.mkdir(parents=True)

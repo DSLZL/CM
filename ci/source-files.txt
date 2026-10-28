@@ -10,6 +10,8 @@ adapters/codex-e4568a3/native.patch
 adapters/codex-e4568a3/runtime.patch
 adapters/codex-e4568a3/source.json
 ci/README.md
+ci/scripts/acceptance_cache.py
+ci/scripts/ci_progress.py
 ci/scripts/dispatch_build.py
 ci/scripts/host.py
 ci/scripts/linux_ci.py

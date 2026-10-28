@@ -11,6 +11,8 @@ import subprocess
 import threading
 import time
 
+import ci_progress
+
 def sha(path):
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
@@ -117,6 +119,7 @@ def cli_arguments(binary, cwd, endpoint, sandboxed=False):
             "-m", "gpt-5.4", "CM deterministic local acceptance"]
 
 
+@ci_progress.case("directory")
 def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mode="",
              extra_env=None, command_prefix=(), expected_releases=1, restrictive=None,
              sandboxed=False, long_output=False, requested_limit=None, cm_options=()):

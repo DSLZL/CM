@@ -17,6 +17,8 @@ import threading
 import tomllib
 import zipfile
 
+import ci_progress
+
 TARGET = "x86_64-unknown-linux-gnu"
 CAP = "core.exec_output_limit.v1"
 CANARIES = ("M01_OWN_SECRET", "M01_OTHER_SECRET", "M01_BAD_SECRET")
@@ -108,6 +110,7 @@ def zip_package(package, destination, *, reverse=False, method=zipfile.ZIP_DEFLA
             archive.writestr(name, data)
 
 
+@ci_progress.case()
 def metadata(binary, home, action, *, options=(), success=True, evidence=None, extra_env=None):
     home.mkdir(parents=True, exist_ok=True)
     env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "TERM": "dumb",
@@ -172,6 +175,7 @@ def mutate(home, owner, change):
     raise AssertionError("Missing fixture owner")
 
 
+@ci_progress.case()
 def rejection_cases(work, inputs, binary, evidence):
     cases = {
         "version-conflict": lambda m: m.update(dependencies=[{"id": "serial-fixture", "version": ">=2.0.0"}]),

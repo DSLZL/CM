@@ -14,7 +14,10 @@ import sysconfig
 import tarfile
 import tempfile
 import threading
+import time
 import types
+
+import ci_progress
 
 TARGET = "x86_64-unknown-linux-gnu"
 CAPABILITY = "core.exec_output_limit.v1"
@@ -60,6 +63,7 @@ def inventory(root):
     return result
 
 
+@ci_progress.case()
 def validate_inputs(inputs):
     manifest = read(inputs / "input-manifest.json")
     entries = [entry for entry in inventory(inputs) if entry["path"] != "input-manifest.json"]
@@ -186,7 +190,7 @@ def produce():
     assert read(logs / "output-limit-c-layout.log")["v21_all_sizes_alignments_offsets"]
     assert "linux_x64_additive_layout ... ok" in host.build_log(logs, "host-test").read_text()
     for relative in ("fixtures/runtime-consumer/driver.py", "fixtures/native-loader/core_acceptance.py", "fixtures/native-loader/tool_barrier.py",
-                     "ci/scripts/mod_manifest.py"):
+                     "ci/scripts/mod_manifest.py", "ci/scripts/ci_progress.py"):
         destination = inputs / "fixture" / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(root / relative, destination)
@@ -205,6 +209,7 @@ def produce():
         metadata_audit = read(artifact / "evidence/m01-producer/metadata-source-attachments.json")
     (inputs / "observer.py").write_text(runtime_observer_source(composition), encoding="utf-8")
     shutil.copyfile(Path(__file__), inputs / "runtime_consumer.py")
+    shutil.copyfile(root / "ci/scripts/ci_progress.py", inputs / "ci_progress.py")
     official_root = Path(os.environ["RUNNER_TEMP"]) / "cm-p04-official"
     official_root.mkdir()
     installation, official = host.official_fixture(root, official_root)
@@ -298,6 +303,7 @@ def copy_runtime_tree(source, destination):
             assert path.stat().st_nlink == 1, "Hard-linked runtime input: " + str(path)
 
 
+@ci_progress.case()
 def rootfs(inputs, root):
     root.mkdir()
     packages = {}
@@ -364,6 +370,7 @@ def rootfs(inputs, root):
             "kind": "canonical runtime rootfs content, not an OCI digest"}
 
 
+@ci_progress.case()
 def copy_evidence(source, destination):
     import mod_manifest
     for path in source.rglob("*"):
@@ -378,6 +385,7 @@ def copy_evidence(source, destination):
 
 
 def self_check():
+    ci_progress.self_check()
     import mod_manifest
     mod_manifest.self_check()
     import runtime_sdk
@@ -449,6 +457,10 @@ def self_check():
         calls = ['1 execve("' + name + '", ["codex"], 0x1) = 0' for name in copies]
         bound = bind_host_executables(calls, root)
         assert bound == {name: hashlib.sha256(content).hexdigest() for name, content in copies.items()}
+        from unittest.mock import patch
+        with patch.object(sys.modules[__name__], "sha", wraps=sha) as hashes:
+            assert bind_host_executables(calls * 3, root) == bound
+            assert hashes.call_count == len(copies) + 1, "Repeated executions rehashed identical final paths"
         tui = {"command": ["/inputs/host/bin/codex", "cm", "--home", "/profile/m03/tui", "launch", "--"],
             "tui": True, "empty_launch_argv": True,
             "identity": {"proc_exe": "/inputs/host/bin/codex", "executable_sha256": bound["/inputs/host/bin/codex"]},
@@ -784,6 +796,8 @@ def bind_host_executables(executions, root):
         if not match or Path(match[1]).name != "codex":
             continue
         path = Path(match[1])
+        if str(path) in bound:
+            continue
         if path.is_relative_to("/inputs/host"):
             actual = root / "rootfs" / path.relative_to("/")
         elif path.is_relative_to("/work") or path.is_relative_to("/profile"):
@@ -815,6 +829,7 @@ def bind_tui_mcp_listener(record, metadata, bound_hosts, observer):
     return {"port": port, "listener_inode": inode, "accepted_socket_inodes": sorted(connections)}
 
 
+@ci_progress.case()
 def observe(directory, evidence):
     import observer
     observer.check_network_audit()
@@ -826,9 +841,11 @@ def observe(directory, evidence):
     symlinks = []
     bwrap_executions = set()
     executions = []
-    files = []
+    file_count = 0
     executable_memory = []
-    for path in sorted(directory.glob("syscalls.*")):
+    paths = sorted(directory.glob("syscalls.*"))
+    started = time.monotonic()
+    for index, path in enumerate(paths, 1):
         assert path.suffix[1:].isdigit(), path
         pid = path.suffix[1:]
         text = redact_trace("\n".join(pid + " " + line for line in path.read_text().splitlines()) + "\n", observer)
@@ -842,10 +859,12 @@ def observe(directory, evidence):
         symlinks.extend(line for line in calls if re.match(r'\d+\s+symlink(?:at)?\(', line))
         executions.extend(line for line in calls if re.match(r'\d+\s+execve(?:at)?\(', line))
         network.extend(line for line in calls if re.match(r'\d+\s+(?:connect|sendto|socketpair)\(', line))
-        files.extend(line for line in calls if re.match(r'\d+\s+(?:openat|readlink)\(', line))
+        file_count += sum(bool(re.match(r'\d+\s+(?:openat|readlink)\(', line)) for line in calls)
         # This fixed native fixture has no supported in-process code generator.
         executable_memory.extend(line for line in calls if "PROT_EXEC" in line and
             ("MAP_ANONYMOUS" in line or re.match(r'\d+\s+mprotect\(', line)))
+        if index % 500 == 0 or index == len(paths):
+            ci_progress.emit("outer-audit/traces-" + str(index) + "-of-" + str(len(paths)), "running", started)
     hosts = ("/inputs/host/bin/codex", "/work/m03/独立 Host/bin/codex")
     aliases = observer.bound_sandbox_aliases(symlinks, hosts)
     alias_targets = {}
@@ -882,14 +901,14 @@ def observe(directory, evidence):
     observer.audit_network(normalized, Path("/evidence"), ports, routes, tcp_connections)
     # Writable executable mappings are unsupported, even if no compiler was exec'd.
     assert not executable_memory, "Unclassified runtime code generation: " + repr(executable_memory)
-    assert files, "File-load observer produced no records"
+    assert file_count, "File-load observer produced no records"
     return {"status": "pass", "executions": executions, "network": network, "kernel_route_sockets": sorted(routes),
         "provider_tcp_connections": sorted(tcp_connections), "provider_tcp_metadata": tcp_metadata,
         "tui_mcp_listener": tui_mcp,
         "sandbox_aliases": [{"path": path, "target": alias_targets[path]} for path in sorted(aliases)],
         "packaged_bwrap_fd_executions": sorted(bwrap_executions),
         "bound_host_executables": bound_hosts,
-        "file_load_count": len(files), "trace_files": [path.name for path in sorted(directory.glob("syscalls.*"))],
+        "file_load_count": file_count, "trace_files": [path.name for path in paths],
         "compiler_linker_jit_build_service_calls": 0, "unclassified_executable_memory": executable_memory,
         "boundary": "fixed audited native fixtures; not a generic malicious-native JIT detector",
         "socket_payloads": "sendto/recvfrom redacted in both audit and export"}
@@ -982,9 +1001,7 @@ def consume():
         driver = [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "/fixture/fixtures/runtime-consumer/driver.py"]
         try:
             stage = "strict isolation probes"
-            with (logs / "consumer-probes.log").open("w") as stream:
-                result = subprocess.run([*base, "--", *driver, "probe"], stdout=stream, stderr=subprocess.STDOUT,
-                                        close_fds=True, timeout=180)
+            result = ci_progress.run(logs, "consumer-probes", [*base, "--", *driver, "probe"], 180)
             write(logs / "consumer-probes.json", {"return_code": result.returncode, "stage": stage})
             assert result.returncode == 0, "Strict namespace/probe setup failed"
             assert not canary_hits
@@ -996,9 +1013,7 @@ def consume():
                 "-o", str(trusted / "syscalls"), "--"]
             write(logs / "consumer-command.json", {"command": [*trace, *base, "--", *driver, "matrix"],
                 "cache_mode": "none", "producer_input_manifest_sha256": manifest["sha256"], "provenance": provenance()})
-            with (logs / "consumer-matrix.log").open("w") as stream:
-                result = subprocess.run([*trace, *base, "--", *driver, "matrix"], stdout=stream,
-                    stderr=subprocess.STDOUT, close_fds=True, timeout=1800)
+            result = ci_progress.run(logs, "consumer-matrix", [*trace, *base, "--", *driver, "matrix"], 1800)
             write(logs / "consumer-return.json", {"return_code": result.returncode, "stage": stage})
             if result.returncode == 0:
                 stage = "actual removed runtime library"
@@ -1013,38 +1028,30 @@ def consume():
                 (missing_root / removed.lstrip("/")).unlink()
                 write(missing_root / "fixture/missing-library.json", mutation)
                 missing_base = [str(missing_root) if argument == str(root) else argument for argument in base]
-                with (logs / "consumer-missing-library.log").open("w") as stream:
-                    library_result = subprocess.run([*trace, *missing_base, "--", *driver, "missing-library"],
-                        stdout=stream, stderr=subprocess.STDOUT, close_fds=True, timeout=90)
+                library_result = ci_progress.run(logs, "consumer-missing-library",
+                    [*trace, *missing_base, "--", *driver, "missing-library"], 90)
                 write(logs / "consumer-missing-library.json", {"return_code": library_result.returncode, "mutation": mutation})
                 assert library_result.returncode == 0, "Missing actual runtime dependency was not rejected"
-                with (logs / "consumer-library-recovery.log").open("w") as stream:
-                    recovery_result = subprocess.run([*trace, *base, "--", *driver, "recovery"],
-                        stdout=stream, stderr=subprocess.STDOUT, close_fds=True, timeout=120)
+                recovery_result = ci_progress.run(logs, "consumer-library-recovery",
+                    [*trace, *base, "--", *driver, "recovery"], 120)
                 write(logs / "consumer-library-recovery.json", {"return_code": recovery_result.returncode})
                 assert recovery_result.returncode == 0, "Known successful selection failed after the missing-library candidate"
                 if producer["task_id"] in ("CM-M01", "CM-M02", "CM-M03"):
                     stage = "M01 actual packaged CLI and native configuration"
                     m01_driver = [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "/fixture/ci/scripts/mod_manifest.py", "matrix"]
-                    with (logs / "m01-consumer-matrix.log").open("w") as stream:
-                        result = subprocess.run([*trace, *base, "--", *m01_driver], stdout=stream,
-                            stderr=subprocess.STDOUT, close_fds=True, timeout=1200)
+                    result = ci_progress.run(logs, "m01-consumer-matrix", [*trace, *base, "--", *m01_driver], 1200)
                     write(logs / "m01-consumer-return.json", {"return_code": result.returncode, "stage": stage})
                     assert result.returncode == 0, "M01 current-source regression failed"
                 if producer["task_id"] in ("CM-M02", "CM-M03"):
                     stage = "M02 actual runtime SDK and packaged Host adapter"
                     m02_driver = [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "/fixture/ci/scripts/runtime_sdk.py", "matrix"]
-                    with (logs / "m02-consumer-matrix.log").open("w") as stream:
-                        result = subprocess.run([*trace, *base, "--", *m02_driver], stdout=stream,
-                            stderr=subprocess.STDOUT, close_fds=True, timeout=1200)
+                    result = ci_progress.run(logs, "m02-consumer-matrix", [*trace, *base, "--", *m02_driver], 1200)
                     write(logs / "m02-consumer-return.json", {"return_code": result.returncode, "stage": stage})
                 if producer["task_id"] == "CM-M03":
                     assert result.returncode == 0, "M02 current-source regression failed"
                     stage = "M03 managed install and actual PTY TUI"
                     m03_driver = [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "/fixture/ci/scripts/managed_package.py", "matrix"]
-                    with (logs / "m03-consumer-matrix.log").open("w") as stream:
-                        result = subprocess.run([*trace, *base, "--", *m03_driver], stdout=stream,
-                            stderr=subprocess.STDOUT, close_fds=True, timeout=1200)
+                    result = ci_progress.run(logs, "m03-consumer-matrix", [*trace, *base, "--", *m03_driver], 1200)
                     write(logs / "m03-consumer-return.json", {"return_code": result.returncode, "stage": stage})
             # Audit and sanitize even on a failed matrix, before exporting any trace.
             audit = observe(trusted, evidence)

@@ -54,11 +54,8 @@ def fields(owner, payload):
     return value
 
 
-def native_probe(root, logs, inputs, package, frozen):
+def native_probe_source(root):
     import host
-    import mod_manifest
-    from linux_ci import execute, load_config
-    cfg = load_config(root)
     probe = Path(os.environ["RUNNER_TEMP"]) / "cm-m02-native-probe-source"
     shutil.copytree(root / host.HOST, probe, ignore=shutil.ignore_patterns(".git", "target"))
     runtime = probe / "codex-rs/cm/src/runtime.rs"
@@ -95,21 +92,17 @@ def native_probe(root, logs, inputs, package, frozen):
     assert match and '"cm-host-adapter"' not in match[2]
     dependencies = sorted([*match[2].splitlines(), ' "cm-host-adapter",'])
     lock.write_text(text[:match.start(2)] + "\n".join(dependencies) + text[match.end(2):])
-    target = Path(os.environ["CARGO_TARGET_DIR"]) / "m02-native-probe"
-    env = {**os.environ, "CARGO_TARGET_DIR": str(target)}
-    command = ["cargo", "test", "--locked", "--manifest-path", "codex-rs/Cargo.toml",
-        "--target", TARGET, "--profile", cfg["test_profile"], "--package", "codex-core", "--lib",
-        "--no-run", "--message-format=json"]
-    execute(probe, logs, "m02-native-probe-build", command, env)
-    artifacts = []
-    for line in (logs / "m02-native-probe-build.log").read_text().splitlines():
-        if not line.startswith("{"):
-            continue
-        event = json.loads(line)
-        if event.get("reason") == "compiler-artifact" and event.get("executable") and event.get("profile", {}).get("test"):
-            artifacts.append(event["executable"])
-    assert len(set(artifacts)) == 1, artifacts
-    binary = Path(artifacts[0])
+    return probe
+
+
+def native_probe(root, logs, inputs, package, frozen):
+    import acceptance_cache
+    import host
+    import mod_manifest
+    from linux_ci import execute
+    probe = Path(os.environ["RUNNER_TEMP"]) / "cm-m02-native-probe-source"
+    test_source = root / "fixtures/runtime-sdk/host_scopes.rs"
+    binary = acceptance_cache.run(root, logs, "m02-native-probe-build")
     home = Path(os.environ["RUNNER_TEMP"]) / "cm-m02-native-profile"
     for owner in ("lifecycle-audit", "example-tool"):
         destination = home / "mods" / owner

@@ -48,6 +48,7 @@ def install(home, library, changes=None):
 
 
 def build_fixtures(root, logs):
+    import acceptance_cache
     cfg = load_config(root)
     artifact = Path(os.environ["CM_CI_ARTIFACT_DIR"])
     package = Path(os.environ["RUNNER_TEMP"]) / "cm-host-package"
@@ -58,8 +59,7 @@ def build_fixtures(root, logs):
     adapter_unit = {**cfg["units"][0], "packages": ["codex-core", "codex-exec"]}
     execute(root, logs, "mod-adapter-fmt", ["cargo", "fmt", "--manifest-path", adapter_unit["manifest"],
             "--package", "codex-core", "--package", "codex-exec", "--", "--check"], host_env)
-    execute(root, logs, "mod-adapter-clippy",
-            cargo_args(adapter_unit, "clippy", cfg, cfg["clippy_profile"]) + ["--lib", "--", "-D", "warnings"], host_env)
+    acceptance_cache.run(root, logs, "mod-adapter-clippy")
     unit = {"id": "serial-mod", "manifest": MOD + "/Cargo.toml", "lockfile": MOD + "/Cargo.lock",
             "packages": ["cm-serial-eligibility-fixture"], "features": []}
     lock_before = host.sha(source_file(root, unit["lockfile"]))
@@ -110,17 +110,16 @@ def build_fixtures(root, logs):
     layout = json.loads((logs / "mod-c-layout.log").read_text())
     assert layout["mod"] == 72 and layout["policy_offset"] == 48
     assert "linux_x64_layout ... ok" in host.build_log(logs, "host-test").read_text()
-    probe_unit = {**cfg["units"][0], "packages": ["cm-runtime"]}
-    execute(root, logs, "mod-host-abi-probe-build",
-            cargo_args(probe_unit, "build", cfg, cfg["build_profile"]) + ["--example", "native_probe"], host_env)
+    acceptance_cache.run(root, logs, "mod-host-abi-probe-build",
+        Path(host_env["CARGO_TARGET_DIR"]) / TARGET / cfg["build_profile"] / "examples/native_probe")
     snapshot_env = {**host_env, "CM_P02_FIXTURE_LIBRARY": str(library),
                     "CM_P02_REPLACEMENT_LIBRARY": str(native / "replacement.so"),
                     "CM_REPLACEMENT_SENTINEL": str(native / "snapshot-replacement-executed"),
                     "CM_FIXTURE_EVENTS": str(logs / "snapshot-mod-events.jsonl"), "CM_FIXTURE_MODE": ""}
-    execute(root, logs, "mod-pinned-snapshot",
-            cargo_args(probe_unit, "test", cfg, cfg["test_profile"]) + ["--lib",
-                "replacement_and_in_place_edits_cannot_change_preflight_snapshot", "--", "--ignored", "--nocapture", "--test-threads=1"],
-            snapshot_env)
+    snapshot_binary = acceptance_cache.run(root, logs, "mod-pinned-snapshot-build")
+    execute(root / host.HOST / "codex-rs/cm", logs, "mod-pinned-snapshot", [str(snapshot_binary),
+        "replacement_and_in_place_edits_cannot_change_preflight_snapshot", "--ignored", "--nocapture", "--test-threads=1"],
+        snapshot_env)
     assert "1 passed; 0 failed" in (logs / "mod-pinned-snapshot.log").read_text()
     assert not Path(snapshot_env["CM_REPLACEMENT_SENTINEL"]).exists()
     assert [row["event"] for row in rows(Path(snapshot_env["CM_FIXTURE_EVENTS"]))].count("constructor") == 2

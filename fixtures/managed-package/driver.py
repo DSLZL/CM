@@ -22,6 +22,8 @@ import threading
 import time
 import tomllib
 
+import ci_progress
+
 INPUTS = Path("/inputs")
 BINARY = INPUTS / "host/bin/codex"
 WORK = Path("/work/m03")
@@ -94,6 +96,7 @@ def environment(directory, *, official=True):
         "CM_REPLACEMENT_SENTINEL": str(directory / "constructor-sentinel")}
 
 
+@ci_progress.case()
 def cm(home, *args, success=True, binary=BINARY):
     global _counter
     _counter += 1
@@ -165,6 +168,7 @@ def tui_mcp_listener(pid):
     return listeners[0]
 
 
+@ci_progress.case("name")
 def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=None):
     directory = EVIDENCE / name
     directory.mkdir(parents=True)
@@ -396,6 +400,7 @@ def m01_rejection_inputs(work):
     return archives + directories
 
 
+@ci_progress.case()
 def rejections(home):
     result = []
     # Reuse the exact malformed files already rejected by the current-source M01 matrix.
@@ -505,6 +510,7 @@ def failures(home):
     return rows
 
 
+@ci_progress.case()
 def writers(home):
     packages = (INPUTS / "mods/m01-a", INPUTS / "mods/m01-b")
     commands = [[str(BINARY), "cm", "--home", str(home), "install", str(package)] for package in packages]
@@ -515,7 +521,9 @@ def writers(home):
     for index, process in enumerate(processes):
         out, err = process.communicate(timeout=60)
         rows.append({"command": commands[index], "return_code": process.returncode, "stdout": out, "stderr": err})
-        if process.returncode:
+    # Both original writers must release their locks before retrying a rejected one.
+    for index, row in enumerate(rows):
+        if row["return_code"]:
             cm(home, "install", packages[index])
     assert set(state(home)[1]["installed"]) == {"serial-fixture", "output-fixture"}
     conflict = WORK / "same-id-other-content"
@@ -525,6 +533,7 @@ def writers(home):
     return rows
 
 
+@ci_progress.case()
 def backend_rejections(home):
     rows = []
     listener = socket.socket()
@@ -569,6 +578,37 @@ def backend_rejections(home):
 
 
 def self_check():
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory() as directory:
+        base = Path(directory)
+        inputs, work, evidence = (base / name for name in ("inputs", "work", "evidence"))
+        work.mkdir()
+        for owner in ("m01-a", "m01-b"):
+            (inputs / "mods" / owner).mkdir(parents=True)
+        completed = []
+
+        class Writer:
+            def __init__(self, index):
+                self.index = index
+                self.returncode = 1 if index == 0 else 0
+
+            def communicate(self, timeout):
+                completed.append(self.index)
+                return "", "profile write lock is busy" if self.returncode else ""
+
+        retried = []
+
+        def retry(*args):
+            assert completed == [0, 1], "Retry raced a still-running original writer"
+            retried.append(args)
+
+        with patch.dict(globals(), INPUTS=inputs, WORK=work, EVIDENCE=evidence,
+                environment=lambda directory: {}, cm=retry,
+                state=lambda home: (b"", {"installed": ["serial-fixture", "output-fixture"]}),
+                reject_install=lambda *args: {}), \
+                patch.object(subprocess, "Popen", side_effect=[Writer(0), Writer(1)]):
+            writers(base / "profile")
+        assert len(retried) == 1 and retried[0][-1] == inputs / "mods/m01-a"
     with tempfile.TemporaryDirectory() as directory:
         work = Path(directory)
         archives = [work / "zip" / ("zip-" + str(index)) / "mods/bad.cmod" for index in range(19)]
