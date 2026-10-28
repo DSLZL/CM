@@ -5,7 +5,6 @@ use std::ffi::{CString, OsStr};
 use std::fs::{self, File, Metadata};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -910,13 +909,13 @@ pub(crate) fn reconcile(
                 );
             }
             for (id, owner) in &view.owners {
-                if let (Some(root), Some(old)) = (&old_tree, retained.get(id)) {
-                    if old.compatible(owner) {
-                        let mut captured = Capture::default();
-                        capture_owner(root, Some(&stage), id, old, &mut captured)?;
-                        source_pins.extend(captured.pins);
-                        continue;
-                    }
+                if let (Some(root), Some(old)) = (&old_tree, retained.get(id))
+                    && old.compatible(owner)
+                {
+                    let mut captured = Capture::default();
+                    capture_owner(root, Some(&stage), id, old, &mut captured)?;
+                    source_pins.extend(captured.pins);
+                    continue;
                 }
                 create_owner(&stage, id, owner)?;
             }
@@ -1635,6 +1634,7 @@ fn fault(point: u8) -> Result<()> {
 mod tests {
     use super::*;
     use std::io::{BufRead, BufReader};
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, symlink};
     use std::process::{Command as Process, Stdio};
 
