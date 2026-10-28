@@ -98,6 +98,7 @@ def environment(label):
     assert set(interfaces) == {"lo"}
     assert set(os.environ) <= {"PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "HOME", "PYTHONNOUSERSITE", "PYTHONDONTWRITEBYTECODE"}
     check_mounts(mounts, context["bind_roots"])
+    core.enable_input_digest_cache()
     for forbidden in ("/var/run/docker.sock", "/run/docker.sock", "/run/host", "/sys", "/etc/resolv.conf",
                       "/usr/bin/cargo", "/usr/bin/gcc", "/usr/bin/cc", "/usr/bin/ld", "/usr/bin/ssh"):
         assert not Path(forbidden).exists(), forbidden
@@ -406,6 +407,7 @@ def matrix():
             "maintained_source": producer["maintained_source"],
             "cm_inputs_unchanged": baseline == tree(INPUTS)},
     }
+    reports["frozen-host-independent-mods.json"]["read_only_input_digest_reuse"] = core.input_digest_stats()
     for name, report in reports.items():
         write(EVIDENCE / name, {"status": "behavior_pass", **report})
     write(EVIDENCE / "suite.json", {"status": "pass", "reports": sorted(reports), "release_ready": False})

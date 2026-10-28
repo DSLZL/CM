@@ -284,6 +284,7 @@ def self_check():
     spec = importlib.util.spec_from_file_location("cm_m02_driver", directory / "driver.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.core.check_input_digest_cache()
     module.self_check()
     print(json.dumps({"m02_runtime_handoff_self_check": "pass"}))
 

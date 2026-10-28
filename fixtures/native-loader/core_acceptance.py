@@ -13,9 +13,77 @@ import time
 
 import ci_progress
 
+_INPUT_ROOT = None
+_INPUT_DIGESTS = {}
+_INPUT_DIGEST_STATS = {"computed": 0, "reused": 0, "hashed_bytes": 0, "avoided_bytes": 0}
+
+
+def enable_input_digest_cache():
+    global _INPUT_ROOT
+    assert os.statvfs("/inputs").f_flag & os.ST_RDONLY, "Digest reuse requires a read-only input mount"
+    _INPUT_ROOT = Path("/inputs")
+
+
+def input_digest_stats():
+    return {"read_only_root": str(_INPUT_ROOT) if _INPUT_ROOT is not None else None, **_INPUT_DIGEST_STATS}
+
+
+def input_stamp(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
 def sha(path):
+    readonly = _INPUT_ROOT is not None and path.is_relative_to(_INPUT_ROOT) and path.resolve().is_relative_to(_INPUT_ROOT)
+    stamp = input_stamp(path.stat()) if readonly else None
+    # Only verified read-only inputs reuse digests; writable state and the outer final audit always rehash.
+    if readonly and stamp in _INPUT_DIGESTS:
+        _INPUT_DIGEST_STATS["reused"] += 1
+        _INPUT_DIGEST_STATS["avoided_bytes"] += stamp[3]
+        return _INPUT_DIGESTS[stamp]
     with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        value = hashlib.file_digest(stream, "sha256").hexdigest()
+    if readonly:
+        assert input_stamp(path.stat()) == stamp, "Read-only input changed while hashing"
+        _INPUT_DIGESTS[stamp] = value
+        _INPUT_DIGEST_STATS["computed"] += 1
+        _INPUT_DIGEST_STATS["hashed_bytes"] += stamp[3]
+    return value
+
+
+def check_input_digest_cache():
+    import tempfile
+    import types
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        inputs = root / "inputs"
+        inputs.mkdir()
+        payload, writable = inputs / "payload", root / "writable"
+        payload.write_bytes(b"before")
+        writable.write_bytes(b"mutable")
+        (inputs / "alias").symlink_to("payload")
+        (inputs / "escape").symlink_to(writable)
+        with patch.dict(globals(), _INPUT_ROOT=inputs, _INPUT_DIGESTS={},
+                _INPUT_DIGEST_STATS={key: 0 for key in _INPUT_DIGEST_STATS}), \
+                patch.object(hashlib, "file_digest", wraps=hashlib.file_digest) as hashes:
+            original = sha(payload)
+            assert sha(inputs / "alias") == original and hashes.call_count == 1
+            before = payload.stat()
+            payload.write_bytes(b"after!")
+            os.utime(payload, ns=(before.st_atime_ns, before.st_mtime_ns))
+            assert sha(payload) != original and hashes.call_count == 2
+            sha(writable)
+            sha(writable)
+            sha(inputs / "escape")
+            sha(inputs / "escape")
+            assert hashes.call_count == 6, "Writable or escaping inputs reused a digest"
+            with patch.object(os, "statvfs", return_value=types.SimpleNamespace(f_flag=0)):
+                try:
+                    enable_input_digest_cache()
+                except AssertionError:
+                    pass
+                else:
+                    raise AssertionError("Writable input mount enabled digest reuse")
 
 
 def write(path, value):
