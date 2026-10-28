@@ -538,12 +538,28 @@ value = "also-preserved"
 "#;
         let selection = Selection::parse(bytes).unwrap();
         let manifests = BTreeMap::new();
-        assert!(selection.resolve(&Options::default(), &manifests, bytes, false).is_err());
-        let options = Options { profile: Some("review".into()), overrides: Vec::new() };
-        let (values, identities) = selection.resolve(&options, &manifests, bytes, true).unwrap();
+        assert!(
+            selection
+                .resolve(&Options::default(), &manifests, bytes, false)
+                .is_err()
+        );
+        let options = Options {
+            profile: Some("review".into()),
+            overrides: Vec::new(),
+        };
+        let (values, identities) = selection
+            .resolve(&options, &manifests, bytes, true)
+            .unwrap();
         assert!(values.is_empty() && identities.is_empty());
-        let options = Options { overrides: vec!["removed.value=1".into()], ..Options::default() };
-        assert!(selection.resolve(&options, &manifests, bytes, true).is_err());
+        let options = Options {
+            overrides: vec!["removed.value=1".into()],
+            ..Options::default()
+        };
+        assert!(
+            selection
+                .resolve(&options, &manifests, bytes, true)
+                .is_err()
+        );
     }
 }
 

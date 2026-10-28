@@ -864,7 +864,8 @@ fn prepare_snapshot(
     } else {
         &config
     };
-    let (config_values, config_identities) = selection.resolve(options, &manifests, original, managed.is_some())?;
+    let (config_values, config_identities) =
+        selection.resolve(options, &manifests, original, managed.is_some())?;
     let selected: BTreeMap<_, _> = candidates
         .iter()
         .filter(|(id, _)| enabled.contains(*id))

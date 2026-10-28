@@ -266,7 +266,10 @@ impl BinaryManifest {
         {
             return Err("state: invalid owner/schema/version".into());
         }
-        if abi.required_capabilities.iter().any(|cap| cap == crate::state::CAPABILITY)
+        if abi
+            .required_capabilities
+            .iter()
+            .any(|cap| cap == crate::state::CAPABILITY)
             && (abi.abi_major != 2
                 || self.state.as_ref().is_none_or(|state| {
                     !crate::state::component(&state.owner)

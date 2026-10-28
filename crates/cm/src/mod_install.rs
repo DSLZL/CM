@@ -11,14 +11,22 @@ use crate::profile::{self, Directory, Transaction};
 #[derive(Clone, Copy)]
 pub enum Command<'a> {
     Install(&'a Path),
-    Replace { id: &'a str, package: &'a Path, from: &'a str },
+    Replace {
+        id: &'a str,
+        package: &'a Path,
+        from: &'a str,
+    },
     Enable(&'a str),
     Disable(&'a str),
     Remove(&'a str),
     Scan,
 }
 
-fn ingest(transaction: &mut Transaction, input: &Path, replacement: Option<(&str, &str)>) -> Result<(), LoadError> {
+fn ingest(
+    transaction: &mut Transaction,
+    input: &Path,
+    replacement: Option<(&str, &str)>,
+) -> Result<(), LoadError> {
     let input = std::path::absolute(input).map_err(|e| profile::failure(&e.to_string()))?;
     let home = &transaction.root.path;
     let host_root = transaction
@@ -46,12 +54,22 @@ fn ingest(transaction: &mut Transaction, input: &Path, replacement: Option<(&str
     let snapshot = loader::installation_snapshot(&input)?;
     let was_enabled = transaction.next.enabled.contains(&snapshot.id);
     if let Some((id, expected)) = replacement {
-        if snapshot.id != id || !loader::digest(expected)
+        if snapshot.id != id
+            || !loader::digest(expected)
             || transaction.next.installed.get(id).map(String::as_str) != Some(expected)
         {
-            return Err(LoadError::input("input_drift", id, "replacement ID or expected old object differs"));
+            return Err(LoadError::input(
+                "input_drift",
+                id,
+                "replacement ID or expected old object differs",
+            ));
         }
-        if transaction.next.state.as_ref().is_some_and(|view| view.contains_owner(id)) {
+        if transaction
+            .next
+            .state
+            .as_ref()
+            .is_some_and(|view| view.contains_owner(id))
+        {
             crate::state::exclusive(transaction)?;
         }
     }
@@ -68,7 +86,9 @@ fn ingest(transaction: &mut Transaction, input: &Path, replacement: Option<(&str
             return Ok(());
         }
     }
-    if !transaction.next.installed.contains_key(&snapshot.id) && transaction.next.installed.len() >= 32 {
+    if !transaction.next.installed.contains_key(&snapshot.id)
+        && transaction.next.installed.len() >= 32
+    {
         return Err(profile::failure("installed set exceeds 32 packages"));
     }
     let name = profile::temporary("object");
@@ -150,7 +170,9 @@ pub fn run(home: &Path, command: Command<'_>, options: &Options) -> Result<Value
     let mut transaction = Transaction::begin(home, host)?;
     match command {
         Command::Install(input) => ingest(&mut transaction, input, None)?,
-        Command::Replace { id, package, from } => ingest(&mut transaction, package, Some((id, from)))?,
+        Command::Replace { id, package, from } => {
+            ingest(&mut transaction, package, Some((id, from)))?
+        }
         Command::Enable(id) | Command::Disable(id) | Command::Remove(id) => {
             if !transaction.next.installed.contains_key(id) {
                 return Err(LoadError::input(

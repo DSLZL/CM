@@ -34,7 +34,10 @@ fn failure(code: &str, message: &str) -> LoadError {
 fn io(error: std::io::Error) -> LoadError {
     failure(
         "state_ownership",
-        &format!("managed state filesystem operation failed: {:?}", error.kind()),
+        &format!(
+            "managed state filesystem operation failed: {:?}",
+            error.kind()
+        ),
     )
 }
 
@@ -65,12 +68,22 @@ impl Owner {
 }
 
 pub(crate) fn declaration(manifest: &Manifest, object: &str) -> Result<Option<Owner>> {
-    if !manifest.required_capabilities.iter().any(|cap| cap == CAPABILITY) {
+    if !manifest
+        .required_capabilities
+        .iter()
+        .any(|cap| cap == CAPABILITY)
+    {
         return Ok(None);
     }
-    let state = manifest.binary_manifest.as_ref().and_then(|m| m.state.as_ref());
+    let state = manifest
+        .binary_manifest
+        .as_ref()
+        .and_then(|m| m.state.as_ref());
     let Some(state) = state else {
-        return Err(failure("state_compatibility", "file state requires a format 3 declaration"));
+        return Err(failure(
+            "state_compatibility",
+            "file state requires a format 3 declaration",
+        ));
     };
     let owner = Owner {
         schema: state.schema.clone(),
@@ -78,7 +91,10 @@ pub(crate) fn declaration(manifest: &Manifest, object: &str) -> Result<Option<Ow
         object_sha256: object.into(),
     };
     if state.owner != manifest.id || !component(&state.owner) || !owner.validate() {
-        return Err(failure("state_ownership", "invalid file state owner/schema/version"));
+        return Err(failure(
+            "state_ownership",
+            "invalid file state owner/schema/version",
+        ));
     }
     Ok(Some(owner))
 }
@@ -116,7 +132,10 @@ impl View {
             || !loader::digest(&self.tree)
             || self.owners.len() > 4096
             || self.cleanups.len() > 4096
-            || self.owners.iter().any(|(id, owner)| !component(id) || !owner.validate())
+            || self
+                .owners
+                .iter()
+                .any(|(id, owner)| !component(id) || !owner.validate())
             || self.cleanups.iter().any(|(id, operation)| {
                 !component(id)
                     || id != &operation.owner
@@ -147,12 +166,20 @@ struct Identity {
 }
 
 impl Identity {
-    fn validate(&self, bytes: &[u8], home: &Directory, root: &Directory, lease: &File) -> Result<()> {
+    fn validate(
+        &self,
+        bytes: &[u8],
+        home: &Directory,
+        root: &Directory,
+        lease: &File,
+    ) -> Result<()> {
         let home = home.file.metadata().map_err(io)?;
         let root = root.file.metadata().map_err(io)?;
         let lease = lease.metadata().map_err(io)?;
-        if self.schema_version != 1 || self.domain != "cm.state-home.v1"
-            || !loader::digest(&self.home_id) || profile::canonical(self) != bytes
+        if self.schema_version != 1
+            || self.domain != "cm.state-home.v1"
+            || !loader::digest(&self.home_id)
+            || profile::canonical(self) != bytes
             || (self.home_device, self.home_inode) != (home.dev(), home.ino())
             || (self.state_device, self.state_inode) != (root.dev(), root.ino())
             || (self.lease_device, self.lease_inode) != (lease.dev(), lease.ino())
@@ -165,7 +192,9 @@ impl Identity {
 
 fn random_id() -> Result<String> {
     let mut bytes = [0_u8; 32];
-    File::open("/dev/urandom").and_then(|mut file| file.read_exact(&mut bytes)).map_err(io)?;
+    File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut bytes))
+        .map_err(io)?;
     Ok(loader::hash(&bytes))
 }
 
@@ -178,11 +207,17 @@ fn present(path: &Path) -> Result<bool> {
 }
 
 fn names(directory: &Directory) -> Result<BTreeSet<String>> {
-    directory.check().map_err(|_| failure("input_drift", "state directory changed"))?;
+    directory
+        .check()
+        .map_err(|_| failure("input_drift", "state directory changed"))?;
     let mut result = BTreeSet::new();
-    for entry in fs::read_dir(format!("/proc/self/fd/{}", directory.file.as_raw_fd())).map_err(io)? {
+    for entry in
+        fs::read_dir(format!("/proc/self/fd/{}", directory.file.as_raw_fd())).map_err(io)?
+    {
         let name = entry.map_err(io)?.file_name();
-        let name = name.to_str().ok_or_else(|| failure("state_ownership", "non-UTF8 state path"))?;
+        let name = name
+            .to_str()
+            .ok_or_else(|| failure("state_ownership", "non-UTF8 state path"))?;
         if name.is_empty() || name == "." || name == ".." || name.len() > 512 {
             return Err(failure("state_ownership", "invalid state path component"));
         }
@@ -197,8 +232,13 @@ fn names(directory: &Directory) -> Result<BTreeSet<String>> {
 fn open_child(parent: &Directory, name: &str) -> Result<Directory> {
     let file = loader::open_at(&parent.file, OsStr::new(name), true)
         .map_err(|_| failure("state_ownership", "expected owned state directory"))?;
-    let child = Directory { file, path: parent.path.join(name) };
-    child.check().map_err(|_| failure("state_ownership", "unsafe state directory"))?;
+    let child = Directory {
+        file,
+        path: parent.path.join(name),
+    };
+    child
+        .check()
+        .map_err(|_| failure("state_ownership", "unsafe state directory"))?;
     Ok(child)
 }
 
@@ -212,7 +252,10 @@ fn regular(parent: &Directory, name: &str) -> Result<File> {
         )
     };
     if fd < 0 {
-        return Err(failure("state_ownership", "state file is absent or is a link"));
+        return Err(failure(
+            "state_ownership",
+            "state file is absent or is a link",
+        ));
     }
     let file = unsafe { File::from_raw_fd(fd) };
     let metadata = file.metadata().map_err(io)?;
@@ -221,7 +264,10 @@ fn regular(parent: &Directory, name: &str) -> Result<File> {
         || metadata.uid() != unsafe { libc::geteuid() }
         || metadata.mode() & 0o7077 != 0
     {
-        return Err(failure("state_ownership", "state must be a private regular file with one link"));
+        return Err(failure(
+            "state_ownership",
+            "state must be a private regular file with one link",
+        ));
     }
     Ok(file)
 }
@@ -238,16 +284,24 @@ struct Store {
 
 impl Store {
     fn open(home: &Path, exclusive: bool) -> Result<Self> {
-        let home = Directory::open(home).map_err(|_| failure("state_ownership", "unsafe CM home"))?;
-        let state = home.child("state").map_err(|_| failure("state_ownership", "unsafe state parent"))?;
-        let root = state.child("cm-files-v1").map_err(|_| failure("state_ownership", "unsafe state namespace"))?;
+        let home =
+            Directory::open(home).map_err(|_| failure("state_ownership", "unsafe CM home"))?;
+        let state = home
+            .child("state")
+            .map_err(|_| failure("state_ownership", "unsafe state parent"))?;
+        let root = state
+            .child("cm-files-v1")
+            .map_err(|_| failure("state_ownership", "unsafe state namespace"))?;
         let identity_path = root.path.join("identity.json");
         if !present(&identity_path)?
             && names(&root)?.iter().any(|name| {
                 name != ".lease" && !(name.starts_with(".identity.") && name.ends_with(".tmp"))
             })
         {
-            return Err(failure("state_ownership", "refusing to adopt an unmarked state namespace"));
+            return Err(failure(
+                "state_ownership",
+                "refusing to adopt an unmarked state namespace",
+            ));
         }
         let fd = unsafe {
             libc::openat(
@@ -269,9 +323,16 @@ impl Store {
         {
             return Err(failure("state_ownership", "unsafe state lease"));
         }
-        let kind = if exclusive { libc::LOCK_EX } else { libc::LOCK_SH };
+        let kind = if exclusive {
+            libc::LOCK_EX
+        } else {
+            libc::LOCK_SH
+        };
         if unsafe { libc::flock(lease.as_raw_fd(), kind | libc::LOCK_NB) } != 0 {
-            return Err(failure("state_busy", "state is in use; exit CM runtimes before this operation"));
+            return Err(failure(
+                "state_busy",
+                "state is in use; exit CM runtimes before this operation",
+            ));
         }
         if !present(&identity_path)? {
             let home_metadata = home.file.metadata().map_err(io)?;
@@ -290,7 +351,8 @@ impl Store {
             let temporary = profile::temporary("identity");
             root.create_file(&temporary, &profile::canonical(&identity))
                 .map_err(|_| failure("state_ownership", "cannot prepare state home identity"))?;
-            let published = root.publish(&temporary, "identity.json")
+            let published = root
+                .publish(&temporary, "identity.json")
                 .map_err(|_| failure("state_ownership", "cannot publish state home identity"))?;
             if !published {
                 unlink(&root, &temporary, false)?;
@@ -301,18 +363,34 @@ impl Store {
         let identity: Identity = serde_json::from_slice(&bytes)
             .map_err(|_| failure("state_ownership", "invalid state home identity"))?;
         identity.validate(&bytes, &home, &root, &lease)?;
-        let trees = root.child("trees").map_err(|_| failure("state_ownership", "unsafe working trees"))?;
-        let checkpoints = root.child("checkpoints").map_err(|_| failure("state_ownership", "unsafe checkpoints"))?;
-        let result = Self { home, root, trees, checkpoints, lease, identity: pin, home_id: identity.home_id };
+        let trees = root
+            .child("trees")
+            .map_err(|_| failure("state_ownership", "unsafe working trees"))?;
+        let checkpoints = root
+            .child("checkpoints")
+            .map_err(|_| failure("state_ownership", "unsafe checkpoints"))?;
+        let result = Self {
+            home,
+            root,
+            trees,
+            checkpoints,
+            lease,
+            identity: pin,
+            home_id: identity.home_id,
+        };
         result.revalidate()?;
         Ok(result)
     }
 
     fn revalidate(&self) -> Result<()> {
         for directory in [&self.home, &self.root, &self.trees, &self.checkpoints] {
-            directory.check().map_err(|_| failure("input_drift", "state directory identity changed"))?;
+            directory
+                .check()
+                .map_err(|_| failure("input_drift", "state directory identity changed"))?;
         }
-        self.identity.revalidate().map_err(|_| failure("input_drift", "state home identity changed"))?;
+        self.identity
+            .revalidate()
+            .map_err(|_| failure("input_drift", "state home identity changed"))?;
         let current = regular(&self.root, ".lease")?;
         let old = self.lease.metadata().map_err(io)?;
         let now = current.metadata().map_err(io)?;
@@ -325,7 +403,10 @@ impl Store {
     fn tree(&self, view: &View) -> Result<Directory> {
         view.validate()?;
         if view.home_id != self.home_id {
-            return Err(failure("state_ownership", "state view belongs to a different home"));
+            return Err(failure(
+                "state_ownership",
+                "state view belongs to a different home",
+            ));
         }
         open_child(&self.trees, &view.tree)
     }
@@ -335,8 +416,18 @@ impl Store {
 struct Stamp(u64, u64, u64, u32, u32, u64, i64, i64, i64, i64);
 
 fn stamp(metadata: &Metadata) -> Stamp {
-    Stamp(metadata.dev(), metadata.ino(), metadata.len(), metadata.mode(), metadata.uid(),
-        metadata.nlink(), metadata.mtime(), metadata.mtime_nsec(), metadata.ctime(), metadata.ctime_nsec())
+    Stamp(
+        metadata.dev(),
+        metadata.ino(),
+        metadata.len(),
+        metadata.mode(),
+        metadata.uid(),
+        metadata.nlink(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.ctime(),
+        metadata.ctime_nsec(),
+    )
 }
 
 struct Pin {
@@ -347,20 +438,37 @@ struct Pin {
 
 impl Pin {
     fn new(path: PathBuf, file: &File, directory: bool) -> Result<Self> {
-        Ok(Self { path, stamp: stamp(&file.metadata().map_err(io)?), directory })
+        Ok(Self {
+            path,
+            stamp: stamp(&file.metadata().map_err(io)?),
+            directory,
+        })
     }
 
     fn revalidate(&self) -> Result<()> {
         let file = if self.directory {
-            loader::open_directory(&self.path).map_err(|_| failure("input_drift", "state directory replaced"))?
+            loader::open_directory(&self.path)
+                .map_err(|_| failure("input_drift", "state directory replaced"))?
         } else {
-            let parent = Directory::open(self.path.parent().ok_or_else(|| failure("state_ownership", "missing parent"))?)
-                .map_err(|_| failure("input_drift", "state parent replaced"))?;
-            regular(&parent, self.path.file_name().and_then(OsStr::to_str)
-                .ok_or_else(|| failure("state_ownership", "invalid state file path"))?)?
+            let parent = Directory::open(
+                self.path
+                    .parent()
+                    .ok_or_else(|| failure("state_ownership", "missing parent"))?,
+            )
+            .map_err(|_| failure("input_drift", "state parent replaced"))?;
+            regular(
+                &parent,
+                self.path
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .ok_or_else(|| failure("state_ownership", "invalid state file path"))?,
+            )?
         };
         if stamp(&file.metadata().map_err(io)?) != self.stamp {
-            return Err(failure("input_drift", "state input changed during operation"));
+            return Err(failure(
+                "input_drift",
+                "state input changed during operation",
+            ));
         }
         Ok(())
     }
@@ -373,11 +481,19 @@ fn read_marker(parent: &Directory, name: &str, limit: u64) -> Result<(Vec<u8>, P
         return Err(failure("state_budget", "state marker exceeds byte limit"));
     }
     let mut bytes = Vec::new();
-    (&mut file).take(limit + 1).read_to_end(&mut bytes).map_err(io)?;
-    if bytes.len() as u64 != before.len() || stamp(&before) != stamp(&file.metadata().map_err(io)?) {
+    (&mut file)
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
+    if bytes.len() as u64 != before.len() || stamp(&before) != stamp(&file.metadata().map_err(io)?)
+    {
         return Err(failure("input_drift", "state marker changed while reading"));
     }
-    let pin = Pin { path: parent.path.join(name), stamp: stamp(&before), directory: false };
+    let pin = Pin {
+        path: parent.path.join(name),
+        stamp: stamp(&before),
+        directory: false,
+    };
     Ok((bytes, pin))
 }
 
@@ -389,13 +505,17 @@ pub(crate) struct Guard {
 impl Guard {
     pub(crate) fn revalidate(&self) -> Result<()> {
         self.store.revalidate()?;
-        for pin in &self.pins { pin.revalidate()?; }
+        for pin in &self.pins {
+            pin.revalidate()?;
+        }
         Ok(())
     }
 }
 
 fn unlink(parent: &Directory, name: &str, directory: bool) -> Result<()> {
-    parent.check().map_err(|_| failure("input_drift", "unlink parent changed"))?;
+    parent
+        .check()
+        .map_err(|_| failure("input_drift", "unlink parent changed"))?;
     let name = CString::new(name).map_err(|_| failure("state_ownership", "invalid unlink name"))?;
     let flags = if directory { libc::AT_REMOVEDIR } else { 0 };
     if unsafe { libc::unlinkat(parent.file.as_raw_fd(), name.as_ptr(), flags) } != 0 {
@@ -431,7 +551,10 @@ fn record(capture: &mut Capture, budget: &mut Budget, relative: &str, value: Rec
         || budget.entries >= MAX_ENTRIES
         || capture.entries.len() >= MAX_TOTAL_ENTRIES
     {
-        return Err(failure("state_budget", "state path/depth/entry budget exceeded"));
+        return Err(failure(
+            "state_budget",
+            "state path/depth/entry budget exceeded",
+        ));
     }
     budget.entries += 1;
     if capture.entries.insert(relative.into(), value).is_some() {
@@ -454,7 +577,8 @@ fn copy_file(
         return Err(failure("state_budget", "state owner exceeds 1 GiB"));
     }
     let mut output = if let Some(destination) = destination {
-        let name = CString::new(name).map_err(|_| failure("state_ownership", "invalid copy name"))?;
+        let name =
+            CString::new(name).map_err(|_| failure("state_ownership", "invalid copy name"))?;
         let fd = unsafe {
             libc::openat(
                 destination.file.as_raw_fd(),
@@ -463,7 +587,9 @@ fn copy_file(
                 0o600,
             )
         };
-        if fd < 0 { return Err(io(std::io::Error::last_os_error())); }
+        if fd < 0 {
+            return Err(io(std::io::Error::last_os_error()));
+        }
         Some(unsafe { File::from_raw_fd(fd) })
     } else {
         None
@@ -473,7 +599,9 @@ fn copy_file(
     let mut buffer = [0_u8; 64 * 1024];
     loop {
         let length = input.read(&mut buffer).map_err(io)?;
-        if length == 0 { break; }
+        if length == 0 {
+            break;
+        }
         bytes += length as u64;
         if bytes > before.len() || bytes > MAX_BYTES.saturating_sub(budget.bytes) {
             return Err(failure("state_budget", "state file grew beyond its bound"));
@@ -494,13 +622,22 @@ fn copy_file(
         output.sync_all().map_err(io)?;
     }
     budget.bytes += bytes;
-    record(capture, budget, relative, Record {
+    record(
+        capture,
+        budget,
+        relative,
+        Record {
+            directory: false,
+            mode: before.mode() & 0o777,
+            size: bytes,
+            sha256: Some(format!("{:x}", digest.finalize())),
+        },
+    )?;
+    capture.pins.push(Pin {
+        path: source.path.join(name),
+        stamp: stamp(&before),
         directory: false,
-        mode: before.mode() & 0o777,
-        size: bytes,
-        sha256: Some(format!("{:x}", digest.finalize())),
-    })?;
-    capture.pins.push(Pin { path: source.path.join(name), stamp: stamp(&before), directory: false });
+    });
     Ok(())
 }
 
@@ -512,12 +649,17 @@ fn walk(
     capture: &mut Capture,
 ) -> Result<()> {
     let before = source.file.metadata().map_err(io)?;
-    record(capture, budget, relative, Record {
-        directory: true,
-        mode: before.mode() & 0o777,
-        size: 0,
-        sha256: None,
-    })?;
+    record(
+        capture,
+        budget,
+        relative,
+        Record {
+            directory: true,
+            mode: before.mode() & 0o777,
+            size: 0,
+            sha256: None,
+        },
+    )?;
     let entries = names(source)?;
     for name in &entries {
         let path = format!("{relative}/{name}");
@@ -525,15 +667,20 @@ fn walk(
             return Err(failure("state_budget", "state path/depth budget exceeded"));
         }
         if let Ok(child) = open_child(source, name) {
-            let target = destination.map(|parent| parent.child(name))
-                .transpose().map_err(|_| failure("state_ownership", "cannot create state directory"))?;
+            let target = destination
+                .map(|parent| parent.child(name))
+                .transpose()
+                .map_err(|_| failure("state_ownership", "cannot create state directory"))?;
             walk(&child, target.as_ref(), &path, budget, capture)?;
         } else {
             copy_file(source, destination, name, &path, budget, capture)?;
         }
     }
     if entries != names(source)? || stamp(&before) != stamp(&source.file.metadata().map_err(io)?) {
-        return Err(failure("input_drift", "state directory changed while copying"));
+        return Err(failure(
+            "input_drift",
+            "state directory changed while copying",
+        ));
     }
     if let Some(destination) = destination {
         if unsafe { libc::fchmod(destination.file.as_raw_fd(), before.mode() & 0o777) } != 0 {
@@ -541,7 +688,11 @@ fn walk(
         }
         destination.file.sync_all().map_err(io)?;
     }
-    capture.pins.push(Pin { path: source.path.clone(), stamp: stamp(&before), directory: true });
+    capture.pins.push(Pin {
+        path: source.path.clone(),
+        stamp: stamp(&before),
+        directory: true,
+    });
     Ok(())
 }
 
@@ -552,7 +703,10 @@ fn owner_directory(root: &Directory, id: &str, owner: &Owner) -> Result<Director
     if names(&id_root)? != BTreeSet::from([owner.schema.clone()])
         || names(&schema)? != BTreeSet::from([version.clone()])
     {
-        return Err(failure("state_ownership", "unexpected owner/schema state directories"));
+        return Err(failure(
+            "state_ownership",
+            "unexpected owner/schema state directories",
+        ));
     }
     open_child(&schema, &version)
 }
@@ -562,7 +716,8 @@ fn empty_owner(root: &Directory, id: &str, owner: &Owner) -> Result<bool> {
 }
 
 fn create_owner(root: &Directory, id: &str, owner: &Owner) -> Result<Directory> {
-    root.child(id).and_then(|id| id.child(&owner.schema))
+    root.child(id)
+        .and_then(|id| id.child(&owner.schema))
         .and_then(|schema| schema.child(&owner.version.to_string()))
         .map_err(|_| failure("state_ownership", "cannot create owned state path"))
 }
@@ -575,19 +730,39 @@ fn capture_owner(
     capture: &mut Capture,
 ) -> Result<()> {
     let source = owner_directory(root, id, owner)?;
-    let target = destination.map(|root| create_owner(root, id, owner)).transpose()?;
+    let target = destination
+        .map(|root| create_owner(root, id, owner))
+        .transpose()?;
     let mut budget = Budget::default();
     // Header directories are also bounded and recorded, without traversing another owner.
     for relative in [id.to_owned(), format!("{id}/{}", owner.schema)] {
         let directory = Directory::open(&root.path.join(&relative))
             .map_err(|_| failure("state_ownership", "unsafe state header directory"))?;
         let metadata = directory.file.metadata().map_err(io)?;
-        record(capture, &mut budget, &relative, Record {
-            directory: true, mode: metadata.mode() & 0o777, size: 0, sha256: None,
-        })?;
-        capture.pins.push(Pin { path: directory.path, stamp: stamp(&metadata), directory: true });
+        record(
+            capture,
+            &mut budget,
+            &relative,
+            Record {
+                directory: true,
+                mode: metadata.mode() & 0o777,
+                size: 0,
+                sha256: None,
+            },
+        )?;
+        capture.pins.push(Pin {
+            path: directory.path,
+            stamp: stamp(&metadata),
+            directory: true,
+        });
     }
-    walk(&source, target.as_ref(), &owner.relative(id), &mut budget, capture)?;
+    walk(
+        &source,
+        target.as_ref(),
+        &owner.relative(id),
+        &mut budget,
+        capture,
+    )?;
     if let Some(destination) = destination {
         for relative in [format!("{id}/{}", owner.schema), id.to_owned()] {
             let old = Directory::open(&root.path.join(&relative))
@@ -606,12 +781,21 @@ fn capture_owner(
 
 fn capture_tree(root: &Directory, owners: &BTreeMap<String, Owner>) -> Result<Capture> {
     if names(root)? != owners.keys().cloned().collect() {
-        return Err(failure("state_ownership", "working tree contains unowned entries"));
+        return Err(failure(
+            "state_ownership",
+            "working tree contains unowned entries",
+        ));
     }
     let mut capture = Capture::default();
-    for (id, owner) in owners { capture_owner(root, None, id, owner, &mut capture)?; }
-    capture.pins.push(Pin::new(root.path.clone(), &root.file, true)?);
-    for pin in &capture.pins { pin.revalidate()?; }
+    for (id, owner) in owners {
+        capture_owner(root, None, id, owner, &mut capture)?;
+    }
+    capture
+        .pins
+        .push(Pin::new(root.path.clone(), &root.file, true)?);
+    for pin in &capture.pins {
+        pin.revalidate()?;
+    }
     Ok(capture)
 }
 
@@ -633,7 +817,10 @@ fn new_view(store: &Store) -> Result<View> {
 }
 
 fn guard(home: &Path, exclusive: bool) -> Result<Guard> {
-    Ok(Guard { store: Store::open(home, exclusive)?, pins: Vec::new() })
+    Ok(Guard {
+        store: Store::open(home, exclusive)?,
+        pins: Vec::new(),
+    })
 }
 
 pub(crate) fn exclusive(transaction: &mut Transaction) -> Result<()> {
@@ -648,12 +835,18 @@ pub(crate) fn reconcile(
     contracts: &BTreeMap<String, Owner>,
 ) -> Result<()> {
     let old_view = transaction.next.state.clone();
-    if old_view.is_none() && contracts.keys().all(|id| !transaction.next.enabled.contains(id)) {
+    if old_view.is_none()
+        && contracts
+            .keys()
+            .all(|id| !transaction.next.enabled.contains(id))
+    {
         return Ok(());
     }
-    let changed = contracts.iter().any(|(id, owner)| match old_view.as_ref().and_then(|v| v.owners.get(id)) {
-        Some(old) => old != owner,
-        None => transaction.next.enabled.contains(id),
+    let changed = contracts.iter().any(|(id, owner)| {
+        match old_view.as_ref().and_then(|v| v.owners.get(id)) {
+            Some(old) => old != owner,
+            None => transaction.next.enabled.contains(id),
+        }
     });
     if transaction.state_guard.is_none() {
         transaction.state_guard = Some(guard(&transaction.root.path, changed)?);
@@ -663,7 +856,10 @@ pub(crate) fn reconcile(
         Some(view) => view.clone(),
         None => new_view(&held.store)?,
     };
-    let old_tree = old_view.as_ref().map(|old| held.store.tree(old)).transpose()?;
+    let old_tree = old_view
+        .as_ref()
+        .map(|old| held.store.tree(old))
+        .transpose()?;
     let mut rebuild = old_view.is_none();
     let mut retained = view.owners.clone();
     for (id, owner) in contracts {
@@ -677,14 +873,19 @@ pub(crate) fn reconcile(
                 }
                 retained.remove(id);
                 view.owners.remove(id);
-                if transaction.next.enabled.contains(id) { view.owners.insert(id.clone(), owner.clone()); }
+                if transaction.next.enabled.contains(id) {
+                    view.owners.insert(id.clone(), owner.clone());
+                }
                 rebuild = true;
             }
             None if transaction.next.enabled.contains(id) => {
                 if let Some(operation) = view.cleanups.get(id) {
                     let tree = open_child(&held.store.trees, &operation.tree)?;
                     if present(&tree.path.join(id))? {
-                        return Err(failure("state_ownership", "finish the previous cleanup before creating new state"));
+                        return Err(failure(
+                            "state_ownership",
+                            "finish the previous cleanup before creating new state",
+                        ));
                     }
                 }
                 view.owners.insert(id.clone(), owner.clone());
@@ -695,13 +896,18 @@ pub(crate) fn reconcile(
     }
     if rebuild {
         let temporary = profile::temporary("state");
-        let stage = held.store.trees.child(&temporary)
+        let stage = held
+            .store
+            .trees
+            .child(&temporary)
             .map_err(|_| failure("state_ownership", "cannot prepare state tree"))?;
         let result = (|| {
             let mut source_pins = Vec::new();
             if let Some(old_tree) = &old_tree {
                 // Validate the entire source before copying any owner.
-                source_pins.extend(capture_tree(old_tree, &old_view.as_ref().expect("old view").owners)?.pins);
+                source_pins.extend(
+                    capture_tree(old_tree, &old_view.as_ref().expect("old view").owners)?.pins,
+                );
             }
             for (id, owner) in &view.owners {
                 if let (Some(root), Some(old)) = (&old_tree, retained.get(id)) {
@@ -714,17 +920,27 @@ pub(crate) fn reconcile(
                 }
                 create_owner(&stage, id, owner)?;
             }
-            for pin in &source_pins { pin.revalidate()?; }
+            for pin in &source_pins {
+                pin.revalidate()?;
+            }
             held.revalidate()?;
             let id = random_id()?;
-            if !held.store.trees.publish(&temporary, &id)
+            if !held
+                .store
+                .trees
+                .publish(&temporary, &id)
                 .map_err(|_| failure("state_ownership", "cannot publish working tree"))?
             {
-                return Err(failure("state_ownership", "working tree identity collision"));
+                return Err(failure(
+                    "state_ownership",
+                    "working tree identity collision",
+                ));
             }
             Ok((id, source_pins))
         })();
-        if result.is_err() { let _ = profile::discard(&held.store.trees, &temporary); }
+        if result.is_err() {
+            let _ = profile::discard(&held.store.trees, &temporary);
+        }
         let (id, pins) = result?;
         view.tree = id;
         let capture = capture_tree(&held.store.tree(&view)?, &view.owners)?;
@@ -745,30 +961,51 @@ pub(crate) fn acquire_runtime(
 ) -> Result<Option<Guard>> {
     let Some(snapshot) = snapshot else {
         if std::env::var_os("CM_MOD_STATE_ROOT").is_some() {
-            return Err(failure("state_ownership", "unmanaged runtime has a forged state root"));
+            return Err(failure(
+                "state_ownership",
+                "unmanaged runtime has a forged state root",
+            ));
         }
         if selected.iter().any(|id| contracts.contains_key(id)) {
-            return Err(failure("state_ownership", "file state requires an independent managed CM home"));
+            return Err(failure(
+                "state_ownership",
+                "file state requires an independent managed CM home",
+            ));
         }
         return Ok(None);
     };
     let mut held = guard(home, false)?;
     let current = profile::snapshot_for(home, false)?
         .ok_or_else(|| failure("state_ownership", "managed profile disappeared"))?;
-    let selected_state = selected.iter().filter(|id| contracts.contains_key(*id)).collect::<Vec<_>>();
+    let selected_state = selected
+        .iter()
+        .filter(|id| contracts.contains_key(*id))
+        .collect::<Vec<_>>();
     if let Some(view) = &snapshot.generation.state {
         let tree = held.store.tree(view)?;
-        let current_view = current.generation.state.as_ref()
-            .ok_or_else(|| failure("state_compatibility", "current generation has no file state"))?;
+        let current_view = current.generation.state.as_ref().ok_or_else(|| {
+            failure(
+                "state_compatibility",
+                "current generation has no file state",
+            )
+        })?;
         if view.home_id != current_view.home_id || view.tree != current_view.tree {
-            return Err(failure("state_compatibility", "delayed generation refers to an obsolete state tree"));
+            return Err(failure(
+                "state_compatibility",
+                "delayed generation refers to an obsolete state tree",
+            ));
         }
         for id in selected_state {
             let expected = &contracts[id];
-            let owner = view.owners.get(id)
+            let owner = view
+                .owners
+                .get(id)
                 .ok_or_else(|| failure("state_compatibility", "state owner is not allocated"))?;
             if owner != expected || current_view.owners.get(id) != Some(owner) {
-                return Err(failure("state_compatibility", "state declaration/binding differs"));
+                return Err(failure(
+                    "state_compatibility",
+                    "state declaration/binding differs",
+                ));
             }
             let owned = owner_directory(&tree, id, owner)?;
             // Mutable payloads are deliberately not pinned across a business session.
@@ -776,33 +1013,52 @@ pub(crate) fn acquire_runtime(
         }
         held.store.revalidate()?;
         if std::env::var_os("CM_MOD_STATE_ROOT").as_deref() != Some(tree.path.as_os_str()) {
-            return Err(failure("state_ownership", "state environment differs from the verified working tree"));
+            return Err(failure(
+                "state_ownership",
+                "state environment differs from the verified working tree",
+            ));
         }
     } else if !selected_state.is_empty() {
-        return Err(failure("state_compatibility", "legacy generation cannot satisfy file state"));
+        return Err(failure(
+            "state_compatibility",
+            "legacy generation cannot satisfy file state",
+        ));
     } else if std::env::var_os("CM_MOD_STATE_ROOT").is_some() {
-        return Err(failure("state_ownership", "legacy runtime has a forged state root"));
+        return Err(failure(
+            "state_ownership",
+            "legacy runtime has a forged state root",
+        ));
     }
     snapshot.revalidate()?;
     held.store.revalidate()?;
-    crate::event("state-lease", json!({"shared":true, "process_lifetime":true, "persistent":snapshot.generation.state.is_some()}));
+    crate::event(
+        "state-lease",
+        json!({"shared":true, "process_lifetime":true, "persistent":snapshot.generation.state.is_some()}),
+    );
     Ok(Some(held))
 }
 
 /// Called by the CLI's single-threaded main, before constructing any async runtime.
 pub fn prepare_environment(home: &Path) -> Result<()> {
     let snapshot = profile::snapshot(home)?;
-    let expected = snapshot.as_ref().and_then(|snapshot| snapshot.generation.state.as_ref())
+    let expected = snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.generation.state.as_ref())
         .map(|view| home.join("state/cm-files-v1/trees").join(&view.tree));
     if let Some(supplied) = std::env::var_os("CM_MOD_STATE_ROOT")
         && expected.as_deref().map(Path::as_os_str) != Some(supplied.as_os_str())
     {
-        return Err(failure("state_ownership", "caller supplied an invalid state root"));
+        return Err(failure(
+            "state_ownership",
+            "caller supplied an invalid state root",
+        ));
     }
     if let Some(path) = expected {
         Directory::open(&path).map_err(|_| failure("state_ownership", "unsafe state root"))?;
         // SAFETY: this entry point runs in CLI main before Tokio/helper threads exist.
-        unsafe { std::env::set_var("CM_MOD_STATE_ROOT", path); }
+        unsafe {
+            std::env::set_var("CM_MOD_STATE_ROOT", path);
+        }
     }
     Ok(())
 }
@@ -823,18 +1079,31 @@ struct Checkpoint {
 pub enum Command<'a> {
     Path(&'a str),
     Checkpoint,
-    Rollback { generation: &'a str, restore: Option<&'a str> },
-    Clean { id: &'a str, confirm: &'a str },
+    Rollback {
+        generation: &'a str,
+        restore: Option<&'a str>,
+    },
+    Clean {
+        id: &'a str,
+        confirm: &'a str,
+    },
 }
 
 fn read_generation(transaction: &Transaction, id: &str) -> Result<(Generation, Pin)> {
-    if !loader::digest(id) { return Err(failure("state_checkpoint", "invalid generation identity")); }
+    if !loader::digest(id) {
+        return Err(failure("state_checkpoint", "invalid generation identity"));
+    }
     let (bytes, pin) = read_marker(&transaction.generations, id, 4 * 1024 * 1024)
         .map_err(|_| failure("state_checkpoint", "generation is absent or unsafe"))?;
     let generation: Generation = serde_json::from_slice(&bytes)
         .map_err(|_| failure("state_checkpoint", "invalid generation"))?;
-    generation.validate().map_err(|_| failure("state_checkpoint", "invalid generation format"))?;
-    if loader::hash(&bytes) != id || profile::canonical(&generation) != bytes || generation.lock_sha256.is_empty() {
+    generation
+        .validate()
+        .map_err(|_| failure("state_checkpoint", "invalid generation format"))?;
+    if loader::hash(&bytes) != id
+        || profile::canonical(&generation) != bytes
+        || generation.lock_sha256.is_empty()
+    {
         return Err(failure("state_checkpoint", "generation identity differs"));
     }
     Ok((generation, pin))
@@ -844,63 +1113,105 @@ fn checkpoint(mut transaction: Transaction, options: &Options) -> Result<Value> 
     exclusive(&mut transaction)?;
     let current = profile::snapshot_for(&transaction.root.path, false)?
         .ok_or_else(|| failure("state_checkpoint", "no committed managed profile"))?;
-    let view = current.generation.state.as_ref()
+    let view = current
+        .generation
+        .state
+        .as_ref()
         .ok_or_else(|| failure("state_checkpoint", "no managed file state to checkpoint"))?;
     let prepared = crate::runtime_plan::prepare_managed(
-        &transaction.root.path, options,
-        Snapshot::candidate(&transaction.root.path, transaction.host.clone(), transaction.next.clone())?,
+        &transaction.root.path,
+        options,
+        Snapshot::candidate(
+            &transaction.root.path,
+            transaction.host.clone(),
+            transaction.next.clone(),
+        )?,
     )?;
     prepared.revalidate()?;
     let held = transaction.state_guard.as_mut().expect("checkpoint guard");
     let source = held.store.tree(view)?;
     let expected = capture_tree(&source, &view.owners)?;
     let temporary = profile::temporary("checkpoint");
-    let stage = held.store.checkpoints.child(&temporary)
+    let stage = held
+        .store
+        .checkpoints
+        .child(&temporary)
         .map_err(|_| failure("state_checkpoint", "cannot prepare checkpoint"))?;
     let result = (|| {
-        let data = stage.child("data").map_err(|_| failure("state_checkpoint", "cannot prepare checkpoint data"))?;
+        let data = stage
+            .child("data")
+            .map_err(|_| failure("state_checkpoint", "cannot prepare checkpoint data"))?;
         let mut copied = Capture::default();
-        for (id, owner) in &view.owners { capture_owner(&source, Some(&data), id, owner, &mut copied)?; }
-        if copied.entries != expected.entries || capture_tree(&data, &view.owners)?.entries != expected.entries {
-            return Err(failure("state_checkpoint", "checkpoint copy differs from source"));
+        for (id, owner) in &view.owners {
+            capture_owner(&source, Some(&data), id, owner, &mut copied)?;
+        }
+        if copied.entries != expected.entries
+            || capture_tree(&data, &view.owners)?.entries != expected.entries
+        {
+            return Err(failure(
+                "state_checkpoint",
+                "checkpoint copy differs from source",
+            ));
         }
         let checkpoint = Checkpoint {
-            schema_version: 1, domain: "cm.state-checkpoint.v1".into(),
-            home_id: held.store.home_id.clone(), host: transaction.host.clone(),
+            schema_version: 1,
+            domain: "cm.state-checkpoint.v1".into(),
+            home_id: held.store.home_id.clone(),
+            host: transaction.host.clone(),
             generation: current.generation_id.clone(),
             config_sha256: current.generation.config_sha256.clone(),
-            owners: view.owners.clone(), entries: copied.entries,
+            owners: view.owners.clone(),
+            entries: copied.entries,
         };
         let bytes = profile::canonical(&checkpoint);
         if bytes.len() as u64 > MAX_CHECKPOINT {
-            return Err(failure("state_budget", "checkpoint manifest exceeds 16 MiB"));
+            return Err(failure(
+                "state_budget",
+                "checkpoint manifest exceeds 16 MiB",
+            ));
         }
-        stage.create_file("checkpoint.json", &bytes)
+        stage
+            .create_file("checkpoint.json", &bytes)
             .map_err(|_| failure("state_checkpoint", "cannot write checkpoint manifest"))?;
         stage.file.sync_all().map_err(io)?;
-        for pin in expected.pins.iter().chain(copied.pins.iter()) { pin.revalidate()?; }
+        for pin in expected.pins.iter().chain(copied.pins.iter()) {
+            pin.revalidate()?;
+        }
         current.revalidate()?;
         prepared.revalidate()?;
         held.revalidate()?;
         let id = loader::hash(&bytes);
-        if !held.store.checkpoints.publish(&temporary, &id)
+        if !held
+            .store
+            .checkpoints
+            .publish(&temporary, &id)
             .map_err(|_| failure("state_checkpoint", "cannot publish checkpoint"))?
         {
             let existing = open_child(&held.store.checkpoints, &id)?;
             let (old, _) = read_marker(&existing, "checkpoint.json", MAX_CHECKPOINT)
                 .map_err(|_| failure("state_checkpoint", "unsafe existing checkpoint"))?;
             if names(&existing)? != BTreeSet::from(["checkpoint.json".into(), "data".into()])
-                || old != bytes || capture_tree(&open_child(&existing, "data")?, &view.owners)?.entries != checkpoint.entries {
-                return Err(failure("state_checkpoint", "existing checkpoint content differs"));
+                || old != bytes
+                || capture_tree(&open_child(&existing, "data")?, &view.owners)?.entries
+                    != checkpoint.entries
+            {
+                return Err(failure(
+                    "state_checkpoint",
+                    "existing checkpoint content differs",
+                ));
             }
             profile::discard(&held.store.checkpoints, &temporary)
                 .map_err(|_| failure("state_checkpoint", "cannot discard duplicate checkpoint"))?;
         }
-        Ok(json!({"schema_version":1, "checkpoint":id, "generation":current.generation_id,
+        Ok(
+            json!({"schema_version":1, "checkpoint":id, "generation":current.generation_id,
             "complete":true, "owners":view.owners.keys().collect::<Vec<_>>(),
-            "active_changed":false, "already_native_executed":false}))
+            "active_changed":false, "already_native_executed":false}),
+        )
     })();
-    if result.is_err() { let _ = profile::discard(&held.store.checkpoints, &temporary); }
+    if result.is_err() {
+        let _ = profile::discard(&held.store.checkpoints, &temporary);
+    }
     transaction.revalidate()?;
     result
 }
@@ -911,7 +1222,9 @@ fn restore(
     generation: &str,
     id: &str,
 ) -> Result<()> {
-    if !loader::digest(id) { return Err(failure("state_checkpoint", "invalid checkpoint identity")); }
+    if !loader::digest(id) {
+        return Err(failure("state_checkpoint", "invalid checkpoint identity"));
+    }
     exclusive(transaction)?;
     let held = transaction.state_guard.as_ref().expect("restore guard");
     let checkpoint_dir = open_child(&held.store.checkpoints, id)?;
@@ -919,39 +1232,71 @@ fn restore(
         return Err(failure("state_checkpoint", "unexpected checkpoint entries"));
     }
     let (bytes, checkpoint_pin) = read_marker(&checkpoint_dir, "checkpoint.json", MAX_CHECKPOINT)
-        .map_err(|_| failure("state_checkpoint", "checkpoint manifest is absent or unsafe"))?;
+        .map_err(|_| {
+        failure(
+            "state_checkpoint",
+            "checkpoint manifest is absent or unsafe",
+        )
+    })?;
     let checkpoint: Checkpoint = serde_json::from_slice(&bytes)
         .map_err(|_| failure("state_checkpoint", "invalid checkpoint manifest"))?;
-    let target_view = target.state.as_ref()
-        .ok_or_else(|| failure("state_checkpoint", "target generation has no file state contract"))?;
-    if checkpoint.schema_version != 1 || checkpoint.domain != "cm.state-checkpoint.v1"
-        || loader::hash(&bytes) != id || profile::canonical(&checkpoint) != bytes
-        || checkpoint.home_id != held.store.home_id || checkpoint.home_id != target_view.home_id
-        || checkpoint.host != transaction.host || checkpoint.generation != generation
-        || checkpoint.config_sha256 != target.config_sha256 || checkpoint.owners != target_view.owners
+    let target_view = target.state.as_ref().ok_or_else(|| {
+        failure(
+            "state_checkpoint",
+            "target generation has no file state contract",
+        )
+    })?;
+    if checkpoint.schema_version != 1
+        || checkpoint.domain != "cm.state-checkpoint.v1"
+        || loader::hash(&bytes) != id
+        || profile::canonical(&checkpoint) != bytes
+        || checkpoint.home_id != held.store.home_id
+        || checkpoint.home_id != target_view.home_id
+        || checkpoint.host != transaction.host
+        || checkpoint.generation != generation
+        || checkpoint.config_sha256 != target.config_sha256
+        || checkpoint.owners != target_view.owners
         || checkpoint.entries.len() > MAX_TOTAL_ENTRIES
     {
-        return Err(failure("state_checkpoint", "checkpoint home/Host/generation/config/owners binding differs"));
+        return Err(failure(
+            "state_checkpoint",
+            "checkpoint home/Host/generation/config/owners binding differs",
+        ));
     }
     let data = open_child(&checkpoint_dir, "data")?;
     let captured = capture_tree(&data, &checkpoint.owners)?;
     if captured.entries != checkpoint.entries {
-        return Err(failure("state_checkpoint", "checkpoint data differs from its manifest"));
+        return Err(failure(
+            "state_checkpoint",
+            "checkpoint data differs from its manifest",
+        ));
     }
     let old_view = transaction.next.state.clone();
-    let old_tree = old_view.as_ref().map(|view| held.store.tree(view)).transpose()?;
-    let mut view = match &old_view { Some(view) => view.clone(), None => new_view(&held.store)? };
+    let old_tree = old_view
+        .as_ref()
+        .map(|view| held.store.tree(view))
+        .transpose()?;
+    let mut view = match &old_view {
+        Some(view) => view.clone(),
+        None => new_view(&held.store)?,
+    };
     for id in checkpoint.owners.keys() {
         if let Some(operation) = view.cleanups.get(id) {
             let tree = open_child(&held.store.trees, &operation.tree)?;
             if present(&tree.path.join(id))? {
-                return Err(failure("state_ownership", "finish the previous cleanup before restoring this owner"));
+                return Err(failure(
+                    "state_ownership",
+                    "finish the previous cleanup before restoring this owner",
+                ));
             }
         }
     }
     view.owners.extend(checkpoint.owners.clone());
     let temporary = profile::temporary("restore");
-    let stage = held.store.trees.child(&temporary)
+    let stage = held
+        .store
+        .trees
+        .child(&temporary)
         .map_err(|_| failure("state_checkpoint", "cannot stage restored state"))?;
     let result = (|| {
         let mut pins = captured.pins;
@@ -962,7 +1307,9 @@ fn restore(
             let source = if checkpoint.owners.contains_key(id) {
                 &data
             } else {
-                old_tree.as_ref().ok_or_else(|| failure("state_checkpoint", "missing retained owner tree"))?
+                old_tree
+                    .as_ref()
+                    .ok_or_else(|| failure("state_checkpoint", "missing retained owner tree"))?
             };
             let mut copied = Capture::default();
             capture_owner(source, Some(&stage), id, owner, &mut copied)?;
@@ -972,22 +1319,37 @@ fn restore(
         // Restored owners must match the authenticated checkpoint byte for byte.
         for (path, record) in &checkpoint.entries {
             if destination.entries.get(path) != Some(record) {
-                return Err(failure("state_checkpoint", "restored state differs from checkpoint"));
+                return Err(failure(
+                    "state_checkpoint",
+                    "restored state differs from checkpoint",
+                ));
             }
         }
-        for pin in &pins { pin.revalidate()?; }
+        for pin in &pins {
+            pin.revalidate()?;
+        }
         held.revalidate()?;
-        checkpoint_pin.revalidate().map_err(|_| failure("input_drift", "checkpoint manifest replaced"))?;
+        checkpoint_pin
+            .revalidate()
+            .map_err(|_| failure("input_drift", "checkpoint manifest replaced"))?;
         fault(1)?;
         let tree = random_id()?;
-        if !held.store.trees.publish(&temporary, &tree)
+        if !held
+            .store
+            .trees
+            .publish(&temporary, &tree)
             .map_err(|_| failure("state_checkpoint", "cannot publish restored state"))?
         {
-            return Err(failure("state_checkpoint", "restored tree identity collision"));
+            return Err(failure(
+                "state_checkpoint",
+                "restored tree identity collision",
+            ));
         }
         Ok((tree, pins))
     })();
-    if result.is_err() { let _ = profile::discard(&held.store.trees, &temporary); }
+    if result.is_err() {
+        let _ = profile::discard(&held.store.trees, &temporary);
+    }
     let (tree, pins) = result?;
     view.tree = tree;
     let published = capture_tree(&held.store.tree(&view)?, &view.owners)?;
@@ -999,14 +1361,26 @@ fn restore(
     Ok(())
 }
 
-fn rollback(mut transaction: Transaction, generation: &str, checkpoint: Option<&str>, options: &Options) -> Result<Value> {
+fn rollback(
+    mut transaction: Transaction,
+    generation: &str,
+    checkpoint: Option<&str>,
+    options: &Options,
+) -> Result<Value> {
     let (target, pin) = read_generation(&transaction, generation)?;
     exclusive(&mut transaction)?;
-    if let Some(checkpoint) = checkpoint { restore(&mut transaction, &target, generation, checkpoint)?; }
+    if let Some(checkpoint) = checkpoint {
+        restore(&mut transaction, &target, generation, checkpoint)?;
+    }
     transaction.next.installed = target.installed;
     transaction.next.enabled = target.enabled;
     transaction.next.consumed.extend(target.consumed);
-    transaction.state_guard.as_mut().expect("rollback guard").pins.push(pin);
+    transaction
+        .state_guard
+        .as_mut()
+        .expect("rollback guard")
+        .pins
+        .push(pin);
     let mut receipt = transaction.commit(options)?;
     receipt["rollback_target"] = json!(generation);
     receipt["restored_checkpoint"] = json!(checkpoint);
@@ -1023,20 +1397,30 @@ fn remove_tree(parent: &Directory, name: &str) -> Result<()> {
             unlink(&directory, &entry, false)?;
         }
     }
-    directory.check().map_err(|_| failure("input_drift", "cleanup directory replaced"))?;
+    directory
+        .check()
+        .map_err(|_| failure("input_drift", "cleanup directory replaced"))?;
     unlink(parent, name, true)
 }
 
 fn cleanup(tree: &Directory, id: &str, owner: &Owner) -> Result<()> {
-    if !present(&tree.path.join(id))? { return Ok(()); }
+    if !present(&tree.path.join(id))? {
+        return Ok(());
+    }
     let root = open_child(tree, id)?;
     if !names(&root)?.is_subset(&BTreeSet::from([owner.schema.clone()])) {
-        return Err(failure("state_ownership", "cleanup contains a different schema"));
+        return Err(failure(
+            "state_ownership",
+            "cleanup contains a different schema",
+        ));
     }
     if present(&root.path.join(&owner.schema))? {
         let schema = open_child(&root, &owner.schema)?;
         if !names(&schema)?.is_subset(&BTreeSet::from([owner.version.to_string()])) {
-            return Err(failure("state_ownership", "cleanup contains a different version"));
+            return Err(failure(
+                "state_ownership",
+                "cleanup contains a different version",
+            ));
         }
         if present(&schema.path.join(owner.version.to_string()))? {
             open_child(&schema, &owner.version.to_string())?;
@@ -1045,42 +1429,79 @@ fn cleanup(tree: &Directory, id: &str, owner: &Owner) -> Result<()> {
     // A previous unlink may have removed either header; validate the remaining owned subtree.
     let mut captured = Capture::default();
     walk(&root, None, id, &mut Budget::default(), &mut captured)?;
-    for pin in &captured.pins { pin.revalidate()?; }
+    for pin in &captured.pins {
+        pin.revalidate()?;
+    }
     fault(2)?;
     remove_tree(tree, id)
 }
 
-fn clean(mut transaction: Transaction, id: &str, confirm: &str, options: &Options) -> Result<Value> {
+fn clean(
+    mut transaction: Transaction,
+    id: &str,
+    confirm: &str,
+    options: &Options,
+) -> Result<Value> {
     if !component(id) || confirm != id {
-        return Err(failure("state_ownership", "cleanup requires a valid owner ID and matching --confirm"));
+        return Err(failure(
+            "state_ownership",
+            "cleanup requires a valid owner ID and matching --confirm",
+        ));
     }
     if transaction.next.enabled.contains(id) {
-        return Err(failure("state_busy", "disable or remove the owner before explicit cleanup"));
+        return Err(failure(
+            "state_busy",
+            "disable or remove the owner before explicit cleanup",
+        ));
     }
     exclusive(&mut transaction)?;
-    let mut view = transaction.next.state.clone()
+    let mut view = transaction
+        .next
+        .state
+        .clone()
         .ok_or_else(|| failure("state_ownership", "no allocated file state"))?;
     let held = transaction.state_guard.as_ref().expect("cleanup guard");
     let source = held.store.tree(&view)?;
     let Some(owner) = view.owners.get(id).cloned() else {
-        let operation = view.cleanups.get(id)
-            .ok_or_else(|| failure("state_ownership", "owner has no current state or cleanup operation"))?;
+        let operation = view.cleanups.get(id).ok_or_else(|| {
+            failure(
+                "state_ownership",
+                "owner has no current state or cleanup operation",
+            )
+        })?;
         let tree = open_child(&held.store.trees, &operation.tree)?;
         transaction.revalidate()?;
-        let owner = Owner { schema: operation.schema.clone(), version: operation.version, object_sha256: "0".repeat(64) };
+        let owner = Owner {
+            schema: operation.schema.clone(),
+            version: operation.version,
+            object_sha256: "0".repeat(64),
+        };
         let result = cleanup(&tree, id, &owner);
-        return Ok(json!({"schema_version":1,"committed":true, "cleanup_operation":operation.operation,
+        return Ok(
+            json!({"schema_version":1,"committed":true, "cleanup_operation":operation.operation,
             "cleanup_pending":result.is_err(), "current_working_state_removed":result.is_ok(),
             "checkpoints_preserved":true, "historical_working_trees_preserved":true,
-            "retry":true, "restart_required":true, "already_native_executed":false}));
+            "retry":true, "restart_required":true, "already_native_executed":false}),
+        );
     };
     let captured = capture_tree(&source, &view.owners)?;
     let operation = Cleanup {
-        tree: view.tree.clone(), owner: id.into(), schema: owner.schema.clone(), version: owner.version,
-        operation: loader::hash(&profile::canonical(&(held.store.home_id.clone(), view.tree.clone(), id, &owner))),
+        tree: view.tree.clone(),
+        owner: id.into(),
+        schema: owner.schema.clone(),
+        version: owner.version,
+        operation: loader::hash(&profile::canonical(&(
+            held.store.home_id.clone(),
+            view.tree.clone(),
+            id,
+            &owner,
+        ))),
     };
     let temporary = profile::temporary("clean");
-    let stage = held.store.trees.child(&temporary)
+    let stage = held
+        .store
+        .trees
+        .child(&temporary)
         .map_err(|_| failure("state_ownership", "cannot prepare cleaned state view"))?;
     view.owners.remove(id);
     view.cleanups.insert(id.into(), operation.clone());
@@ -1091,17 +1512,27 @@ fn clean(mut transaction: Transaction, id: &str, confirm: &str, options: &Option
             capture_owner(&source, Some(&stage), other_id, other_owner, &mut copied)?;
             pins.extend(copied.pins);
         }
-        for pin in &pins { pin.revalidate()?; }
+        for pin in &pins {
+            pin.revalidate()?;
+        }
         held.revalidate()?;
         let tree = random_id()?;
-        if !held.store.trees.publish(&temporary, &tree)
+        if !held
+            .store
+            .trees
+            .publish(&temporary, &tree)
             .map_err(|_| failure("state_ownership", "cannot publish cleaned state view"))?
         {
-            return Err(failure("state_ownership", "cleaned tree identity collision"));
+            return Err(failure(
+                "state_ownership",
+                "cleaned tree identity collision",
+            ));
         }
         Ok((tree, pins))
     })();
-    if result.is_err() { let _ = profile::discard(&held.store.trees, &temporary); }
+    if result.is_err() {
+        let _ = profile::discard(&held.store.trees, &temporary);
+    }
     let (tree, pins) = result?;
     view.tree = tree;
     let destination = capture_tree(&held.store.tree(&view)?, &view.owners)?;
@@ -1124,35 +1555,61 @@ fn clean(mut transaction: Transaction, id: &str, confirm: &str, options: &Option
 
 pub fn run(home: &Path, command: Command<'_>, options: &Options) -> Result<Value> {
     if let Command::Path(id) = command {
-        if !component(id) { return Err(failure("state_ownership", "invalid state owner ID")); }
+        if !component(id) {
+            return Err(failure("state_ownership", "invalid state owner ID"));
+        }
         let current = profile::snapshot_for(home, false)?
             .ok_or_else(|| failure("state_ownership", "no managed profile"))?;
-        let view = current.generation.state.as_ref()
+        let view = current
+            .generation
+            .state
+            .as_ref()
             .ok_or_else(|| failure("state_ownership", "no managed file state"))?;
-        let owner = view.owners.get(id).ok_or_else(|| failure("state_ownership", "owner has no current working state"))?;
+        let owner = view
+            .owners
+            .get(id)
+            .ok_or_else(|| failure("state_ownership", "owner has no current working state"))?;
         // Read-only query: never creates a namespace, state tree, or lease.
-        let home_directory = Directory::open(home).map_err(|_| failure("state_ownership", "unsafe CM home"))?;
+        let home_directory =
+            Directory::open(home).map_err(|_| failure("state_ownership", "unsafe CM home"))?;
         let namespace = Directory::open(&home.join("state/cm-files-v1"))
             .map_err(|_| failure("state_ownership", "unsafe state namespace"))?;
         let (bytes, pin) = read_marker(&namespace, "identity.json", 4096)
             .map_err(|_| failure("state_ownership", "invalid state home identity"))?;
         let identity: Identity = serde_json::from_slice(&bytes)
             .map_err(|_| failure("state_ownership", "invalid state home identity"))?;
-        identity.validate(&bytes, &home_directory, &namespace, &regular(&namespace, ".lease")?)?;
-        if identity.home_id != view.home_id { return Err(failure("state_ownership", "state view belongs to another home")); }
+        identity.validate(
+            &bytes,
+            &home_directory,
+            &namespace,
+            &regular(&namespace, ".lease")?,
+        )?;
+        if identity.home_id != view.home_id {
+            return Err(failure(
+                "state_ownership",
+                "state view belongs to another home",
+            ));
+        }
         let root = namespace.path.join("trees").join(&view.tree);
-        let directory = Directory::open(&root).map_err(|_| failure("state_ownership", "unsafe working tree"))?;
+        let directory = Directory::open(&root)
+            .map_err(|_| failure("state_ownership", "unsafe working tree"))?;
         owner_directory(&directory, id, owner)?;
-        pin.revalidate().map_err(|_| failure("input_drift", "state home identity changed"))?;
+        pin.revalidate()
+            .map_err(|_| failure("input_drift", "state home identity changed"))?;
         current.revalidate()?;
-        return Ok(json!({"owner":id,"schema":owner.schema,"version":owner.version,
+        return Ok(
+            json!({"owner":id,"schema":owner.schema,"version":owner.version,
             "root":root,"path":root.join(owner.relative(id)), "generation":current.generation_id,
-            "enabled":current.generation.enabled.contains(id),"already_native_executed":false}));
+            "enabled":current.generation.enabled.contains(id),"already_native_executed":false}),
+        );
     }
     let transaction = Transaction::begin(home, crate::package::managed_identity()?)?;
     match command {
         Command::Checkpoint => checkpoint(transaction, options),
-        Command::Rollback { generation, restore } => rollback(transaction, generation, restore, options),
+        Command::Rollback {
+            generation,
+            restore,
+        } => rollback(transaction, generation, restore, options),
         Command::Clean { id, confirm } => clean(transaction, id, confirm, options),
         Command::Path(_) => unreachable!(),
     }
@@ -1198,7 +1655,11 @@ mod tests {
     }
 
     fn owner(version: u32) -> Owner {
-        Owner { schema: "notes".into(), version, object_sha256: "a".repeat(64) }
+        Owner {
+            schema: "notes".into(),
+            version,
+            object_sha256: "a".repeat(64),
+        }
     }
 
     fn fixture(store: &Store) -> View {
@@ -1217,7 +1678,11 @@ mod tests {
     fn versioned_generation_does_not_reinterpret_legacy_state() {
         let legacy = Generation::default();
         let bytes = profile::canonical(&legacy);
-        assert!(!String::from_utf8(bytes.clone()).unwrap().contains("\"state\""));
+        assert!(
+            !String::from_utf8(bytes.clone())
+                .unwrap()
+                .contains("\"state\"")
+        );
         let mut decoded: Generation = serde_json::from_slice(&bytes).unwrap();
         assert!(decoded.validate().is_ok());
         decoded.schema_version = 2;
@@ -1232,7 +1697,10 @@ mod tests {
         assert!(!component("."));
         assert!(!component(".."));
         assert!(!component("../other"));
-        assert!(owner(1).compatible(&Owner { object_sha256: "b".repeat(64), ..owner(1) }));
+        assert!(owner(1).compatible(&Owner {
+            object_sha256: "b".repeat(64),
+            ..owner(1)
+        }));
         assert!(!owner(1).compatible(&owner(2)));
     }
 
@@ -1249,12 +1717,29 @@ mod tests {
             capture_owner(&source, Some(&destination), id, owner, &mut copied).unwrap();
         }
         assert_eq!(copied.entries, old.entries);
-        assert_eq!(capture_tree(&destination, &view.owners).unwrap().entries, old.entries);
-        for pin in old.pins.iter().chain(copied.pins.iter()) { pin.revalidate().unwrap(); }
+        assert_eq!(
+            capture_tree(&destination, &view.owners).unwrap().entries,
+            old.entries
+        );
+        for pin in old.pins.iter().chain(copied.pins.iter()) {
+            pin.revalidate().unwrap();
+        }
         cleanup(&source, "example-tool", &owner(1)).unwrap();
         assert!(!source.path.join("example-tool").exists());
-        assert_eq!(fs::read(source.path.join(owner(1).relative("other")).join("value")).unwrap(), b"other");
-        assert_eq!(fs::read(destination.path.join(owner(1).relative("example-tool")).join("value")).unwrap(), b"example-tool");
+        assert_eq!(
+            fs::read(source.path.join(owner(1).relative("other")).join("value")).unwrap(),
+            b"other"
+        );
+        assert_eq!(
+            fs::read(
+                destination
+                    .path
+                    .join(owner(1).relative("example-tool"))
+                    .join("value")
+            )
+            .unwrap(),
+            b"example-tool"
+        );
     }
 
     #[test]
@@ -1266,8 +1751,14 @@ mod tests {
             let root = held.store.tree(&view).unwrap();
             let own = owner_directory(&root, "example-tool", &owner(1)).unwrap();
             let external = home.0.join("external");
-            fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&external)
-                .unwrap().write_all(b"preserve").unwrap();
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&external)
+                .unwrap()
+                .write_all(b"preserve")
+                .unwrap();
             match kind {
                 "symlink" => symlink(&external, own.path.join("bad")).unwrap(),
                 "hardlink" => fs::hard_link(&external, own.path.join("bad")).unwrap(),
@@ -1275,7 +1766,9 @@ mod tests {
                     let path = CString::new(own.path.join("bad").as_os_str().as_bytes()).unwrap();
                     assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
                 }
-                "unowned" => { root.child("foreign").unwrap(); }
+                "unowned" => {
+                    root.child("foreign").unwrap();
+                }
                 _ => unreachable!(),
             }
             assert!(capture_tree(&root, &view.owners).is_err());
@@ -1296,8 +1789,14 @@ mod tests {
         let tree = held.store.tree(&view).unwrap();
         let own = owner_directory(&tree, "example-tool", &owner(1)).unwrap();
         let large = own.path.join("large");
-        fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&large)
-            .unwrap().set_len(MAX_BYTES + 1).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&large)
+            .unwrap()
+            .set_len(MAX_BYTES + 1)
+            .unwrap();
         assert!(capture_tree(&tree, &view.owners).is_err());
         fs::remove_file(large).unwrap();
         let capture = capture_tree(&tree, &view.owners).unwrap();
@@ -1307,10 +1806,24 @@ mod tests {
         assert!(capture.pins.iter().any(|pin| pin.revalidate().is_err()));
         assert_eq!(fs::read(home.0.join("old-value")).unwrap(), b"example-tool");
         let mut captured = Capture::default();
-        let mut budget = Budget { entries: MAX_ENTRIES, bytes: 0 };
-        assert!(record(&mut captured, &mut budget, "safe", Record {
-            directory: true, mode: 0o700, size: 0, sha256: None,
-        }).is_err());
+        let mut budget = Budget {
+            entries: MAX_ENTRIES,
+            bytes: 0,
+        };
+        assert!(
+            record(
+                &mut captured,
+                &mut budget,
+                "safe",
+                Record {
+                    directory: true,
+                    mode: 0o700,
+                    size: 0,
+                    sha256: None,
+                }
+            )
+            .is_err()
+        );
         assert!(captured.entries.is_empty());
     }
 
@@ -1337,7 +1850,10 @@ mod tests {
         assert!(root.path.join("example-tool/notes/1/value").is_file());
         cleanup(&root, "example-tool", &owner(1)).unwrap();
         cleanup(&root, "example-tool", &owner(1)).unwrap();
-        assert_eq!(fs::read(root.path.join("other/notes/1/value")).unwrap(), b"other");
+        assert_eq!(
+            fs::read(root.path.join("other/notes/1/value")).unwrap(),
+            b"other"
+        );
     }
 
     #[test]
@@ -1347,12 +1863,18 @@ mod tests {
         let view = fixture(&held.store);
         let root = held.store.tree(&view).unwrap();
         fs::remove_dir_all(root.path.join("example-tool/notes")).unwrap();
-        root.child("example-tool").unwrap().child("foreign-schema").unwrap();
+        root.child("example-tool")
+            .unwrap()
+            .child("foreign-schema")
+            .unwrap();
         assert!(cleanup(&root, "example-tool", &owner(1)).is_err());
         fs::remove_dir(root.path.join("example-tool/foreign-schema")).unwrap();
         cleanup(&root, "example-tool", &owner(1)).unwrap();
         assert!(!root.path.join("example-tool").exists());
-        assert_eq!(fs::read(root.path.join("other/notes/1/value")).unwrap(), b"other");
+        assert_eq!(
+            fs::read(root.path.join("other/notes/1/value")).unwrap(),
+            b"other"
+        );
     }
 
     fn restore_fixture(home: &Home) -> (Transaction, Generation, String, String) {
@@ -1408,14 +1930,41 @@ mod tests {
         assert_eq!(profile::canonical(&transaction.next), before);
         assert!(!home.0.join("cm-profile.json").exists());
         let store = &transaction.state_guard.as_ref().unwrap().store;
-        assert!(names(&store.trees).unwrap().iter().all(|name| !name.ends_with(".tmp")));
+        assert!(
+            names(&store.trees)
+                .unwrap()
+                .iter()
+                .all(|name| !name.ends_with(".tmp"))
+        );
         restore(&mut transaction, &target, &generation, &checkpoint).unwrap();
         let after = transaction.next.state.as_ref().unwrap();
         assert_ne!(after.tree, target.state.as_ref().unwrap().tree);
         let store = &transaction.state_guard.as_ref().unwrap().store;
-        assert_eq!(fs::read(store.tree(after).unwrap().path.join("example-tool/notes/1/value")).unwrap(), b"example-tool");
-        assert!(store.checkpoints.path.join(&checkpoint).join("data/example-tool/notes/1/value").is_file());
-        transaction.state_guard.as_ref().unwrap().revalidate().unwrap();
+        assert_eq!(
+            fs::read(
+                store
+                    .tree(after)
+                    .unwrap()
+                    .path
+                    .join("example-tool/notes/1/value")
+            )
+            .unwrap(),
+            b"example-tool"
+        );
+        assert!(
+            store
+                .checkpoints
+                .path
+                .join(&checkpoint)
+                .join("data/example-tool/notes/1/value")
+                .is_file()
+        );
+        transaction
+            .state_guard
+            .as_ref()
+            .unwrap()
+            .revalidate()
+            .unwrap();
     }
 
     #[test]
@@ -1427,21 +1976,31 @@ mod tests {
             let store = &transaction.state_guard.as_ref().unwrap().store;
             let directory = store.checkpoints.path.join(&id);
             let manifest = directory.join("checkpoint.json");
-            let mut checkpoint: Checkpoint = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+            let mut checkpoint: Checkpoint =
+                serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
             match field {
                 "home" => checkpoint.home_id = "d".repeat(64),
                 "host" => checkpoint.host.executable_sha256 = "d".repeat(64),
                 "generation" => checkpoint.generation = "d".repeat(64),
                 "config" => checkpoint.config_sha256 = Some("d".repeat(64)),
                 "owner" => checkpoint.owners.get_mut("example-tool").unwrap().version = 2,
-                "data" => fs::write(directory.join("data/example-tool/notes/1/value"), b"corrupted").unwrap(),
+                "data" => fs::write(
+                    directory.join("data/example-tool/notes/1/value"),
+                    b"corrupted",
+                )
+                .unwrap(),
                 _ => unreachable!(),
             }
             let bytes = profile::canonical(&checkpoint);
             fs::write(&manifest, &bytes).unwrap();
             let new_id = loader::hash(&bytes);
-            if id != new_id { fs::rename(&directory, store.checkpoints.path.join(&new_id)).unwrap(); }
-            assert!(restore(&mut transaction, &target, &generation, &new_id).is_err(), "{field}");
+            if id != new_id {
+                fs::rename(&directory, store.checkpoints.path.join(&new_id)).unwrap();
+            }
+            assert!(
+                restore(&mut transaction, &target, &generation, &new_id).is_err(),
+                "{field}"
+            );
             assert_eq!(profile::canonical(&transaction.next), before);
             assert!(!home.0.join("cm-profile.json").exists());
         }
@@ -1458,8 +2017,23 @@ mod tests {
         assert_eq!(profile::canonical(&transaction.next), before);
         assert!(!home.0.join("cm-profile.json").exists());
         let store = &transaction.state_guard.as_ref().unwrap().store;
-        assert_eq!(fs::read(store.tree(target.state.as_ref().unwrap()).unwrap().path.join("example-tool/notes/1/value")).unwrap(), b"example-tool");
-        assert!(names(&store.trees).unwrap().iter().all(|name| !name.ends_with(".tmp")));
+        assert_eq!(
+            fs::read(
+                store
+                    .tree(target.state.as_ref().unwrap())
+                    .unwrap()
+                    .path
+                    .join("example-tool/notes/1/value")
+            )
+            .unwrap(),
+            b"example-tool"
+        );
+        assert!(
+            names(&store.trees)
+                .unwrap()
+                .iter()
+                .all(|name| !name.ends_with(".tmp"))
+        );
     }
 
     #[test]
@@ -1487,13 +2061,27 @@ mod tests {
         let home = Home::new();
         let held = guard(&home.0, false).unwrap();
         let mut child = Process::new(std::env::current_exe().unwrap())
-            .args(["--exact", "state::tests::state_unrelated_child", "--ignored", "--nocapture"])
-            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+            .args([
+                "--exact",
+                "state::tests::state_unrelated_child",
+                "--ignored",
+                "--nocapture",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
         let mut output = BufReader::new(child.stdout.take().unwrap());
         loop {
             let mut line = String::new();
-            assert_ne!(output.read_line(&mut line).unwrap(), 0, "helper exited before barrier");
-            if line.trim() == "state-helper-ready" { break; }
+            assert_ne!(
+                output.read_line(&mut line).unwrap(),
+                0,
+                "helper exited before barrier"
+            );
+            if line.trim() == "state-helper-ready" {
+                break;
+            }
         }
         drop(held);
         let exclusive = guard(&home.0, true).unwrap();
@@ -1507,14 +2095,28 @@ mod tests {
     fn state_live_process_lease_is_released_by_sigkill() {
         let home = Home::new();
         let mut child = Process::new(std::env::current_exe().unwrap())
-            .args(["--exact", "state::tests::state_lease_child", "--ignored", "--nocapture"])
+            .args([
+                "--exact",
+                "state::tests::state_lease_child",
+                "--ignored",
+                "--nocapture",
+            ])
             .env("CM_TEST_STATE_HOME", &home.0)
-            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
         let mut output = BufReader::new(child.stdout.take().unwrap());
         loop {
             let mut line = String::new();
-            assert_ne!(output.read_line(&mut line).unwrap(), 0, "lease child exited before barrier");
-            if line.trim() == "state-lease-ready" { break; }
+            assert_ne!(
+                output.read_line(&mut line).unwrap(),
+                0,
+                "lease child exited before barrier"
+            );
+            if line.trim() == "state-lease-ready" {
+                break;
+            }
         }
         assert_eq!(guard(&home.0, true).err().unwrap().code, "state_busy");
         let other_reader = guard(&home.0, false).unwrap();

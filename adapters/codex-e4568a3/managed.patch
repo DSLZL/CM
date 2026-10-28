@@ -85,7 +85,7 @@ index 7bd8ec8..cd27673 100644
  #[derive(Debug, Parser)]
  struct FeaturesCli {
      #[command(subcommand)]
-@@ -1067,6 +1121,24 @@ fn stage_str(stage: Stage) -> &'static str {
+@@ -1067,6 +1121,29 @@ fn stage_str(stage: Stage) -> &'static str {
  fn main() -> anyhow::Result<()> {
      codex_build_info::initialize!();
      let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
@@ -100,17 +100,22 @@ index 7bd8ec8..cd27673 100644
 +                remote_control_disabled,
 +            )));
 +    }
-+    if MultitoolCli::try_parse().is_ok_and(|cli| matches!(
-+        cli.subcommand,
-+        None | Some(Subcommand::Agents(_)) | Some(Subcommand::Resume(_))
-+            | Some(Subcommand::Fork(_)) | Some(Subcommand::Exec(_)) | Some(Subcommand::AppServer(_))
-+    )) {
++    if MultitoolCli::try_parse().is_ok_and(|cli| {
++        matches!(
++            cli.subcommand,
++            None | Some(Subcommand::Agents(_))
++                | Some(Subcommand::Resume(_))
++                | Some(Subcommand::Fork(_))
++                | Some(Subcommand::Exec(_))
++                | Some(Subcommand::AppServer(_))
++        )
++    }) {
 +        cm_runtime::state::prepare_environment(&find_codex_home()?)?;
 +    }
      arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
          // Keep the CLI dispatcher off the runtime's stack while the TUI rebuilds a thread.
          Box::pin(cli_main(arg0_paths, remote_control_disabled)).await?;
-@@ -1126,20 +1198,85 @@ async fn cli_main(
+@@ -1126,20 +1203,97 @@ async fn cli_main(
          profile: cm_profile,
          overrides: cm_set,
      };
@@ -173,16 +178,28 @@ index 7bd8ec8..cd27673 100644
 +            CmCommand::Launch { args } => cm_runtime::launcher::launch(&home, args, &cm_options)
 +                .map(|()| serde_json::json!({})),
 +            CmCommand::Replace { id, package, from } => cm_runtime::mod_install::run(
-+                &home, cm_runtime::mod_install::Command::Replace { id, package, from }, &cm_options,
++                &home,
++                cm_runtime::mod_install::Command::Replace { id, package, from },
++                &cm_options,
 +            ),
-+            CmCommand::Rollback { generation, restore } => cm_runtime::state::run(
-+                &home, cm_runtime::state::Command::Rollback { generation, restore: restore.as_deref() }, &cm_options,
++            CmCommand::Rollback {
++                generation,
++                restore,
++            } => cm_runtime::state::run(
++                &home,
++                cm_runtime::state::Command::Rollback {
++                    generation,
++                    restore: restore.as_deref(),
++                },
++                &cm_options,
 +            ),
 +            CmCommand::State { command } => {
 +                let command = match command {
 +                    CmStateCommand::Path { id } => cm_runtime::state::Command::Path(id),
 +                    CmStateCommand::Checkpoint => cm_runtime::state::Command::Checkpoint,
-+                    CmStateCommand::Clean { id, confirm } => cm_runtime::state::Command::Clean { id, confirm },
++                    CmStateCommand::Clean { id, confirm } => {
++                        cm_runtime::state::Command::Clean { id, confirm }
++                    }
 +                };
 +                cm_runtime::state::run(&home, command, &cm_options)
 +            }
@@ -203,7 +220,7 @@ index 7bd8ec8..cd27673 100644
              Ok(value) => println!("{}", serde_json::to_string(&value)?),
              Err(error) => {
                  eprintln!("{}", serde_json::to_string(&error)?);
-@@ -1157,7 +1294,7 @@ async fn cli_main(
+@@ -1157,7 +1311,7 @@ async fn cli_main(
      }
  
      // Metadata/helper commands never execute Mod code. Other Core entry points
@@ -212,7 +229,7 @@ index 7bd8ec8..cd27673 100644
      let cm_business = matches!(
          &subcommand,
          None | Some(Subcommand::Agents(_))
-@@ -1176,11 +1313,22 @@ async fn cli_main(
+@@ -1176,11 +1330,22 @@ async fn cli_main(
              if command.subcommand.is_none() && !command.managed_daemon && !command.remote_control
                  && matches!(command.listen, codex_app_server::AppServerTransport::Stdio));
          let cm_supported_backend = root_remote.is_none() && (local_exec || local_stdio);

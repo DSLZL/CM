@@ -323,7 +323,8 @@ fn initialize_with(
             ));
         }
         let state_lease = prepared.acquire_state()?;
-        STATE_LEASE.set(state_lease)
+        STATE_LEASE
+            .set(state_lease)
             .map_err(|_| LoadError::new("startup", false, "state lease was already initialized"))?;
         let (plan, modules, config) = prepared.commit()?;
         let _call = NativeCall::enter().map_err(|e| LoadError::new("startup", false, &e))?;
