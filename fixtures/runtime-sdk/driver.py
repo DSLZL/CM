@@ -67,6 +67,21 @@ def text_values(value):
     return value if isinstance(value, str) else ""
 
 
+TITLE_SCHEMA = {"type": "object", "properties": {"title": {"type": "string", "minLength": 1, "maxLength": 36}},
+    "required": ["title"], "additionalProperties": False}
+
+
+def title_request(request):
+    output = (request.get("text") or {}).get("format") or {}
+    # The pinned TUI uses a separate structured-output thread for automatic titles.
+    return (output.get("type") == "json_schema" and output.get("schema") == TITLE_SCHEMA and
+        any(item.get("type") == "message" and item.get("role") == "user" and
+            any(part.get("type") == "input_text" and part.get("text", "").startswith(
+                "Generate a concise, single-line task title of at most 36 characters ") and
+                "\n\nUser prompt:\nCM_M02_" in part["text"] for part in item.get("content", []))
+            for item in request.get("input", [])))
+
+
 class Provider:
     def __init__(self, *, tool=True, tool_error=False):
         self.requests = []
@@ -89,12 +104,14 @@ class Provider:
                     tokens = re.findall(r"CM_M02_([a-z0-9_-]+)", encoded)
                     assert tokens, "Actual user input did not reach the model"
                     token = tokens[-1]
+                    title = title_request(request)
                     call_id = "cm-m02-" + token
                     outputs = [item for item in request.get("input", []) if
                                item.get("type") == "function_call_output" and item.get("call_id") == call_id]
                     with parent.condition:
                         parent.requests.append({"token": token, "input": request.get("input"),
-                            "tools": request.get("tools"), "outputs": outputs})
+                            "tools": request.get("tools"), "outputs": outputs,
+                            "purpose": "title" if title else "business", "response_format": (request.get("text") or {}).get("format")})
                         parent.condition.notify_all()
                     self.send_response(200)
                     self.send_header("Content-Type", "text/event-stream")
@@ -106,12 +123,12 @@ class Provider:
                         self.wfile.flush()
 
                     send({"type": "response.created", "response": {"id": "cm-m02-" + token}})
-                    if parent.tool and not outputs:
+                    if parent.tool and not outputs and not title:
                         send({"type": "response.output_item.done", "item": {"type": "function_call",
                             "call_id": call_id, "name": "example-tool__echo",
                             "arguments": json.dumps({"value": token})}})
                     else:
-                        if parent.tool:
+                        if parent.tool and not title:
                             output = text_values(outputs)
                             if parent.tool_error:
                                 assert "controlled tool failure" in output, outputs
@@ -119,7 +136,8 @@ class Provider:
                                 value = json.loads(outputs[0]["output"])
                                 assert value["owner"] == "example-tool" and value["arguments"]["value"] == token, value
                         send({"type": "response.output_item.done", "item": {"type": "message", "id": "cm-final-" + token,
-                            "role": "assistant", "content": [{"type": "output_text", "text": "M02 complete " + token}]}})
+                            "role": "assistant", "content": [{"type": "output_text", "text":
+                                json.dumps({"title": "Complete CM fixture"}) if title else "M02 complete " + token}]}})
                     send({"type": "response.completed", "response": {"id": "cm-m02-" + token,
                         "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}}})
                     self.close_connection = True
@@ -295,16 +313,19 @@ def settled(directory, *, pinned=False, failed=False, modules=2):
 
 
 def business_evidence(provider, *, tool=True, historical_context=False):
-    assert provider.requests
-    for request in provider.requests:
+    assert all(request["purpose"] in ("business", "title") for request in provider.requests)
+    requests = [request for request in provider.requests if request["purpose"] == "business"]
+    assert requests, "No actual business model request"
+    for request in requests:
         names = [item.get("name") for item in request["tools"] if item.get("type") == "function"]
         assert "exec_command" in names, "Built-in tool disappeared"
         assert names.count("example-tool__echo") == (1 if tool else 0)
         if tool or not historical_context:
             assert ("CM_SECTION_example-tool" in text_values(request["input"])) is tool
     if tool:
-        assert any(request["outputs"] for request in provider.requests), "Native JSON output never reached the model"
-    return {"model_requests": len(provider.requests), "builtin_exec_command_retained": True,
+        assert any(request["outputs"] for request in requests), "Native JSON output never reached the model"
+    return {"model_requests": len(requests), "title_model_requests": len(provider.requests) - len(requests),
+        "builtin_exec_command_retained": True,
         "native_json_output_model_visible": tool, "current_cm_section_supplied": tool,
         "prior_world_state_history_allowed": historical_context}
 
@@ -361,6 +382,28 @@ def self_check():
     test = command(Path("/work"), "http://127.0.0.1:1234", "embedded", "resume", "thread", "test")
     assert "--ephemeral" not in test and test[-3:] == ["resume", "thread", "CM_M02_test"]
     assert command(Path("/work"), "http://127.0.0.1:1234")[-3:] == ["app-server", "--listen", "stdio://"]
+    title = {"text": {"format": {"type": "json_schema", "schema": TITLE_SCHEMA}}, "input": [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text":
+            "Generate a concise, single-line task title of at most 36 characters and under five words.\n\nUser prompt:\nCM_M02_test"}]}]}
+    assert title_request(title)
+    for invalid in ({**title, "text": None}, {**title, "text": {"format": None}},
+                    {**title, "text": {"format": {"type": "json_schema", "schema": {}}}},
+                    {**title, "input": [{**title["input"][0], "role": "developer"}]}):
+        assert not title_request(invalid), invalid
+    business = {"purpose": "business", "tools": [{"type": "function", "name": name} for name in
+        ("exec_command", "example-tool__echo")], "input": "CM_SECTION_example-tool", "outputs": [{"output": "native"}]}
+    title = {"purpose": "title", "tools": [{"type": "function", "name": "example-tool__echo"}], "outputs": []}
+    provider = Provider.__new__(Provider)
+    provider.requests = [business, title]
+    evidence = business_evidence(provider)
+    assert evidence["model_requests"] == evidence["title_model_requests"] == 1
+    for invalid in ([title], [{**business, "tools": title["tools"]}, title], [{**business, "purpose": "unknown"}]):
+        provider.requests = invalid
+        try:
+            business_evidence(provider)
+        except AssertionError:
+            continue
+        raise AssertionError("Missing business builtin accepted: " + repr(invalid))
 
 
 def matrix():
