@@ -306,7 +306,8 @@ def settled(directory, *, pinned=False, failed=False, modules=2):
     if pinned:
         assert not any(row["event"] == "userdata-release" and row["owner"] == "example-tool" for row in events)
         assert sum(row["event"] == "userdata-release" for row in events) == modules - 1
-        assert any(row["event"] == "runtime-scope-failed" and "pinned" in json.dumps(row) for row in native)
+        assert any(row["event"] == "runtime-scope-failed" and row["detail"]["error"]["code"] == "runtime"
+            and row["detail"]["error"]["already_native_executed"] is True for row in native)
     else:
         assert bool(any(row["event"] == "runtime-scope-failed" for row in native)) is failed
         assert sum(row["event"] == "userdata-release" for row in events) == modules

@@ -229,7 +229,7 @@ def metadata_boundary(m, sdk):
     packages.manifest(package, fields)
     positive = run(m, sdk, "constructor-positive-control", home, managed=False, failure=True, sentinel=True)
     return {"commands": rows, "read_only_inventory_unchanged": True, "constructor_positive_control": positive,
-        "installation_script_guard": packages.read(INPUTS / "fixture/m05-producer.json")["source_review"]}
+        "installation_script_guard": packages.read(INPUTS / "producer.json")["m05"]["source_review"]}
 
 
 @ci_progress.case()
@@ -249,7 +249,7 @@ def matrix():
     PROFILE.mkdir()
     EVIDENCE.mkdir()
     m, sdk = helpers()
-    receipt = packages.read(INPUTS / "fixture/m05-producer.json")
+    receipt = packages.read(INPUTS / "producer.json")["m05"]
     baseline = m.protected_inventory(INPUTS / "official")
     host_before = packages.sha(BINARY)
     updated = update(m, sdk, receipt)

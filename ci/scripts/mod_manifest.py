@@ -240,7 +240,7 @@ def rejection_cases(work, inputs, binary, evidence):
     mutate(home, "output-fixture", lambda m: m.update(dependencies=[{"id": "serial-fixture", "version": "^1", "optional": True}]))
     selection(home, ["output-fixture"])
     disabled = metadata(binary, home, ["plan"])
-    assert disabled["output"]["plan"]["initialization_order"] == ["output-fixture"]
+    assert disabled["output"]["plan_projection"]["initialization_order"] == ["output-fixture"]
     selection(home, ["serial-fixture", "output-fixture"])
     selected_optional = metadata(binary, home, ["plan"])
     mutate(home, "serial-fixture", lambda m: m.update(version="1.2.3+author"))
@@ -352,7 +352,7 @@ def lock_integrity(work, inputs, binary):
                 after = b"sha256:" + (b"0" if before != b"sha256:" + b"0" * 64 else b"1") * 64
                 data = actual.read_bytes(); assert before in data
                 actual.write_bytes(data.replace(before, after))
-                assert metadata(actual, home, ["plan"], options=options)["output"]["plan"]["host"]["build_id"] == after.decode()
+                assert metadata(actual, home, ["plan"], options=options)["output"]["plan_projection"]["host"]["build_id"] == after.decode()
         result = metadata(actual, home, ["lock", "--check"], options=options, success=False)
         assert (home / "mod.lock").read_bytes() == lock
         rows.append({"case": name, **result, "old_lock_preserved": True})

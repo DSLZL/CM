@@ -381,7 +381,8 @@ def stdio_leases(m, sdk):
             else:
                 turn = client.turn(thread, "stdio-" + mode, interrupt=mode == "noncooperative", release=mode == "async")
             if mode == "noncooperative":
-                sdk.core.await_barrier(lambda: any(row["event"] == "runtime-scope-failed" and "pinned" in json.dumps(row)
+                sdk.core.await_barrier(lambda: any(row["event"] == "runtime-scope-failed" and row["detail"]["error"]["code"] == "runtime"
+                    and row["detail"]["error"]["already_native_executed"] is True
                     for row in sdk.rows(directory / "native.jsonl")), client.process, "actual pinned request before state operation")
             m.cm(home, "disable", OWNER)
             busy = busy_operations(m, home, checkpoint["generation"], checkpoint["checkpoint"])
