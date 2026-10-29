@@ -96,7 +96,11 @@ impl Gate {
                 state.initializing = true;
                 return Poll::Ready(Ok(true));
             }
-            if !state.waiters.iter().any(|waker| waker.will_wake(cx.waker())) {
+            if !state
+                .waiters
+                .iter()
+                .any(|waker| waker.will_wake(cx.waker()))
+            {
                 if state.waiters.len() >= v22::MAX_REQUESTS {
                     return Poll::Ready(Err(error("sampling_budget", "admission waiter limit")));
                 }
@@ -191,7 +195,10 @@ impl Gate {
             return Ok(());
         };
         if providers.len() != 1 {
-            return Err(error("sampling_budget", "multiple sampling budget providers"));
+            return Err(error(
+                "sampling_budget",
+                "multiple sampling budget providers",
+            ));
         }
         let result = self
             .initialize(scope, provider)
@@ -266,7 +273,9 @@ pub async fn admit(
     cancelled: impl Fn() -> bool,
 ) -> Result<(), LoadError> {
     if let Some(scope) = runtime::scope_for_level(level)? {
-        scope.admit_sampling(source, request_kind, cancelled).await?;
+        scope
+            .admit_sampling(source, request_kind, cancelled)
+            .await?;
     }
     Ok(())
 }

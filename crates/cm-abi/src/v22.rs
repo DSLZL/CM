@@ -8,12 +8,7 @@ pub const LIFECYCLE: &str = "runtime.lifecycle.v1";
 pub const TOOL: &str = "runtime.tool.v1";
 pub const CONTEXT_SECTION: &str = "runtime.context_section.v1";
 pub const SAMPLING_BUDGET_CAPABILITY: &str = "core.turn_sampling_budget.v1";
-pub const CAPABILITIES: [&str; 4] = [
-    LIFECYCLE,
-    TOOL,
-    CONTEXT_SECTION,
-    SAMPLING_BUDGET_CAPABILITY,
-];
+pub const CAPABILITIES: [&str; 4] = [LIFECYCLE, TOOL, CONTEXT_SECTION, SAMPLING_BUDGET_CAPABILITY];
 pub const KIND_LIFECYCLE: u32 = 6;
 pub const KIND_TOOL: u32 = 7;
 pub const KIND_CONTEXT_SECTION: u32 = 8;
