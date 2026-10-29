@@ -511,6 +511,7 @@ def plug_and_play():
     unsupported = Path("/work/g02a-unsupported")
     shutil.copytree(INPUTS / "mods/g02a/turn-budget", unsupported)
     fields = tomllib.loads((unsupported / "mod.toml").read_text())
+    fields["id"] = "org.example.unsupported-budget"
     fields["compat"]["required_capabilities"].append("core.turn_sampling_budget.v999")
     mod_manifest.manifest(unsupported, fields)
     rejected_capability = cm(home, management, "install", unsupported, success=False)
