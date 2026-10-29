@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use cm_abi::v22;
 use cm_runtime::LoadError;
 use cm_runtime::runtime::{self, Contribution, Kind, Registry, Scope};
+use cm_runtime::sampling_budget::TurnScope;
 use codex_extension_api::*;
 use codex_protocol::models::ContentItem;
 use codex_tools::{
@@ -264,6 +265,7 @@ impl TurnLifecycleContributor for Adapter {
                     scope: scope.clone(),
                     ended: AtomicBool::new(false),
                 });
+                input.turn_store.insert(TurnScope(scope.clone()));
                 let scope = scope?;
                 holder
                     .turns

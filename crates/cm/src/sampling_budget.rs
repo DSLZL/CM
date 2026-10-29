@@ -265,14 +265,20 @@ impl Drop for Initializer<'_> {
     }
 }
 
+/// Bound to one actual turn store; text level IDs can repeat across turns.
+pub struct TurnScope(pub Result<runtime::Scope, LoadError>);
+
 /// Called only before a main logical request, outside the transport retry loop.
 pub async fn admit(
     level: &str,
+    turn: Option<&TurnScope>,
     source: &str,
     request_kind: &str,
     cancelled: impl Fn() -> bool,
 ) -> Result<(), LoadError> {
-    if let Some(scope) = runtime::scope_for_level(level)? {
+    runtime::check_level(level)?;
+    if let Some(turn) = turn {
+        let scope = turn.0.as_ref().map_err(Clone::clone)?;
         scope
             .admit_sampling(source, request_kind, cancelled)
             .await?;

@@ -31,6 +31,11 @@ async fn cm_turn_budget_scopes() {
         }
     }
 
+    async fn admit(turn: &TurnContext, source: &str, kind: &str, cancelled: bool) -> Result<(), cm_runtime::LoadError> {
+        let scope = turn.extension_data.get::<cm_runtime::sampling_budget::TurnScope>();
+        cm_runtime::sampling_budget::admit(turn.extension_data.level_id(), scope.as_deref(), source, kind, || cancelled).await
+    }
+
     let profile = std::path::PathBuf::from(std::env::var_os("CM_BUDGET_PROBE_PROFILE").expect("profile"));
     let guard = cm_runtime::initialize(&profile, true).expect("budget registration");
     let mut config = test_config().await;
@@ -55,47 +60,48 @@ async fn cm_turn_budget_scopes() {
     let session = &parent.thread.session;
     let turn = session.new_default_turn().await;
     start(session, &turn).await;
-    let level = turn.extension_data.level_id();
-    cm_runtime::sampling_budget::admit(level, "exec", "compaction", || false).await.expect("unmatched kind");
-    cm_runtime::sampling_budget::admit(level, "subagent", "turn", || false).await.expect("unmatched source");
+    admit(&turn, "exec", "compaction", false).await.expect("unmatched kind");
+    admit(&turn, "subagent", "turn", false).await.expect("unmatched source");
     let token = CancellationToken::new();
     let first = session.capture_step_context(turn.clone(), &token).await.expect("first step");
-    cm_runtime::sampling_budget::admit(first.turn.extension_data.level_id(), "exec", "turn", || false)
+    admit(&first.turn, "exec", "turn", false)
         .await.expect("first sample");
     start(session, &turn).await;
     let second = session.capture_step_context(turn.clone(), &token).await.expect("rebuilt step");
     assert!(!Arc::ptr_eq(&first, &second));
     assert!(Arc::ptr_eq(&first.turn, &second.turn));
-    cm_runtime::sampling_budget::admit(second.turn.extension_data.level_id(), "exec", "turn", || false)
+    admit(&second.turn, "exec", "turn", false)
         .await.expect("second sample");
     let model = if turn.model_info().slug == "gpt-5.4" { "gpt-5.2" } else { "gpt-5.4" };
     let changed = turn.with_model(model.into(), &models).await;
     assert_ne!(turn.model_info().slug, changed.model_info().slug);
     assert!(Arc::ptr_eq(&turn.extension_data, &changed.extension_data));
     assert!(Arc::ptr_eq(&turn.terminal_error, &changed.terminal_error));
-    assert_eq!(cm_runtime::sampling_budget::admit(changed.extension_data.level_id(), "exec", "turn", || false)
+    assert_eq!(admit(&changed, "exec", "turn", false)
         .await.expect_err("model change must not reset").code, "sampling_budget_exhausted");
-    stop(session, &turn).await;
 
     let same_id = session.new_turn_with_default_settings(turn.sub_id.clone(), Default::default()).await;
     assert_eq!(same_id.sub_id, turn.sub_id);
-    assert_ne!(same_id.extension_data.level_id(), level);
+    assert_eq!(same_id.extension_data.level_id(), turn.extension_data.level_id());
+    assert!(!Arc::ptr_eq(&same_id.extension_data, &turn.extension_data));
     start(session, &same_id).await;
-    let same_level = same_id.extension_data.level_id();
+    assert_eq!(admit(&turn, "exec", "turn", false)
+        .await.expect_err("same text ID must not replace the old ledger").code, "sampling_budget_exhausted");
     let (a, b, c) = tokio::join!(
-        cm_runtime::sampling_budget::admit(same_level, "exec", "turn", || false),
-        cm_runtime::sampling_budget::admit(same_level, "exec", "turn", || false),
-        cm_runtime::sampling_budget::admit(same_level, "exec", "turn", || false),
+        admit(&same_id, "exec", "turn", false),
+        admit(&same_id, "exec", "turn", false),
+        admit(&same_id, "exec", "turn", false),
     );
     assert_eq!([a, b, c].iter().filter(|result| result.is_ok()).count(), 2);
     stop(session, &same_id).await;
-    assert!(cm_runtime::sampling_budget::admit(same_level, "exec", "turn", || false).await.is_err());
+    assert!(admit(&same_id, "exec", "turn", false).await.is_err());
+    stop(session, &turn).await;
 
     let cancelled = session.new_default_turn().await;
     start(session, &cancelled).await;
-    assert_eq!(cm_runtime::sampling_budget::admit(cancelled.extension_data.level_id(), "exec", "turn", || true)
+    assert_eq!(admit(&cancelled, "exec", "turn", true)
         .await.expect_err("cancelled admission").code, "sampling_budget_cancelled");
-    cm_runtime::sampling_budget::admit(cancelled.extension_data.level_id(), "exec", "turn", || false)
+    admit(&cancelled, "exec", "turn", false)
         .await.expect("cancelled attempt did not charge");
     stop(session, &cancelled).await;
 
@@ -108,7 +114,7 @@ async fn cm_turn_budget_scopes() {
     assert!(empty.thread.session.services.extensions.turn_lifecycle_contributors().is_empty());
     let isolated_turn = empty.thread.session.new_default_turn().await;
     for _ in 0..4 {
-        cm_runtime::sampling_budget::admit(isolated_turn.extension_data.level_id(), "exec", "turn", || false)
+        admit(&isolated_turn, "exec", "turn", false)
             .await.expect("isolated default");
     }
     let recovery = cm_runtime::sampling_budget::require_persistent_recovery().expect_err("unsupported restoration");

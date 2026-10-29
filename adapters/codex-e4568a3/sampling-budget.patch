@@ -1,7 +1,7 @@
 diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
 --- a/codex-rs/core/src/session/turn.rs
 +++ b/codex-rs/core/src/session/turn.rs
-@@ -569,3 +569,30 @@
+@@ -569,3 +569,34 @@
 +            // One admission per logical main request, outside HTTP/stream retries.
 +            let source = match &turn_context.session_source {
 +                SessionSource::Cli => "cli",
@@ -9,6 +9,9 @@ diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.
 +                SessionSource::Exec => "exec",
 +                _ => "other",
 +            };
++            let budget = turn_context
++                .extension_data
++                .get::<cm_runtime::sampling_budget::TurnScope>();
 +            tokio::select! {
 +                biased;
 +                _ = cancellation_token.cancelled() => {
@@ -16,6 +19,7 @@ diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.
 +                }
 +                result = cm_runtime::sampling_budget::admit(
 +                    turn_context.extension_data.level_id(),
++                    budget.as_deref(),
 +                    source,
 +                    "turn",
 +                    || cancellation_token.is_cancelled(),
