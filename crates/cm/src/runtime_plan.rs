@@ -501,7 +501,8 @@ fn resolve(
                         ),
                     );
                     error.resource = Some(contribution.resource.clone());
-                    error.related_contributions = vec![previous, format!("{id}::{}", contribution.id)];
+                    error.related_contributions =
+                        vec![previous, format!("{id}::{}", contribution.id)];
                     return Err(error);
                 }
                 if runtime_names.len() > 128 {
