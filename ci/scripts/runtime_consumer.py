@@ -31,10 +31,10 @@ CALL_INVALID = ("callback-fail", "status", "cancelled", "increase", "zero", "kee
                 "error-null", "error-utf8", "error-canary")
 
 
-def parallel_matrices(logs, commands):
+def parallel_matrices(logs, commands, run=None):
     # These suites share read-only inputs and use separate profile/work/evidence paths.
     with ThreadPoolExecutor(max_workers=3) as pool:
-        pending = {label: pool.submit(ci_progress.run, logs, label, command, timeout)
+        pending = {label: pool.submit(run or ci_progress.run, logs, label, command, timeout)
                    for label, command, timeout in commands}
         return {label: future.result() for label, future in pending.items()}
 
@@ -923,7 +923,7 @@ def bind_tui_mcp_listener(record, metadata, bound_hosts, observer):
 
 
 @ci_progress.case()
-def observe(directory, evidence):
+def observe(directory, evidence, *, consumer_root=None, result_paths=None):
     import observer
     observer.check_network_audit()
     scripts = ("fixtures/native-loader/tool_barrier.py", "fixtures/runtime-consumer/driver.py",
@@ -968,13 +968,11 @@ def observe(directory, evidence):
             assert paths[1] not in alias_targets or alias_targets[paths[1]] == paths[0]
             alias_targets[paths[1]] = paths[0]
     assert set(alias_targets) == aliases
-    bound_hosts = bind_host_executables(executions, directory.parent)
+    bound_hosts = bind_host_executables(executions, consumer_root or directory.parent)
     observer.audit_executions(executions, python_scripts=scripts, sandbox_aliases=aliases, bwrap_executions=bwrap_executions)
-    assert bwrap_executions, "No actual nested packaged sandbox helper"
-    assert any('execve("/inputs/host/codex-path/rg"' in line for line in executions), "No actual packaged rg execution"
     ports = set()
     tui_listeners = []
-    for path in sorted(evidence.rglob("result.json")):
+    for path in sorted(evidence.rglob("result.json") if result_paths is None else result_paths):
         assert not path.is_symlink(), "Linked runtime evidence: " + str(path)
         if not path.is_file():
             continue
@@ -1013,12 +1011,18 @@ def observe(directory, evidence):
 
 
 def consume():
+    import retry
     hosted()
     assert os.environ["CM_CACHE_MODE"] == "none" and os.environ["ACTIONS_CACHE_MODE"] == "none"
     inputs = Path(os.environ["CM_CONSUMER_INPUT_DIR"]).resolve()
     manifest = validate_inputs(inputs)
     producer = read(inputs / "producer.json")
-    assert producer["provenance"] == provenance(), "Input is not from this exact run/attempt/request/source/workflow"
+    validation = read(inputs / "validation.json")
+    assert validation["provenance"] == provenance(), "Validation inputs are not from this exact run/attempt/request/source/workflow"
+    origin = validation["production_origin"]
+    assert producer["provenance"] == {**provenance(), "CM_SOURCE_SHA": origin["source_sha"],
+        "GITHUB_WORKFLOW_SHA": origin["workflow_sha"], "GITHUB_RUN_ID": str(origin["run_id"]),
+        "GITHUB_RUN_ATTEMPT": str(origin["run_attempt"]), "CM_REQUEST_ID": origin["request_id"]}, "Original producer provenance changed"
     assert producer["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05") and producer["target"] == TARGET
     m05_only = producer["task_id"] == "CM-M05" and producer["m05"]["build_kind"] == "mod-only"
     if producer["task_id"] == "CM-M05":
@@ -1121,67 +1125,90 @@ def consume():
             assert not canary_hits
             trusted = temp / "trusted-observer"
             trusted.mkdir()
+            report_names = {"consumer-matrix": [Path(row["evidence"][0]).name for row in p04_acceptance["checks"]]}
+            for label, report_set in (("m01", m01_acceptance), ("m02", m02_acceptance), ("m03", m03_acceptance),
+                                      ("m04", m04_acceptance), ("m05", m05_acceptance)):
+                if report_set:
+                    report_names[label + "-consumer-matrix"] = [Path(row["evidence"][0]).name for row in report_set["checks"]]
+            checkpoints = retry.Checkpoints(sys.modules[__name__], validation, closure, temp, evidence, logs, report_names, canary_hits)
             stage = "independent isolated matrices"
             trace = ["strace", "-ff", "-qq", "-yy", "-s", "1024", "-e",
                 "trace=execve,execveat,socket,getsockname,accept,accept4,connect,sendto,recvfrom,socketpair,symlink,symlinkat,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl,readlink,mmap,mprotect,memfd_create",
-                "-o", str(trusted / "syscalls"), "--"]
-            write(logs / "consumer-command.json", {"command": [*trace, *base, "--", *driver, "matrix"],
+                "-o", "CM_PHASE_TRACE", "--"]
+
+            def command(label, arguments, sandbox=base):
+                directory = trusted / label
+                directory.mkdir(exist_ok=True)
+                return [str(directory / "syscalls") if part == "CM_PHASE_TRACE" else part for part in trace] + [*sandbox, "--", *arguments]
+
+            write(logs / "consumer-command.json", {"command": command("consumer-matrix", [*driver, "matrix"]),
                 "cache_mode": "none", "producer_input_manifest_sha256": manifest["sha256"], "provenance": provenance()})
-            commands = [] if m05_only else [("consumer-matrix", [*trace, *base, "--", *driver, "matrix"], 1800)]
+            commands = [] if m05_only else [("consumer-matrix", command("consumer-matrix", [*driver, "matrix"]), 1800)]
             if m05_acceptance is not None:
-                commands.append(("m05-consumer-matrix", [*trace, *base, "--", *CONSUMER_ENV_PREFIX,
-                    "/usr/bin/python3", "-B", "/fixture/ci/scripts/mod_author.py", "matrix"], 1200))
+                commands.append(("m05-consumer-matrix", command("m05-consumer-matrix", [*CONSUMER_ENV_PREFIX,
+                    "/usr/bin/python3", "-B", "/fixture/ci/scripts/mod_author.py", "matrix"]), 1200))
             if m01_acceptance is not None:
-                commands.append(("m01-consumer-matrix", [*trace, *base, "--", *CONSUMER_ENV_PREFIX,
-                    "/usr/bin/python3", "-B", "/fixture/ci/scripts/mod_manifest.py", "matrix"], 1200))
+                commands.append(("m01-consumer-matrix", command("m01-consumer-matrix", [*CONSUMER_ENV_PREFIX,
+                    "/usr/bin/python3", "-B", "/fixture/ci/scripts/mod_manifest.py", "matrix"]), 1200))
             if m02_acceptance is not None:
-                commands.append(("m02-consumer-matrix", [*trace, *base, "--", *CONSUMER_ENV_PREFIX,
-                    "/usr/bin/python3", "-B", "/fixture/ci/scripts/runtime_sdk.py", "matrix"], 1200))
-            results = parallel_matrices(logs, commands)
+                commands.append(("m02-consumer-matrix", command("m02-consumer-matrix", [*CONSUMER_ENV_PREFIX,
+                    "/usr/bin/python3", "-B", "/fixture/ci/scripts/runtime_sdk.py", "matrix"]), 1200))
+            results = parallel_matrices(logs, commands, checkpoints.run)
             result = results["m05-consumer-matrix" if m05_only else "consumer-matrix"]
             write(logs / "consumer-return.json", {"return_code": result.returncode, "stage": stage})
             for label in ("m01", "m02"):
                 if label + "-consumer-matrix" in results:
                     write(logs / (label + "-consumer-return.json"), {
                         "return_code": results[label + "-consumer-matrix"].returncode, "stage": stage})
-            if all(item.returncode == 0 for item in results.values()):
-                stage = "actual removed runtime library"
-                missing_root = temp / "missing-library-root"
-                copy_runtime_tree(root, missing_root)
-                candidates = [path for path in closure["system_paths"]
-                    if Path(path).name in ("libcap.so.2", "libasound.so.2", "libstdc++.so.6")]
-                assert candidates, "No removable packaged runtime dependency counterexample"
-                removed = candidates[0]
-                mutation = {"removed_library": removed, "sha256": sha(missing_root / removed.lstrip("/")),
-                            "rootfs_before_sha256": closure["sha256"]}
-                (missing_root / removed.lstrip("/")).unlink()
-                write(missing_root / "fixture/missing-library.json", mutation)
-                missing_base = [str(missing_root) if argument == str(root) else argument for argument in base]
-                library_result = ci_progress.run(logs, "consumer-missing-library",
-                    [*trace, *missing_base, "--", *driver, "missing-library"], 90)
-                write(logs / "consumer-missing-library.json", {"return_code": library_result.returncode, "mutation": mutation})
-                assert library_result.returncode == 0, "Missing actual runtime dependency was not rejected"
-                recovery_result = ci_progress.run(logs, "consumer-library-recovery",
-                    [*trace, *base, "--", *driver, "recovery"], 120)
-                write(logs / "consumer-library-recovery.json", {"return_code": recovery_result.returncode})
-                assert recovery_result.returncode == 0, "Known successful selection failed after the missing-library candidate"
-                if m03_acceptance is not None:
-                    stage = "M03 managed install and actual PTY TUI"
-                    m03_driver = [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "/fixture/ci/scripts/managed_package.py", "matrix"]
-                    result = ci_progress.run(logs, "m03-consumer-matrix", [*trace, *base, "--", *m03_driver], 1200)
-                    write(logs / "m03-consumer-return.json", {"return_code": result.returncode, "stage": stage})
-                if m04_acceptance is not None and result.returncode == 0:
-                    stage = "M04 owned file state and restart rollback"
-                    m04_driver = [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "/fixture/ci/scripts/runtime_state.py", "matrix"]
-                    result = ci_progress.run(logs, "m04-consumer-matrix", [*trace, *base, "--", *m04_driver], 1800)
-                    write(logs / "m04-consumer-return.json", {"return_code": result.returncode, "stage": stage})
+            stage = "actual removed runtime library"
+            missing_root = temp / "missing-library-root"
+            copy_runtime_tree(root, missing_root)
+            candidates = [path for path in closure["system_paths"]
+                if Path(path).name in ("libcap.so.2", "libasound.so.2", "libstdc++.so.6")]
+            assert candidates, "No removable packaged runtime dependency counterexample"
+            removed = candidates[0]
+            mutation = {"removed_library": removed, "sha256": sha(missing_root / removed.lstrip("/")),
+                        "rootfs_before_sha256": closure["sha256"]}
+            (missing_root / removed.lstrip("/")).unlink()
+            write(missing_root / "fixture/missing-library.json", mutation)
+            missing_base = [str(missing_root) if argument == str(root) else argument for argument in base]
+            library_result = checkpoints.run(logs, "consumer-missing-library",
+                command("consumer-missing-library", [*driver, "missing-library"], missing_base), 90)
+            results["consumer-missing-library"] = library_result
+            write(logs / "consumer-missing-library.json", {"return_code": library_result.returncode, "mutation": mutation})
+            recovery_result = checkpoints.run(logs, "consumer-library-recovery",
+                command("consumer-library-recovery", [*driver, "recovery"]), 120)
+            results["consumer-library-recovery"] = recovery_result
+            write(logs / "consumer-library-recovery.json", {"return_code": recovery_result.returncode})
+            if m03_acceptance is not None:
+                stage = "M03 managed install and actual PTY TUI"
+                m03_driver = [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "/fixture/ci/scripts/managed_package.py", "matrix"]
+                result = checkpoints.run(logs, "m03-consumer-matrix", command("m03-consumer-matrix", m03_driver), 1200)
+                results["m03-consumer-matrix"] = result
+                write(logs / "m03-consumer-return.json", {"return_code": result.returncode, "stage": stage})
+            if m04_acceptance is not None:
+                stage = "M04 owned file state and restart rollback"
+                m04_driver = [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "/fixture/ci/scripts/runtime_state.py", "matrix"]
+                result = checkpoints.run(logs, "m04-consumer-matrix", command("m04-consumer-matrix", m04_driver), 1800)
+                results["m04-consumer-matrix"] = result
+                write(logs / "m04-consumer-return.json", {"return_code": result.returncode, "stage": stage})
             # Audit and sanitize even on a failed matrix, before exporting any trace.
             stage = "outer runtime audit"
-            audit = observe(trusted, evidence)
+            audits = {label: row["audit"] for label, row in checkpoints.results.items() if row["status"] == "pass"}
+            audit = {"status": "pass", "compiler_linker_jit_build_service_calls": 0,
+                "unclassified_executable_memory": [], "steps": audits,
+                "executions": [line for row in audits.values() for line in row["executions"]],
+                "packaged_bwrap_fd_executions": sorted({pid for row in audits.values() for pid in row["packaged_bwrap_fd_executions"]}),
+                "tui_mcp_listener": next((row["tui_mcp_listener"] for row in audits.values() if row["tui_mcp_listener"]), None)}
+            if any(row["status"] != "pass" for row in checkpoints.results.values()):
+                audit.update(status="failed", compiler_linker_jit_build_service_calls=None,
+                             note="Only independently passed steps have a reusable audit; failed traces remain failure evidence.")
             write(evidence / "outer-runtime-audit.json", audit)
             stage = "isolated matrix results"
             assert all(item.returncode == 0 for item in results.values()), "Independent isolated matrix failed"
             assert result.returncode == 0, "Isolated product matrix failed"
+            assert audit["packaged_bwrap_fd_executions"], "No actual nested packaged sandbox helper"
+            assert any('execve("/inputs/host/codex-path/rg"' in line for line in audit["executions"]), "No actual packaged rg execution"
             assert not canary_hits
             stage = "final read-only input audit"
             assert inventory(root) == closure["files"], "Read-only runtime inputs changed"
@@ -1198,6 +1225,8 @@ def consume():
                 "consumer_job": os.environ["GITHUB_JOB"], "consumer_cache_mode": "none", "target": TARGET,
                 "host": producer["host"], "input_manifest_sha256": manifest["sha256"], "rootfs_sha256": closure["sha256"],
                 "outer_audit": audit, "release_ready": False}
+            common["production_origin"] = origin
+            common["runtime_steps"] = {label: {k: v for k, v in row.items() if k != "audit"} for label, row in checkpoints.results.items()}
             if m05_acceptance is not None:
                 common["host_origin"] = producer.get("host_origin")
                 common["baseline_origin"] = producer.get("baseline_origin")
@@ -1237,7 +1266,10 @@ def consume():
                     report = read(path)
                     assert report["status"] == "behavior_pass" and common.keys().isdisjoint(report)
                     write(path, {**report, **common, "status": "pass"})
-                    check.update(status="pass", command="isolated compiler-free consumer: " + report_set["task_id"] + " matrix")
+                    label = "consumer-matrix" if report_set["task_id"] == "CM-P04" else report_set["task_id"][3:].lower() + "-consumer-matrix"
+                    execution = checkpoints.results[label]
+                    check.update(status="pass", command="isolated compiler-free consumer: " + report_set["task_id"] + " matrix",
+                                 execution_kind=execution["kind"], execution_origin=execution["origin"])
                 report_set["status"] = "pass"
             if m01_acceptance is not None:
                 write(artifact / "p04-baseline-acceptance.json", p04_acceptance)
@@ -1260,13 +1292,15 @@ def consume():
             listener.close()
             if (temp / "trusted-observer").exists():
                 import observer
-                for path in (temp / "trusted-observer").glob("syscalls.*"):
+                for path in (temp / "trusted-observer").rglob("syscalls.*"):
                     # No raw payload escapes on exception paths either.
                     text = path.read_text()
                     if not re.match(r'^\d+ ', text):
                         text = "\n".join(path.suffix[1:] + " " + line for line in text.splitlines()) + "\n"
                     path.write_text(redact_trace(text, observer), encoding="utf-8")
-                    shutil.copyfile(path, evidence / path.name)
+                    target = evidence / "traces" / path.relative_to(temp / "trusted-observer")
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(path, target)
             copy_evidence(evidence, artifact / "evidence")
     except BaseException as error:
         acceptance.update(status="failed", failed_stage=stage, error=repr(error))

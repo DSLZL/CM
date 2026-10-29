@@ -20,6 +20,10 @@
       "destination": ".github/scripts/record_run.py"
     },
     {
+      "source": "ci/scripts/retry.py",
+      "destination": ".github/scripts/retry.py"
+    },
+    {
       "source": "ci/worker/cache-authority/action.yml",
       "destination": ".github/actions/cache-authority/action.yml"
     },

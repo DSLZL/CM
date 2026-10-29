@@ -21,6 +21,7 @@ ci/scripts/mod_manifest.py
 ci/scripts/mod_author.py
 ci/scripts/native_mod.py
 ci/scripts/record_run.py
+ci/scripts/retry.py
 ci/scripts/runtime_composition.py
 ci/scripts/runtime_consumer.py
 ci/scripts/runtime_sdk.py

@@ -65,7 +65,7 @@ jobs:
           missing = [p for p in paths if p not in tracked or not Path(p).is_file() or Path(p).is_symlink()]
           assert not missing, f"Required CI files missing from this commit: {missing}"
           worker = json.loads(Path("ci/worker-files.json").read_text(encoding="utf-8"))
-          assert len(worker["files"]) == 6
+          assert len(worker["files"]) == 7
           assert all(row["source"] in paths for row in worker["files"]), "Worker inputs must be published"
 
           scripts = [*Path("ci/scripts").glob("*.py"), *Path("fixtures/runtime-consumer").glob("*.py"),
@@ -98,6 +98,9 @@ jobs:
                   raise AssertionError("Unconfigured product builds must fail closed")
           print(f"CI payload: {len(paths)} files; no tracked path violates .gitignore")
           PY
+
+      - name: Check product reuse and partial failure recovery
+        run: python3 -B ci/scripts/retry.py self-check
 
       - name: Verify pinned Codex build inputs
         env:
