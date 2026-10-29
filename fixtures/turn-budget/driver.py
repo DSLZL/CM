@@ -523,13 +523,18 @@ def plug_and_play():
     old_home = Path("/profile/g02a") / case / "legacy-host"
     cm(old_home, management, "install", INPUTS / "mods/m02/lifecycle-audit/normal", binary=old_binary)
     old_stable = active(old_home)
-    old_api = cm(old_home, management, "install", INPUTS / "mods/g02a/turn-budget.cmod",
+    old_package = cm(old_home, management, "install", INPUTS / "mods/g02a/turn-budget.cmod",
         success=False, binary=old_binary)
-    assert old_api["code"] == "compatibility" and active(old_home) == old_stable, old_api
-    # Keep the real old binary; lower only the manifest API floor to reach its capability check.
+    assert old_package["code"] == "manifest_parse" and active(old_home) == old_stable, old_package
     old_candidate = Path("/work/g02a-old-capability")
     shutil.copytree(INPUTS / "mods/g02a/turn-budget", old_candidate)
     fields = tomllib.loads((old_candidate / "mod.toml").read_text())
+    # The old parser needs a known kind to reach API/capability gates; this payload must never load.
+    fields["contributions"][0]["kind"] = "lifecycle"
+    mod_manifest.manifest(old_candidate, fields)
+    assert sha(old_candidate / "payload.so") == before_a
+    old_api = cm(old_home, management, "install", old_candidate, success=False, binary=old_binary)
+    assert old_api["code"] == "compatibility" and active(old_home) == old_stable, old_api
     fields["compat"]["host_api_min"] = "0.6.0"
     mod_manifest.manifest(old_candidate, fields)
     old_capability = cm(old_home, management, "install", old_candidate, success=False, binary=old_binary)
@@ -542,7 +547,9 @@ def plug_and_play():
     report(case, {"managed_install_disable_enable_remove": True, "conflict_rejected_before_native": rejected,
         "missing_capability_rejected_before_native": rejected_capability, "successful_profile_preserved": True,
         "legacy_host": {"origin": legacy["origin"], "host": legacy["host"],
-            "api_rejection": old_api, "capability_rejection": old_capability, "successful_profile_preserved": True},
+            "original_package_rejection": old_package, "api_rejection": old_api,
+            "capability_rejection": old_capability, "metadata_probe_kind": "lifecycle",
+            "payload_sha256": sha(old_candidate / "payload.so"), "successful_profile_preserved": True},
         "host_and_mod_bytes_unchanged": True, "runtime_build_requests": 0})
 
 
