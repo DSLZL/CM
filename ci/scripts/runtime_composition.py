@@ -795,7 +795,10 @@ def exclusive(cases, probe, mods):
                 hook["order_before"] = ["compose-" + ("b" if role == "a" else "a") + "::terminal"]
             write_manifest(package, fields)
         result = startup_error(cases / ("exclusive-result-" + str(index)), probe, home, "exclusive_conflict")
-        assert all(key in result["diagnostic"]["message"] for key in ("compose-a::terminal", "compose-b::terminal", CAPABILITY))
+        diagnostic = result["diagnostic"]
+        assert set(diagnostic["related_contributions"]) == {"compose-a::terminal", "compose-b::terminal"}
+        assert diagnostic["contribution"] == diagnostic["mod_id"] + "::terminal"
+        assert diagnostic["graph"] == "contribution" and diagnostic["resource"] == CAPABILITY
         results.append(result)
     home = cases / "exclusive-positive/profile"
     install(home, mods["a/normal"])

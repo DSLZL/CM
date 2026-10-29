@@ -576,7 +576,7 @@ fn resolve(
     }
     // Exclusive claims are rejected before priority or order can influence resolution.
     if replacements.len() > 1 {
-        return Err(failure(
+        let mut error = failure(
             "exclusive_conflict",
             replacements[0].split("::").next().unwrap(),
             Some(&replacements[0]),
@@ -584,7 +584,9 @@ fn resolve(
                 "exclusive {} claimed by {replacements:?}",
                 cm_abi::CAPABILITY
             ),
-        ));
+        );
+        error.related_contributions = replacements;
+        return Err(error);
     }
     let mut hook_edges = BTreeSet::new();
     for (key, (owner, contribution)) in &hooks {

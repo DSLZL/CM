@@ -24,6 +24,12 @@ fn optional(value: &Option<String>) -> Option<&str> {
 }
 
 pub(crate) fn error(error: &LoadError) -> Value {
+    let related_contributions: Vec<_> = error
+        .related_contributions
+        .iter()
+        .take(128)
+        .map(|value| identifier(value))
+        .collect();
     let (expected, next) = match error.code.as_str() {
         "backend" => (
             "local Embedded execution",
@@ -54,6 +60,7 @@ pub(crate) fn error(error: &LoadError) -> Value {
         "stage": identifier(&error.stage), "code": identifier(&error.code),
         "already_native_executed": error.already_native_executed,
         "mod_id": optional(&error.mod_id), "contribution": optional(&error.contribution),
+        "related_contributions": related_contributions,
         "resource": optional(&error.resource), "field": optional(&error.field),
         "graph": optional(&error.graph),
         "native_status": error.native_status,
@@ -117,6 +124,10 @@ mod tests {
         failure.already_native_executed = true;
         failure.native_status = Some(cm_abi::PANICKED);
         failure.contribution = Some("example-tool::greet".into());
+        failure.related_contributions = vec![
+            "example-tool::greet".into(),
+            format!("https://user:{secret}@invalid/"),
+        ];
         let diagnostic = serde_json::to_value(&failure).unwrap();
         assert!(!diagnostic.to_string().contains(secret));
         assert!(!format!("{failure:?} {failure}").contains(secret));
@@ -125,6 +136,10 @@ mod tests {
         assert_eq!(diagnostic["already_native_executed"], true);
         assert_eq!(diagnostic["reason"], "native_reported_panic");
         assert_eq!(diagnostic["contribution"], "example-tool::greet");
+        assert_eq!(
+            diagnostic["related_contributions"],
+            json!(["example-tool::greet", "<redacted>"])
+        );
         assert_eq!(diagnostic["origin"]["verified"], false);
         assert!(
             diagnostic["next_action"]
