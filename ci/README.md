@@ -207,6 +207,10 @@ Only the current target Mod and its pinned SDK/ABI dependencies compile in an em
 author target. Strace records actual compiler/linker descendants; unexpected crates,
 helper build tools, native source or linker outputs outside that target fail closed.
 No Host, helper, private Core or other fixture build step runs on this path.
+On test-only retries, Mod-only also reuses the successful producer's artifacts and
+skips author compilation, toolchain setup and both product/input uploads. Reuse
+requires the same build kind and exact qualification origin in addition to product
+inputs and runner image; Mod-only artifacts cannot satisfy a qualification request.
 
 The Mod-only handoff preserves original v1/error/baseline inputs and their original
 source; only the current v2 package, runtime drivers and provenance change. The
