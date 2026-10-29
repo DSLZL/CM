@@ -91,7 +91,10 @@ fn redact_provenance(value: &mut Value) {
 pub(crate) fn metadata(mut value: Value) -> Value {
     value["schema_version"] = json!(2);
     // Hashes above this boundary still identify the original immutable plan/lock.
-    if let Some(mut plan) = value.as_object_mut().and_then(|fields| fields.remove("plan")) {
+    if let Some(mut plan) = value
+        .as_object_mut()
+        .and_then(|fields| fields.remove("plan"))
+    {
         redact_provenance(&mut plan);
         value["plan_projection"] = plan;
         value["projection"] = json!({"canonical": false, "redacted": ["provenance"],
@@ -123,7 +126,11 @@ mod tests {
         assert_eq!(diagnostic["reason"], "native_reported_panic");
         assert_eq!(diagnostic["contribution"], "example-tool::greet");
         assert_eq!(diagnostic["origin"]["verified"], false);
-        assert!(diagnostic["next_action"].as_str().is_some_and(|s| !s.is_empty()));
+        assert!(
+            diagnostic["next_action"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty())
+        );
     }
 
     #[test]
@@ -131,8 +138,10 @@ mod tests {
         let original = json!({"mods":{"example-tool":{"metadata":{"provenance":{
             "repository":"https://user:secret@invalid", "release_notes":"secret\u{1b}[2J"}}}}});
         let before = original.to_string();
-        let value = metadata(json!({"plan": original.clone(), "plan_sha256":"canonical-hash",
-            "lock_sha256":"canonical-lock", "qualification":{"verified":false}}));
+        let value = metadata(
+            json!({"plan": original.clone(), "plan_sha256":"canonical-hash",
+            "lock_sha256":"canonical-lock", "qualification":{"verified":false}}),
+        );
         assert_eq!(original.to_string(), before);
         assert!(value.get("plan").is_none());
         assert!(!value.to_string().contains("secret"));

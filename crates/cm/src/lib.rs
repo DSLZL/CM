@@ -130,7 +130,9 @@ impl std::fmt::Display for LoadError {
             diagnostic["code"].as_str().unwrap_or("unknown"),
             diagnostic["mod_id"].as_str().unwrap_or("-"),
             self.already_native_executed,
-            diagnostic["message"].as_str().unwrap_or("operation rejected"),
+            diagnostic["message"]
+                .as_str()
+                .unwrap_or("operation rejected"),
             diagnostic["next_action"]
                 .as_str()
                 .unwrap_or("inspect the verified receipt")
