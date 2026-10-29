@@ -42,9 +42,11 @@ explicit execution; native Mods have the process's privileges and are not sandbo
 Metadata output schema 2 uses `plan_projection`, with untrusted provenance text
 replaced by its declaration hash. It is a display projection, not a canonical plan.
 `plan_sha256` and `lock_sha256` still identify the internal unredacted plan/lock.
-Public errors retain code/stage/Mod/field, expected/actual, native-execution status
-and a next action; raw error text and unverified URLs are omitted. Compare the
-Host identity and verified author receipt for actual source/ABI/CI attribution.
+Structured JSON errors retain code/stage/Mod/field, expected/actual,
+native-execution status and a next action. Text errors retain stage/code/Mod,
+native-execution status and the next action. Raw error text and unverified URLs
+are omitted. Compare the Host identity and verified author receipt for actual
+source/ABI/CI attribution.
 Exclusive conflicts retain safe contribution identities in `related_contributions`.
 
 `cm lock` writes explicitly; `cm lock --check` checks explicitly. File state,

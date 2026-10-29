@@ -36,7 +36,7 @@ const CONTRIBUTIONS: &[v22::RuntimeContribution] = &[v22::RuntimeContribution {
     route: 1,
 }];
 
-cm_sdk::export_mod!(Greeting, "native-mod", create, CONTRIBUTIONS);
+cm_sdk::export_mod!(Greeting, "native-mod", create, crate::CONTRIBUTIONS);
 
 #[cfg(test)]
 mod tests {
