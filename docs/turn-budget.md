@@ -1,13 +1,14 @@
 # Runtime turn 主采样预算
 
-CM-G02A 当前是待 Actions 验证的候选，原六项验收均为 `not_run`。
+CM-G02A 的六项验收已通过独立 Linux x64 [资格验收](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/40961308903)
+及[同输入复用验证](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/40962447258)。
 示例 Mod 为 `org.example.turn-budget`，源码在 `examples/mods/turn-budget`。
 它单独编译为预制 `.cmod`，用户安装、启用、禁用及移除均使用现有 Host H。
 
 ## 配置与使用
 
 需要声明 `core.turn_sampling_budget.v1` 的 Host API 0.7.0，以及 ABI 2.2。
-候选 H 的 release ID 为 `cm-host-0.9.0-g02a`。先核对独立 worker 的实际
+H 的 release ID 为 `cm-host-0.9.0-g02a`。先核对独立 worker 的实际
 source、run/attempt、工件摘要及验收回执，再使用对应的预制 H/A。
 缺 API/capability 的旧 H 会在 native 加载前拒绝，不会自动升级或编译。
 
@@ -79,4 +80,4 @@ scope、cancellation-recovery、plug-and-play。最后一个失败仍保存前�
 明确阻塞，无重编译替代。
 
 全部编译、格式、Clippy、测试和运行实验只在独立 hosted Linux x64 GNU Actions。
-完整 Core/TUI suite、其他平台、跨进程旧预算恢复及发布就绪状态不由本候选证明。
+完整 Core/TUI suite、其他平台、跨进程旧预算恢复及发布就绪状态不在本次验收范围。
