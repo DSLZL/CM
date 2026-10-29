@@ -491,7 +491,7 @@ fn resolve(
                 if let Some(previous) =
                     runtime_names.insert(name, format!("{id}::{}", contribution.id))
                 {
-                    return Err(failure(
+                    let mut error = failure(
                         "runtime_name_collision",
                         id,
                         Some(&contribution.id),
@@ -499,7 +499,10 @@ fn resolve(
                             "runtime name {} claimed by {previous} and {id}::{}",
                             contribution.resource, contribution.id
                         ),
-                    ));
+                    );
+                    error.resource = Some(contribution.resource.clone());
+                    error.related_contributions = vec![previous, format!("{id}::{}", contribution.id)];
+                    return Err(error);
                 }
                 if runtime_names.len() > 128 {
                     return Err(failure(

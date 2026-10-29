@@ -621,7 +621,13 @@ def matrix():
     rejected.append(rejection("manifest-name-collision", mutate=lambda home: change(home,
         lambda value: value["contributions"][1].update(id="shadow", kind="tool",
             capability="runtime.tool.v1", resource="example-tool__echo"))))
-    assert "shadow" in rejected[-1]["diagnostic"] and "echo" in rejected[-1]["diagnostic"]
+    collision = next(row["detail"] for row in core.trace_rows(EVIDENCE / "manifest-name-collision/native.jsonl")
+        if row["event"] == "startup-failed")
+    assert (collision["stage"], collision["code"], collision["mod_id"], collision["contribution"],
+        collision["resource"], collision["already_native_executed"]) == (
+        "preflight", "runtime_name_collision", "example-tool", "shadow", "example-tool__echo", False), collision
+    assert set(collision["related_contributions"]) == {"example-tool::echo", "example-tool::shadow"}, collision
+    rejected[-1]["structured_error"] = collision
 
     handle_events = [row for row in scope_events if row["event"] in
         ("handle-probes", "previous-handles", "cross-owner-handle")]
