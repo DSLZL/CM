@@ -8,7 +8,7 @@ The package targets `x86_64-unknown-linux-gnu`. The qualified runtime is the act
 
 Keep the complete package together, including `bin/codex`, `bin/codex-code-mode-host`, `codex-resources/bwrap`, `codex-path/rg`, `cm-host.json`, `cm-runtime-files.json`, `dependency-inventory.json` and license notices. Component modes, hashes and resolved system-library paths are checked. An executable copied out of its package cannot serve as the managed launcher.
 
-Use the package's absolute executable path. No global installation, shell wrapper or `PATH` change is required. The M04 source candidate is `cm-host-0.7.0-m04`, Host API 0.6.0, adding `state.files.v1` without changing native ABI layouts. M04 implementation and acceptance remain unverified; the linked M03 run qualifies the earlier 0.6.0/0.5.0 package.
+Use the package's absolute executable path. No global installation, shell wrapper or `PATH` change is required. M04 uses `cm-host-0.7.0-m04`, Host API 0.6.0, adding `state.files.v1` with the existing native ABI layouts. Its Linux x64 qualification and independent reuse results, exact product/worker revisions and file-state usage are recorded in [file-state.md](file-state.md). The linked M03 run above qualifies the earlier 0.6.0/0.5.0 package.
 
 ## Independent home and commands
 

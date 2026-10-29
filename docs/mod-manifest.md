@@ -150,7 +150,7 @@ Legacy Mods retain raw format 1 selection bytes; with format 2 they receive the
 equivalent legacy selection projection, without other Mods' values. Reports,
 locks and diagnostics contain hashes, layer names and defined field paths, not
 configuration values. A native Mod can still inspect its process memory.
-State metadata alone retains its original descriptive meaning. The unverified M04 candidate adds explicit `state.files.v1` for format 3 / ABI 2 packages with a valid `[state]` owner, schema and positive version. It provides bounded ordinary files in a managed home; [file-state.md](file-state.md) defines the namespace, compatibility, offline checkpoint and rollback contract. ABI 2.2 process-local Mod/thread/turn values keep their existing lifetime and are separate from these files.
+State metadata alone retains its original descriptive meaning. M04 adds explicit `state.files.v1` for format 3 / ABI 2 packages with a valid `[state]` owner, schema and positive version. It provides bounded ordinary files in a managed home; [file-state.md](file-state.md) defines the namespace, compatibility, offline checkpoint and rollback contract. ABI 2.2 process-local Mod/thread/turn values keep their existing lifetime and are separate from these files.
 
 ## Metadata commands and mod.lock
 
