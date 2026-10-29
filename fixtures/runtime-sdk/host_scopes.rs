@@ -96,7 +96,7 @@ async fn cm_runtime_native_scopes() {
     assert_eq!(collision.resource.as_deref(), Some("example-tool__echo"));
     assert!(collision.already_native_executed);
     let tool_collision = crate::cm_runtime_check("cm-collision-test").expect_err("Core must retain the collision").to_string();
-    assert!(tool_collision.contains("runtime_registration") && tool_collision.contains("example-tool__echo"));
+    assert!(tool_collision.contains(&collision.to_string()));
     let mut world = crate::context::world_state::WorldState::default();
     for _ in 0..2 {
         world.add_extension_section(codex_extension_api::WorldStateSectionContribution::new(
