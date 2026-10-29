@@ -53,6 +53,11 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     source = os.environ["GITHUB_REPOSITORY"]
     default_branch = os.environ["CM_SOURCE_DEFAULT_BRANCH"]
+    write(out, "dispatch-context.json", {"schema_version": 1, "source_repository": source,
+        "control_workflow_sha": os.environ.get("GITHUB_WORKFLOW_SHA"),
+        "run_id": os.environ.get("GITHUB_RUN_ID"), "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+        "job": os.environ.get("GITHUB_JOB"), "target": TARGET,
+        "worker_repository": "DSLZL/CM-build-linux-x64"})
     if os.environ.get("GITHUB_EVENT_NAME") not in {"push", "workflow_dispatch"} or os.environ.get("GITHUB_REF") != "refs/heads/" + default_branch:
         raise RuntimeError("Cross-repository dispatch is limited to the trusted CM default-branch workflow")
     control_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
@@ -224,6 +229,9 @@ def self_check():
                     raise AssertionError("Blocked author CI dispatched a child build")
                 assert all(call.args[0].get_method() == "GET" for call in transport.call_args_list)
                 assert transport.call_count == int(name == "ci-unavailable")
+                context = json.loads((root / "out/dispatch-context.json").read_text())
+                assert context["control_workflow_sha"] == "a" * 40 and context["source_repository"] == "DSLZL/CM"
+                assert context["target"] == TARGET and "controlled-fixture-unused" not in json.dumps(context)
                 results.append({"case": name, "status": "pass", "simulated_transport": True,
                     "actual_network_requests": 0, "mutation_requests": 0, "local_build_calls": 0})
     return results

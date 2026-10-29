@@ -45,6 +45,7 @@ def configure():
     assert os.environ["CM_BUILD_KIND"] == "mod-only"
     append_environment({"RUSTUP_TOOLCHAIN": cfg["rust_toolchain"], "CM_RUST_TOOLCHAIN": cfg["rust_toolchain"],
         "CM_TARGET": TARGET, "RUSTC_WRAPPER": ""})
+    self_check()
 
 
 def compile_diagnostics(text, source):
@@ -296,18 +297,18 @@ def compiler_audit(text, target):
         if not re.search(r"\bexecve(?:at)?\(", line) or not line.rstrip().endswith("= 0"):
             continue
         assert "execveat(" not in line, "Unclassified author execution"
-        arguments = re.search(r'execve\("(?:[^"\\]|\\.)*", \[(.*?)\],', line)
+        arguments = re.search(r'execve\(("(?:[^"\\]|\\.)*"), \[(.*?)\],', line)
         assert arguments, "Incomplete author execution record"
-        tokens = [ast.literal_eval(value) for value in re.findall(r'"(?:[^"\\]|\\.)*"', arguments[1])]
-        assert tokens and "..." not in arguments[1], "Truncated author execution record"
-        executable = Path(tokens[0]).name
-        if executable == "rustc" and "--crate-name" in tokens:
+        tokens = [ast.literal_eval(value) for value in re.findall(r'"(?:[^"\\]|\\.)*"', arguments[2])]
+        assert tokens and "..." not in arguments[2], "Truncated author execution record"
+        executable = Path(ast.literal_eval(arguments[1])).name
+        if executable in ("rustc", "clippy-driver") and "--crate-name" in tokens:
             if any(token == "--print" or token.startswith("--print=") for token in tokens):
                 continue
             name = tokens[tokens.index("--crate-name") + 1]
             assert name in ("cm_abi", "cm_sdk", "cm_native_mod"), "Unexpected crate compilation"
             crates.add(name)
-            executions.append({"executable": "rustc", "crate": name})
+            executions.append({"executable": executable, "crate": name})
         elif executable in ("make", "meson", "ninja", "cmake", "sccache"):
             raise AssertionError("Unexpected helper, private Core or cached compiler execution")
         elif re.search(r"(?:^|-)(?:cc|gcc|g\+\+|c\+\+|clang(?:\+\+)?|ld(?:\.bfd|\.gold)?|lld|collect2|as)(?:-[0-9.]+)?$", executable):
@@ -395,14 +396,16 @@ def self_check():
     assert compiler_audit(split, source / "target")["rustc_crates"] == ["cm_abi", "cm_native_mod", "cm_sdk"]
     linker = '1 execve("/bin/cc", ["cc", "-o", "/author/target/debug/deps/mod.so"], 0x0 /* 0 vars */) = 0'
     assert compiler_audit(trace + "\n" + linker, source / "target")["compiler_executions"][-1]["executable"] == "cc"
-    try:
-        compiler_audit(trace.replace('"cm_sdk"', '"codex_core"'), source / "target")
-    except AssertionError:
-        pass
-    else:
-        raise AssertionError("Host compilation passed the Mod-only boundary")
+    for compiler in ("rustc", "clippy-driver"):
+        try:
+            compiler_audit(trace.replace('/bin/rustc', '/bin/' + compiler)
+                .replace('"rustc"', '"innocent-argv-zero"').replace('"cm_sdk"', '"codex_core"'), source / "target")
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("Host compilation passed the Mod-only boundary")
     for linker in ('1 execve("/bin/cc", ["cc", "-o", "/helper/bwrap"], 0x0 /* 0 vars */) = 0',
-                   '1 execve("/bin/gcc", ["x86_64-linux-gnu-gcc", "-o", "/helper/bwrap"], 0x0 /* 0 vars */) = 0',
+                   '1 execve("/bin/x86_64-linux-gnu-gcc", ["gcc", "-o", "/helper/bwrap"], 0x0 /* 0 vars */) = 0',
                    '1 execve("/bin/cc", ["cc", "helper.c", "-o", "/author/target/helper"], 0x0 /* 0 vars */) = 0'):
         try:
             compiler_audit(trace + "\n" + linker, source / "target")
