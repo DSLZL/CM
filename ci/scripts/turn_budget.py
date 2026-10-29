@@ -204,8 +204,18 @@ def produce():
 
 def self_check():
     from worker_policy import parse_origin
+    from unittest.mock import patch
     assert parse_origin(LEGACY_ORIGIN) == LEGACY_ORIGIN
     assert len(CASES) == len(set(CASES)) == len(REPORTS) == 6
+    with patch.dict(sys.modules, {name: None for name in ("turn_budget", "linux_ci", "host")}):
+        from runtime_consumer import budget_cases
+        assert budget_cases({"g02a": {"cases": list(CASES)}}) == list(CASES)
+        try:
+            budget_cases({"g02a": {"cases": []}})
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("Incomplete budget cases must not pass consumer validation")
     root = Path(__file__).resolve().parents[2]
     manifest = tomllib.loads((root / "examples/mods/turn-budget/mod.toml").read_text())
     assert manifest["id"] == OWNER and manifest["compat"]["required_capabilities"] == [CAPABILITY]

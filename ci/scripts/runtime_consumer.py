@@ -1047,6 +1047,13 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
         "socket_payloads": "sendto/recvfrom redacted in both audit and export"}
 
 
+def budget_cases(producer):
+    import retry
+    cases = [label.removeprefix("g02a-") for label in retry.PHASES if label.startswith("g02a-")]
+    assert len(cases) == 6 and producer["g02a"]["cases"] == cases, "Frozen budget cases differ from the consumer checkpoints"
+    return cases
+
+
 def consume():
     import retry
     hosted()
@@ -1106,12 +1113,11 @@ def consume():
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(mod_author.REPORTS, 1)]}
     g02a_acceptance = None
     if producer["task_id"] == "CM-G02A":
-        import turn_budget
+        cases = budget_cases(producer)
         g02a_acceptance = {"schema_version": 1, "task_id": "CM-G02A", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [
                 {"id": "CM-G02A-AC0" + str(index), "status": "not_run", "phase": "g02a-" + case,
-                 "evidence": ["evidence/" + name]} for index, (case, name) in
-                enumerate(zip(turn_budget.CASES, turn_budget.REPORTS, strict=True), 1)]}
+                 "evidence": ["evidence/budget-" + case + ".json"]} for index, case in enumerate(cases, 1)]}
     acceptance = g02a_acceptance or m05_acceptance or m04_acceptance or m03_acceptance or m02_acceptance or m01_acceptance or p04_acceptance
     write(artifact / "acceptance.json", acceptance)
     stage = "rootfs"
@@ -1201,7 +1207,7 @@ def consume():
                 commands.append(("m02-consumer-matrix", command("m02-consumer-matrix", [*CONSUMER_ENV_PREFIX,
                     "/usr/bin/python3", "-B", "/fixture/ci/scripts/runtime_sdk.py", "matrix"]), 1200))
             if g02a_acceptance is not None:
-                for case in turn_budget.CASES:
+                for case in cases:
                     label = "g02a-" + case
                     commands.append((label, command(label, [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B",
                         "/fixture/fixtures/turn-budget/driver.py", case]), 600))
@@ -1313,7 +1319,7 @@ def consume():
                 assert read(evidence / "m05/suite.json")["status"] == "pass"
                 report_sets.append(m05_acceptance)
             if g02a_acceptance is not None:
-                for case in turn_budget.CASES:
+                for case in cases:
                     assert read(evidence / "g02a" / case / "suite.json")["status"] == "pass"
                 report_sets.append(g02a_acceptance)
             for report_set in report_sets:
