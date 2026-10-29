@@ -1,6 +1,6 @@
 use cm_sdk::{Host, Init, Mod, Request, abi::Bytes, v22};
 
-const RESPONSE: &[u8] = br#"{"version":"v1","result":"hello from native-mod"}"#;
+const RESPONSE: &[u8] = br#"{"version":"v2","result":"hello from native-mod"}"#;
 
 struct Greeting {
     host: Host,
