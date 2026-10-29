@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tomllib
@@ -131,24 +132,21 @@ def source_review(root):
             "docs/mod-author-guide.md", "docs/mod-user-guide.md")}}
 
 
-def build(root, inputs, frozen, logs, variant, *, controlled=False):
-    import host
-    import mod_manifest
-    source = Path(os.environ["RUNNER_TEMP"]) / ("cm-author-" + variant)
+def prepare_source(root, source, variant, *, controlled=False):
     assert not source.exists(), "Author directory and target must start empty"
     shutil.copytree(root / TEMPLATE, source)
     if controlled:
         path = source / "src/lib.rs"
         text = path.read_text()
-        if variant == "v2":
-            assert '"v1"' in text and 'version = "0.1.0"' in (source / "Cargo.toml").read_text()
-            path.write_text(text.replace('"v1"', '"v2"'))
+        if variant == "v1":
+            assert '"v2"' in text and 'version = "0.1.1"' in (source / "Cargo.toml").read_text()
+            path.write_text(text.replace('"v2"', '"v1"'))
             for name in ("Cargo.toml", "mod.toml"):
                 path = source / name
-                path.write_text(path.read_text().replace('version = "0.1.0"', 'version = "0.1.1"', 1))
+                path.write_text(path.read_text().replace('version = "0.1.1"', 'version = "0.1.0"', 1))
             path = source / "Cargo.lock"
-            path.write_text(path.read_text().replace('name = "cm-native-mod"\nversion = "0.1.0"',
-                'name = "cm-native-mod"\nversion = "0.1.1"'))
+            path.write_text(path.read_text().replace('name = "cm-native-mod"\nversion = "0.1.1"',
+                'name = "cm-native-mod"\nversion = "0.1.0"'))
         elif variant == "init-fail":
             path.write_text(text.replace("Ok(Greeting { host: init.host })",
                 'let _ = init;\n    Err("CM_M05_DIAGNOSTIC_SECRET controlled init error".into())'))
@@ -156,6 +154,13 @@ def build(root, inputs, frozen, logs, variant, *, controlled=False):
             path.write_text(text + '\nfn controlled_compile_error() { let _: u32 = "CM_M05_DIAGNOSTIC_SECRET"; }\n')
         else:
             raise AssertionError("Unknown controlled author variant")
+
+
+def build(root, inputs, frozen, logs, variant, *, controlled=False):
+    import host
+    import mod_manifest
+    source = Path(os.environ["RUNNER_TEMP"]) / ("cm-author-" + variant)
+    prepare_source(root, source, variant, controlled=controlled)
     cargo = tomllib.loads((source / "Cargo.toml").read_text())
     assert cargo["dependencies"]["cm-sdk"]["rev"] == SDK_REVISION and cargo["workspace"] == {}
     before = sha(source / "Cargo.lock")
@@ -223,7 +228,7 @@ def prepare(inputs, package, frozen, logs):
     root = Path(os.environ["CM_SOURCE_DIR"])
     assert sha(package / "bin/codex") == frozen["executable_sha256"]
     refresh(root, inputs)
-    authors = {variant: build(root, inputs, frozen, logs, variant, controlled=variant != "v1")
+    authors = {variant: build(root, inputs, frozen, logs, variant, controlled=variant != "v2")
         for variant in ("v1", "v2", "init-fail")}
     compile_failure = build(root, inputs, frozen, logs, "compile-fail", controlled=True)
     receipt = {"schema_version": 1, "build_kind": "qualification", "authors": authors,
@@ -375,6 +380,21 @@ def produce():
 
 def self_check():
     assert len(REPORTS) == len(set(REPORTS)) == 6
+    root = Path(__file__).resolve().parents[2]
+    with tempfile.TemporaryDirectory() as directory:
+        for variant, version in (("v1", "0.1.0"), ("v2", "0.1.1")):
+            source = Path(directory) / variant
+            prepare_source(root, source, variant, controlled=variant == "v1")
+            cargo = tomllib.loads((source / "Cargo.toml").read_text())
+            lock = tomllib.loads((source / "Cargo.lock").read_text())
+            fields = tomllib.loads((source / "mod.toml").read_text())
+            assert cargo["package"]["version"] == fields["version"] == version
+            assert next(row for row in lock["package"] if row["name"] == "cm-native-mod")["version"] == version
+            assert cargo["dependencies"]["cm-sdk"]["rev"] == SDK_REVISION
+            assert '"version":"' + variant + '"' in (source / "src/lib.rs").read_text()
+            if variant == "v2":
+                for name in ("Cargo.toml", "Cargo.lock", "mod.toml", "src/lib.rs"):
+                    assert sha(source / name) == sha(root / TEMPLATE / name), "Current v2 author source was mutated"
     source = Path("/author")
     message = {"reason": "compiler-message", "message": {"level": "error", "code": {"code": "E0308"},
         "message": "CM_M05_DIAGNOSTIC_SECRET", "rendered": "CM_M05_DIAGNOSTIC_SECRET",

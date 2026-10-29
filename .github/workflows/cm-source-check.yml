@@ -103,6 +103,7 @@ jobs:
       - name: Check product reuse and partial failure recovery
         run: |
           python3 -B ci/scripts/retry.py self-check
+          python3 -B ci/scripts/mod_author.py self-check
           python3 -B ci/scripts/turn_budget.py self-check
 
       - name: Verify pinned Codex build inputs
