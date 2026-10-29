@@ -224,5 +224,14 @@ Per-case starts, completion/failure and 30-second heartbeat remain active.
 Metadata schema 2 exposes a redacted noncanonical `plan_projection`; canonical
 RuntimePlan/lock bytes and hashes stay internal to their existing integrity flow.
 Public errors keep bounded attribution and typed native ABI status while omitting
-untrusted free text. Static success remains unqualified. All M05 product checks
-remain NOT_RUN until exact remote source/worker execution and evidence review.
+untrusted free text. Static success remains unqualified.
+
+Observed Linux x64 results: [qualification](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/40897458239)
+passed all eight runtime stages. A [test-only replay](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/40902527878)
+reused seven stages and executed the changed missing-library test; strict consume
+dropped from 1655 to 21 seconds. [Independent Mod-only](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/40904210846)
+compiled only the Mod and pinned SDK/ABI crates, preserving H. Its [unchanged replay](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/40905730144)
+on source `dd4890a` / worker `d353841` reused all three stages: producer 18 seconds,
+strict consume 13 seconds, no compilation or large artifact uploads. Each run keeps
+original build/execution origins separate from current validation. These scoped
+Linux x64 observations do not establish full program or release readiness.
