@@ -447,19 +447,29 @@ def save_build(root, logs):
         return
     events = [json.loads(line) for line in (logs / "phase-results.jsonl").read_text().splitlines()]
     require_build_success(events)
-    if not any(event["phase"] == "current-task-acceptance" and event["return_code"] == 0 for event in events):
-        raise RuntimeError("Host cache preparation requires successful current acceptance")
-    cache = Path(os.environ["CM_HOST_BUILD_CACHE_DIR"])
-    cache.mkdir()
     binaries = Path(os.environ["CARGO_TARGET_DIR"]) / "host" / TARGET / load_config(root)["build_profile"]
-    for name in ("codex", "codex-code-mode-host"):
-        shutil.copy2(binaries / name, cache / name)
-    for phase in HOST_BUILD_PHASES:
-        shutil.copyfile(logs / (phase + ".log"), cache / (phase + ".log"))
     origin = {key: os.environ[env] for key, env in (
         ("source_repository", "CM_SOURCE_REPOSITORY"), ("source_sha", "CM_SOURCE_SHA"),
         ("workflow_repository", "GITHUB_REPOSITORY"), ("workflow_sha", "GITHUB_WORKFLOW_SHA"),
         ("run_id", "GITHUB_RUN_ID"), ("run_attempt", "GITHUB_RUN_ATTEMPT"), ("job", "GITHUB_JOB"))}
+    baseline_path = Path(os.environ["CM_CI_ARTIFACT_DIR"]) / "evidence/host-baseline-build.json"
+    if baseline_path.is_symlink() or not baseline_path.is_file():
+        raise RuntimeError("Host cache preparation requires its successful producer baseline")
+    baseline = read(baseline_path)
+    package = Path(os.environ["RUNNER_TEMP"]) / "cm-host-package"
+    if (baseline.get("host_identity") != read(logs / "host-identity.json")
+            or any(baseline.get(key) != value for key, value in origin.items())
+            or baseline.get("executable_sha256") != sha(binaries / "codex")
+            or baseline.get("package_manifest_sha256") != manifest_digest(manifest(package))
+            or any(sha(binaries / name) != sha(package / "bin" / name)
+                   for name in ("codex", "codex-code-mode-host"))):
+        raise RuntimeError("Host producer baseline identity, origin or bytes changed")
+    cache = Path(os.environ["CM_HOST_BUILD_CACHE_DIR"])
+    cache.mkdir()
+    for name in ("codex", "codex-code-mode-host"):
+        shutil.copy2(binaries / name, cache / name)
+    for phase in HOST_BUILD_PHASES:
+        shutil.copyfile(logs / (phase + ".log"), cache / (phase + ".log"))
     write(cache / "build.json", {"schema_version": 1, "identity": read(logs / "host-identity.json"),
           "origin": origin, "files": manifest(cache), "quality": [event for event in events if event["phase"] in HOST_BUILD_PHASES]})
     verify_build_cache(cache, read(logs / "host-identity.json"))
