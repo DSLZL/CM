@@ -45,6 +45,7 @@ replaced by its declaration hash. It is a display projection, not a canonical pl
 Public errors retain code/stage/Mod/field, expected/actual, native-execution status
 and a next action; raw error text and unverified URLs are omitted. Compare the
 Host identity and verified author receipt for actual source/ABI/CI attribution.
+Exclusive conflicts retain safe contribution identities in `related_contributions`.
 
 `cm lock` writes explicitly; `cm lock --check` checks explicitly. File state,
 checkpoints, `rollback --restore` and exact cleanup follow [state management](file-state.md).

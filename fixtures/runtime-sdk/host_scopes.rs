@@ -89,8 +89,14 @@ async fn cm_runtime_native_scopes() {
     tool_registry.register_trusted(runtime.clone());
     assert!(!tool_registry.register_external_with_exposure(runtime, codex_tools::ToolExposure::DirectModelOnly));
     assert_eq!(tool_registry.entries().count(), 1);
-    let tool_collision = crate::cm_runtime_check("cm-collision-test").expect_err("tool collision must latch").to_string();
-    assert!(tool_collision.contains("example-tool") && tool_collision.contains("existing Host"));
+    let collision = cm_runtime::runtime::check_level("cm-collision-test").expect_err("tool collision must latch");
+    assert_eq!(collision.code, "runtime_registration");
+    assert_eq!(collision.mod_id.as_deref(), Some("example-tool"));
+    assert_eq!(collision.contribution.as_deref(), Some("echo"));
+    assert_eq!(collision.resource.as_deref(), Some("example-tool__echo"));
+    assert!(collision.already_native_executed);
+    let tool_collision = crate::cm_runtime_check("cm-collision-test").expect_err("Core must retain the collision").to_string();
+    assert!(tool_collision.contains("runtime_registration") && tool_collision.contains("example-tool__echo"));
     let mut world = crate::context::world_state::WorldState::default();
     for _ in 0..2 {
         world.add_extension_section(codex_extension_api::WorldStateSectionContribution::new(
