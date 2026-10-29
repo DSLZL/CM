@@ -416,6 +416,7 @@ def matrix():
 def missing_library():
     context = read(Path("/fixture/missing-library.json"))
     removed = Path(context["removed_library"])
+    assert removed.is_absolute()
     assert str(removed) in read(INPUTS / "host/cm-runtime-files.json")["system_files"]
     assert not removed.exists()
     report = startup("failures/missing-library", PROFILE, require_cm=False)

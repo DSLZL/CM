@@ -133,11 +133,9 @@ def main():
             raise RuntimeError("Missing or ambiguous exact child artifact: " + name)
         return found[0]
     receipt_record = exact(receipt_name)
-    artifact = exact(artifact_name)
     source_config = api("repos/" + source + "/contents/.github/cm-ci.json?ref=" + source_sha)
     consumer_required = json.loads(base64.b64decode(source_config["content"]))["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05")
     consumer_artifact = exact("cm-linux-x64-consumer-artifacts-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
-    input_artifact = exact("cm-linux-x64-runtime-inputs-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
     jobs = get_run(run_path + "/attempts/" + str(run["run_attempt"]) + "/jobs?per_page=100")["jobs"]
     producer_jobs = [job for job in jobs if job["name"] in ("build-read / linux-x64", "build-write / linux-x64") and job["conclusion"] == "success"]
     if len(producer_jobs) != 1:
@@ -153,6 +151,20 @@ def main():
                     "--dir", str(receipt_dir)], check=True, env=env)
     receipt = json.loads((receipt_dir / "worker-receipt.json").read_text(encoding="utf-8"))
     ci = receipt["ci"]
+    production = ci.get("production_origin")
+    if production:
+        from retry import verify_production_origin
+        original = verify_production_origin(production, worker=worker, fetch=api)
+        for repository, previous, current in ((source, production["source_sha"], source_sha),
+                                               (worker, production["workflow_sha"], worker_sha)):
+            if api("repos/" + repository + "/compare/" + previous + "..." + current)["status"] not in ("ahead", "identical"):
+                raise RuntimeError("Reused producer is not an ancestor of the requested source/workflow")
+        artifact = original["product_artifact"]
+        artifact_name = artifact["name"]
+        input_artifact = original["input_artifact"]
+    else:
+        artifact = exact(artifact_name)
+        input_artifact = exact("cm-linux-x64-runtime-inputs-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
     expected = {"repository": worker, "source_repository": source, "source_sha": source_sha, "head_sha": source_sha,
                 "workflow_sha": worker_sha, "execution_role": "platform_builder", "cache_repository": worker,
                 "request_id": request_id, "target": TARGET, "run_id": run_id, "run_url": run_url,
@@ -176,6 +188,14 @@ def main():
                           "artifact_sha256": str(input_artifact["digest"]).removeprefix("sha256:")}
         if not re.fullmatch(r"[0-9a-f]{64}", expected_input["artifact_sha256"]) or consumer.get("input_artifact") != expected_input:
             raise RuntimeError("Consumer receipt does not bind its exact producer input artifact")
+        if production:
+            from worker_policy import artifact_binding
+            if consumer.get("production_origin") != production:
+                raise RuntimeError("Consumer receipt has a different original producer")
+            validation = consumer.get("validation_artifact") or {}
+            artifact_binding(exact("cm-linux-x64-validation-inputs-" + request_id + "-" + str(run["run_attempt"])),
+                validation["artifact_id"], "cm-linux-x64-validation-inputs-" + request_id + "-" + str(run["run_attempt"]),
+                validation["artifact_sha256"], run_id)
     ci["conclusion"] = run["conclusion"]
     if kind == "qualification" and consumer_required:
         origin = {"run_id": run_id, "run_attempt": run["run_attempt"], "source_sha": source_sha,
