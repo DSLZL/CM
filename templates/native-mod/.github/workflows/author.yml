@@ -32,9 +32,10 @@ jobs:
       CM_REQUESTED_BUILD_KIND: ${{ inputs.build_kind }}
       CM_REQUESTED_HOST_ORIGIN: ${{ inputs.host_origin }}
       CM_REQUESTED_CACHE_EPOCH: v1
-      CM_DISPATCH_EVIDENCE_DIR: ${{ runner.temp }}/cm-author-dispatch
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
+      - name: Set runner evidence path
+        run: echo "CM_DISPATCH_EVIDENCE_DIR=$RUNNER_TEMP/cm-author-dispatch" >> "$GITHUB_ENV"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ github.workflow_sha }}
