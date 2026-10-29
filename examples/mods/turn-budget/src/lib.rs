@@ -24,13 +24,16 @@ fn labels(values: &[String], allowed: &[&str]) -> bool {
 }
 
 fn policy(config: &[u8]) -> Result<Vec<u8>, String> {
-    let config: Config = serde_json::from_slice(config).map_err(|_| "invalid turn-budget config")?;
+    let config: Config =
+        serde_json::from_slice(config).map_err(|_| "invalid turn-budget config")?;
     if let Some(policy) = &config.policy
         && (policy.max_main_samples == 0
             || !labels(&policy.session_sources, &["cli", "vscode", "exec"])
             || !labels(&policy.request_kinds, &["turn"]))
     {
-        return Err("turn-budget policy requires a positive u32 and explicit supported labels".into());
+        return Err(
+            "turn-budget policy requires a positive u32 and explicit supported labels".into(),
+        );
     }
     serde_json::to_vec(&config.policy).map_err(|_| "cannot encode turn-budget policy".into())
 }
