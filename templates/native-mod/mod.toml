@@ -21,7 +21,7 @@ abi_major = 2
 abi_minor_min = 2
 abi_minor_max = 2
 host_api_min = "0.6.0"
-required_capabilities = ["runtime.tool.v1"]
+required_capabilities = ["runtime.tool.v1", "state.files.v1"]
 
 [[contributions]]
 id = "greet"

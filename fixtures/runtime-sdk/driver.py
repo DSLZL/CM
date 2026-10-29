@@ -136,7 +136,8 @@ class Provider:
                         if parent.tool and not title:
                             output = text_values(outputs)
                             if parent.tool_error:
-                                assert "controlled tool failure" in output, outputs
+                                assert "CM runtime [mod_error] mod=example-tool (already_native_executed=true):" in output, outputs
+                                assert "controlled tool failure" not in output, outputs
                             else:
                                 value = json.loads(outputs[0]["output"])
                                 if parent.expected_output is not None:
