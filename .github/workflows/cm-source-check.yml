@@ -71,10 +71,20 @@ jobs:
           scripts = [*Path("ci/scripts").glob("*.py"), *Path("fixtures/runtime-consumer").glob("*.py"),
                      *Path("fixtures/native-loader").glob("*.py"), *Path("fixtures/host-baseline").glob("*.py"),
                      *Path("fixtures/runtime-sdk").glob("*.py"), *Path("fixtures/managed-package").glob("*.py"),
-                     *Path("fixtures/state").glob("*.py")]
+                     *Path("fixtures/state").glob("*.py"), *Path("fixtures/mod-author").glob("*.py")]
           for script in scripts:
               py_compile.compile(str(script), cfile=str(Path(os.environ["RUNNER_TEMP"]) / (script.stem + ".pyc")),
                                  doraise=True)
+          from mod_author import source_review
+          import tomllib
+          template = Path("templates/native-mod")
+          cargo = tomllib.loads((template / "Cargo.toml").read_text())
+          lock = tomllib.loads((template / "Cargo.lock").read_text())
+          assert cargo["workspace"] == {} and cargo["lib"]["crate-type"] == ["cdylib"]
+          assert sorted(row["name"] for row in lock["package"]) == ["cm-abi", "cm-native-mod", "cm-sdk"]
+          assert (template / ".github/workflows/author.yml").read_bytes() == Path(".github/workflows/cm-mod-author.yml").read_bytes()
+          assert "Apache License" in (template / "LICENSE").read_text()
+          source_review(Path.cwd())
           with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as directory:
               fixture = Path(directory)
               (fixture / ".github").mkdir()

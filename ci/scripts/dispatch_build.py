@@ -60,7 +60,7 @@ def main():
         raise RuntimeError("Dispatcher source must be its exact trusted workflow revision")
     cfg = json.loads((root / ".github/cm-build-routing.json").read_text(encoding="utf-8"))
     if cfg.get("schema_version") != 1 or cfg.get("configured") is not True:
-        raise RuntimeError("CM-000 must configure the actual source and builder repositories")
+        raise RuntimeError("Author CI blocked: reviewed fixed-repository routing is not enabled; no local build fallback")
     worker = cfg.get("builder_repository", "")
     if cfg.get("source_repository") != source or cfg.get("target") != TARGET or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", worker) or "REPLACE" in worker or worker == source:
         raise RuntimeError("Invalid fixed Linux x64 builder routing")
@@ -78,7 +78,12 @@ def main():
         raise RuntimeError("Invalid cache epoch")
     worker_sha = api("repos/" + worker + "/commits/" + urllib.parse.quote(worker_branch, safe=""))["sha"]
     request_id = "cm-" + os.environ["GITHUB_RUN_ID"] + "-" + os.environ["GITHUB_RUN_ATTEMPT"] + "-" + uuid.uuid4().hex
-    request = {"ref": worker_branch, "inputs": {"source_sha": source_sha, "request_id": request_id, "cache_epoch": epoch}}
+    kind = os.environ.get("CM_REQUESTED_BUILD_KIND") or "qualification"
+    origin = os.environ.get("CM_REQUESTED_HOST_ORIGIN") or ""
+    if kind not in ("qualification", "mod-only") or (kind == "qualification" and origin) or (kind == "mod-only" and not origin):
+        raise RuntimeError("Select qualification or provide the exact qualification origin for mod-only")
+    request = {"ref": worker_branch, "inputs": {"source_sha": source_sha, "request_id": request_id, "cache_epoch": epoch,
+        "build_kind": kind, "host_origin": origin}}
     write(out, "dispatch-request.json", {"source_repository": source, "source_sha": source_sha,
           "control_sha": control_sha, "worker_repository": worker, "observed_worker_sha": worker_sha,
           "request_id": request_id, "target": TARGET, "request": request})
@@ -125,7 +130,7 @@ def main():
     receipt_record = exact(receipt_name)
     artifact = exact(artifact_name)
     source_config = api("repos/" + source + "/contents/.github/cm-ci.json?ref=" + source_sha)
-    consumer_required = json.loads(base64.b64decode(source_config["content"]))["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04")
+    consumer_required = json.loads(base64.b64decode(source_config["content"]))["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05")
     consumer_artifact = exact("cm-linux-x64-consumer-artifacts-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
     input_artifact = exact("cm-linux-x64-runtime-inputs-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
     jobs = get_run(run_path + "/attempts/" + str(run["run_attempt"]) + "/jobs?per_page=100")["jobs"]
@@ -147,7 +152,7 @@ def main():
                 "workflow_sha": worker_sha, "execution_role": "platform_builder", "cache_repository": worker,
                 "request_id": request_id, "target": TARGET, "run_id": run_id, "run_url": run_url,
                 "run_attempt": run["run_attempt"], "artifact_id": artifact["id"], "artifact_name": artifact_name,
-                "job": producer_jobs[0]["name"], "job_id": producer_jobs[0]["id"], "job_conclusion": "success"}
+                "job": producer_jobs[0]["name"], "job_id": producer_jobs[0]["id"], "job_conclusion": "success", "build_kind": kind}
     if any(ci.get(key) != value for key, value in expected.items()):
         raise RuntimeError("Worker receipt does not match the requested source and exact GitHub run/artifact")
     digest = str(artifact.get("digest", "")).removeprefix("sha256:")
@@ -167,6 +172,13 @@ def main():
         if not re.fullmatch(r"[0-9a-f]{64}", expected_input["artifact_sha256"]) or consumer.get("input_artifact") != expected_input:
             raise RuntimeError("Consumer receipt does not bind its exact producer input artifact")
     ci["conclusion"] = run["conclusion"]
+    if kind == "qualification" and consumer_required:
+        origin = {"run_id": run_id, "run_attempt": run["run_attempt"], "source_sha": source_sha,
+            "workflow_sha": worker_sha, "request_id": request_id}
+        for prefix, record in (("input", input_artifact), ("consumer", consumer_artifact), ("receipt", receipt_record)):
+            origin[prefix + "_artifact_id"] = record["id"]
+            origin[prefix + "_artifact_sha256"] = record["digest"].removeprefix("sha256:")
+        write(out, "host-origin.json", origin)
     write(out, "verified-worker-result.json", {"schema_version": 1, "implementation_commit": source_sha,
           "ci": ci, "artifact": artifact, "consumer_artifact": consumer_artifact, "input_artifact": input_artifact,
           "consumer": receipt.get("consumer"),
@@ -175,6 +187,46 @@ def main():
           "note": "CI provenance only. Review actual acceptance evidence before treating a task as complete."})
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
         stream.write("### Verified Linux x64 worker result\n\n- Source: `" + source + "@" + source_sha + "`\n- Worker: [" + worker + "](" + run_url + ")\n- Artifact SHA-256: `" + digest + "`\n")
+
+
+def self_check():
+    """Exercise blocked dispatch paths with a transport that cannot send requests."""
+    import tempfile
+    from unittest.mock import patch
+    results = []
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / ".github").mkdir()
+        base = {"schema_version": 1, "configured": True, "source_repository": "DSLZL/CM",
+            "builder_repository": "DSLZL/CM-build-linux-x64", "builder_ref": "main",
+            "builder_workflow": "build.yml", "target": TARGET}
+        for name in ("routing-disabled", "missing-token", "wrong-source", "ci-unavailable"):
+            cfg = {**base}
+            if name == "routing-disabled":
+                cfg["configured"] = False
+            if name == "wrong-source":
+                cfg["source_repository"] = "untrusted/source"
+            (root / ".github/cm-build-routing.json").write_text(json.dumps(cfg))
+            env = {"GITHUB_WORKSPACE": str(root), "CM_DISPATCH_EVIDENCE_DIR": str(root / "out"),
+                "GITHUB_REPOSITORY": "DSLZL/CM", "CM_SOURCE_DEFAULT_BRANCH": "main",
+                "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/main",
+                "GITHUB_WORKFLOW_SHA": "a" * 40}
+            if name != "missing-token":
+                env["CM_BUILD_FANOUT_TOKEN"] = "controlled-fixture-unused"
+            with patch.dict(os.environ, env, clear=True), patch(__name__ + ".require_hosted_linux"), \
+                patch("subprocess.check_output", return_value="a" * 40), \
+                patch("urllib.request.urlopen", side_effect=urllib.error.URLError("controlled unavailable")) as transport:
+                try:
+                    main()
+                except (RuntimeError, urllib.error.URLError):
+                    pass
+                else:
+                    raise AssertionError("Blocked author CI dispatched a child build")
+                assert all(call.args[0].get_method() == "GET" for call in transport.call_args_list)
+                assert transport.call_count == int(name == "ci-unavailable")
+                results.append({"case": name, "status": "pass", "simulated_transport": True,
+                    "actual_network_requests": 0, "mutation_requests": 0, "local_build_calls": 0})
+    return results
 
 
 if __name__ == "__main__":

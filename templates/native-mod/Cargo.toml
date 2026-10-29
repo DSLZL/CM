@@ -1,0 +1,19 @@
+[package]
+name = "cm-native-mod"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+cm-sdk = { git = "https://github.com/DSLZL/CM.git", rev = "d3abb2bea2dda5964ba2725b1abd095c3f46678b", version = "=0.1.0" }
+
+[workspace]
+
+[profile.author]
+inherits = "release"
+opt-level = 1
+codegen-units = 1
+panic = "unwind"

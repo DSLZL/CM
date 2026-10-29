@@ -36,7 +36,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 +    /// Print this CM Host's embedded build identity as JSON.
 +    CmHostIdentity,
 +
-+    /// Inspect precompiled CM Mods without executing them.
++    /// Manage precompiled CM Mods without building; list/plan/doctor never execute them.
 +    Cm(CmCli),
  }
  

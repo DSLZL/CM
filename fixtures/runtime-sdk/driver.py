@@ -86,11 +86,13 @@ def title_request(request):
 
 
 class Provider:
-    def __init__(self, *, tool=True, tool_error=False):
+    def __init__(self, *, tool=True, tool_error=False, tool_name="example-tool__echo", expected_output=None):
         self.requests = []
         self.errors = []
         self.tool = tool
         self.tool_error = tool_error
+        self.tool_name = tool_name
+        self.expected_output = expected_output
         self.condition = threading.Condition()
         parent = self
 
@@ -128,7 +130,7 @@ class Provider:
                     send({"type": "response.created", "response": {"id": "cm-m02-" + token}})
                     if parent.tool and not outputs and not title:
                         send({"type": "response.output_item.done", "item": {"type": "function_call",
-                            "call_id": call_id, "name": "example-tool__echo",
+                            "call_id": call_id, "name": parent.tool_name,
                             "arguments": json.dumps({"value": token})}})
                     else:
                         if parent.tool and not title:
@@ -137,7 +139,10 @@ class Provider:
                                 assert "controlled tool failure" in output, outputs
                             else:
                                 value = json.loads(outputs[0]["output"])
-                                assert value["owner"] == "example-tool" and value["arguments"]["value"] == token, value
+                                if parent.expected_output is not None:
+                                    assert value == parent.expected_output, value
+                                else:
+                                    assert value["owner"] == "example-tool" and value["arguments"]["value"] == token, value
                         send({"type": "response.output_item.done", "item": {"type": "message", "id": "cm-final-" + token,
                             "role": "assistant", "content": [{"type": "output_text", "text":
                                 json.dumps({"title": "Complete CM fixture"}) if title else "M02 complete " + token}]}})
@@ -579,7 +584,7 @@ def matrix():
             if mode == "bounds":
                 assert any(row["event"] == "bounds" and row["quota_recovered"] for row in rows(directory / "events.jsonl"))
             else:
-                assert "controlled" in (directory / "stderr.log").read_text() + (directory / "stdout.jsonl").read_text() or mode == "tool-error"
+                assert "CM " in (directory / "stderr.log").read_text() + (directory / "stdout.jsonl").read_text() or mode == "tool-error"
             error_case = {"mode": mode, "return_code": result.returncode, "model_requests": len(service.requests)}
             if mode in ("callback-error", "panic"):
                 native = core.trace_rows(directory / "native.jsonl")
@@ -589,8 +594,8 @@ def matrix():
                 failure = failures[0]
                 assert (failure["mod_id"], failure["contribution"], failure["resource"]) == (
                     "example-tool", "echo", "example-tool__echo")
-                expected = "Mod panic" if mode == "panic" else "controlled native callback error"
-                assert expected in failure["message"], failure
+                expected = "native_reported_panic" if mode == "panic" else "native_failure"
+                assert failure["reason"] == expected and failure["already_native_executed"], failure
                 tool_request = next(row["detail"]["request"] for row in native if row["event"] == "runtime-request"
                     and row["detail"]["mod"] == "example-tool" and row["detail"]["event_kind"] == 10)
                 completions = [row["detail"] for row in native if row["event"] == "runtime-complete"

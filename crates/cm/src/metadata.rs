@@ -105,9 +105,9 @@ pub fn run(home: &Path, command: Command, options: &Options) -> Result<Value, Lo
         if let Some(snapshot) = &managed {
             snapshot.revalidate()?;
         }
-        return Ok(
+        return Ok(crate::diagnostics::metadata(
             json!({"schema_version":1,"command":"list","mods":mods,"already_native_executed":false}),
-        );
+        ));
     }
     if managed.is_some() && matches!(command, Command::Lock) {
         crate::profile::Transaction::begin(home, crate::package::managed_identity()?)?
@@ -149,9 +149,9 @@ pub fn run(home: &Path, command: Command, options: &Options) -> Result<Value, Lo
             _ => "not_checked",
         }
     };
-    Ok(
+    Ok(crate::diagnostics::metadata(
         json!({"schema_version":1,"plan":prepared.plan(),"plan_sha256":prepared.plan().sha256(),
         "lock_sha256":loader::hash(&mod_lock::canonical(prepared.plan())),"lock":lock_state,
         "already_native_executed":false,"qualification":{"verified":false}}),
-    )
+    ))
 }

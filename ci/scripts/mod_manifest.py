@@ -21,7 +21,7 @@ import ci_progress
 
 TARGET = "x86_64-unknown-linux-gnu"
 CAP = "core.exec_output_limit.v1"
-CANARIES = ("M01_OWN_SECRET", "M01_OTHER_SECRET", "M01_BAD_SECRET")
+CANARIES = ("M01_OWN_SECRET", "M01_OTHER_SECRET", "M01_BAD_SECRET", "CM_M05_DIAGNOSTIC_SECRET")
 REPORTS = ("binary-mod-manifest.json", "runtime-lock-determinism.json", "manifest-rejection-matrix.json",
            "runtime-lock-integrity.json", "mod-config-contract.json", "metadata-only-resolution.json")
 
@@ -471,11 +471,11 @@ def matrix():
     for n, (reverse, archive) in enumerate(((False, False), (True, False), (False, True), (True, True))):
         candidate = install(work / ("order-" + str(n)), inputs, reverse=reverse, archive=archive)
         metadata(binary, candidate, ["lock"])
-        identities.append({"lock_sha256": sha(candidate / "mod.lock"), "plan": metadata(binary, candidate, ["plan"])["output"]["plan"]})
+        identities.append({"lock_sha256": sha(candidate / "mod.lock"), "plan_projection": metadata(binary, candidate, ["plan"])["output"]["plan_projection"]})
     assert len({item["lock_sha256"] for item in identities}) == 1
     zip_business = core.run_case(Path("/fixture"), evidence / "actual-zip", binary, candidate, True,
         restrictive=True, expected_releases=2, sandboxed=True)
-    host = planned["output"]["plan"]["host"]
+    host = planned["output"]["plan_projection"]["host"]
     exact = install(work / "exact", inputs)
     mutate(exact, "output-fixture", lambda m: (m.update(kind="exact_host"), m["compat"].update(exact_host={
         "build_id": host["build_id"], "executable_sha256": host["executable_sha256"]})))

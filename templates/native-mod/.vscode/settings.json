@@ -1,0 +1,9 @@
+{
+  "rust-analyzer.checkOnSave": false,
+  "rust-analyzer.cargo.buildScripts.enable": false,
+  "rust-analyzer.cargo.buildScripts.rebuildOnSave": false,
+  "rust-analyzer.procMacro.enable": false,
+  "rust-analyzer.cargo.autoreload": false,
+  "editor.formatOnSave": false,
+  "task.allowAutomaticTasks": "off"
+}

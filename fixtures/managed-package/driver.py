@@ -762,7 +762,7 @@ def matrix():
     legacy_home = PROFILE / "legacy-managed"
     for relative in ("a", "b/normal"):
         cm(legacy_home, "install", INPUTS / "mods" / relative)
-    legacy_plan = cm(legacy_home, "plan")["plan"]
+    legacy_plan = cm(legacy_home, "plan")["plan_projection"]
     assert {owner: row["content_tree_sha256"] for owner, row in legacy_plan["mods"].items()} == state(legacy_home)[1]["installed"]
     fault_home = PROFILE / "faults"
     cm(fault_home, "install", INPUTS / "mods/m02/lifecycle-audit/normal")

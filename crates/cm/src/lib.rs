@@ -18,6 +18,7 @@ use serde_json::Value;
 use serde_json::json;
 
 pub mod config;
+mod diagnostics;
 pub mod launcher;
 mod loader;
 mod manifest;
@@ -34,7 +35,7 @@ pub mod tool_policy;
 
 use loader::registration::RegistrationSet;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone)]
 pub struct LoadError {
     pub stage: String,
     pub already_native_executed: bool,
@@ -43,10 +44,9 @@ pub struct LoadError {
     pub mod_id: Option<String>,
     pub contribution: Option<String>,
     pub resource: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub graph: Option<String>,
+    pub native_status: Option<u32>,
 }
 
 impl LoadError {
@@ -61,6 +61,7 @@ impl LoadError {
             resource: None,
             field: None,
             graph: None,
+            native_status: None,
         }
     }
 
@@ -121,17 +122,31 @@ impl LoadError {
 
 impl std::fmt::Display for LoadError {
     fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let diagnostic = crate::diagnostics::error(self);
         write!(
             output,
-            "CM {} [{}] mod={} contribution={} resource={} (already_native_executed={}): {}",
-            self.stage,
-            self.code,
-            self.mod_id.as_deref().unwrap_or("-"),
-            self.contribution.as_deref().unwrap_or("-"),
-            self.resource.as_deref().unwrap_or("-"),
+            "CM {} [{}] mod={} (already_native_executed={}): {}; next_action={}",
+            diagnostic["stage"].as_str().unwrap_or("unknown"),
+            diagnostic["code"].as_str().unwrap_or("unknown"),
+            diagnostic["mod_id"].as_str().unwrap_or("-"),
             self.already_native_executed,
-            self.message
+            diagnostic["message"].as_str().unwrap_or("operation rejected"),
+            diagnostic["next_action"]
+                .as_str()
+                .unwrap_or("inspect the verified receipt")
         )
+    }
+}
+
+impl std::fmt::Debug for LoadError {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, output)
+    }
+}
+
+impl Serialize for LoadError {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::diagnostics::error(self).serialize(serializer)
     }
 }
 

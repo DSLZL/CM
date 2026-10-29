@@ -20,7 +20,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing Host build identity"))?;
         assert_eq!(build_id.len(), "sha256:".len() + 64);
         assert!(build_id.starts_with("sha256:"));
-        assert_eq!(identity["stage"], "managed-file-state-rollback");
+        assert_eq!(identity["stage"], "mod-author-workflow");
         assert_eq!(
             identity["capabilities"],
             serde_json::json!([

@@ -1,6 +1,7 @@
 .github/cm-build-routing.json
 .github/cm-ci.json
 .github/workflows/cm-linux-x64.yml
+.github/workflows/cm-mod-author.yml
 .github/workflows/cm-source-check.yml
 .gitignore
 adapters/codex-e4568a3/cli.patch
@@ -17,6 +18,7 @@ ci/scripts/host.py
 ci/scripts/linux_ci.py
 ci/scripts/managed_package.py
 ci/scripts/mod_manifest.py
+ci/scripts/mod_author.py
 ci/scripts/native_mod.py
 ci/scripts/record_run.py
 ci/scripts/runtime_composition.py
@@ -46,6 +48,7 @@ crates/cm-sdk/src/lib.rs
 crates/cm/Cargo.toml
 crates/cm/examples/native_probe.rs
 crates/cm/src/config.rs
+crates/cm/src/diagnostics.rs
 crates/cm/src/host_identity.rs
 crates/cm/src/lib.rs
 crates/cm/src/launcher.rs
@@ -65,6 +68,8 @@ crates/cm/src/runtime_plan.rs
 crates/cm/src/state.rs
 crates/cm/src/tool_policy.rs
 docs/mod-manifest.md
+docs/mod-author-guide.md
+docs/mod-user-guide.md
 docs/managed-package.md
 docs/runtime-sdk.md
 docs/file-state.md
@@ -72,6 +77,8 @@ fixtures/host-baseline/acceptance.sh
 fixtures/host-baseline/test_identity.py
 fixtures/managed-package/acceptance.sh
 fixtures/managed-package/driver.py
+fixtures/mod-author/acceptance.sh
+fixtures/mod-author/driver.py
 fixtures/mods/binary-manifest-cases/acceptance.sh
 fixtures/mods/composition-a/Cargo.lock
 fixtures/mods/composition-a/Cargo.toml
@@ -112,3 +119,11 @@ fixtures/state/driver.py
 schemas/cm-runtime.schema.json
 schemas/mod-lock.schema.json
 schemas/mod.schema.json
+templates/native-mod/.github/workflows/author.yml
+templates/native-mod/.vscode/settings.json
+templates/native-mod/Cargo.lock
+templates/native-mod/Cargo.toml
+templates/native-mod/LICENSE
+templates/native-mod/README.md
+templates/native-mod/mod.toml
+templates/native-mod/src/lib.rs

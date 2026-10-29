@@ -8,7 +8,7 @@
     "codex-rs/Cargo.lock": "319fbf5f0e3f1217f09e3bdeeae5bbd6b9da208e30495d7f5eb3102a76474812",
     "codex-rs/rust-toolchain.toml": "570656042681cfd8795403a455baf9a33035331a07db0645e866bbcea89a3d64"
   },
-  "host_release_id": "cm-host-0.7.0-m04",
+  "host_release_id": "cm-host-0.8.0-m05",
   "host_api_version": "0.6.0",
   "capabilities": [
     "core.tool_parallel_eligibility.v1",
@@ -20,7 +20,7 @@
     "state.files.v1"
   ],
   "protocol_source": "codex-rs/protocol",
-  "stage": "managed-file-state-rollback",
+  "stage": "mod-author-workflow",
   "official_asset": {
     "url": "https://github.com/openai/codex/releases/download/rust-v0.163.0/codex-x86_64-unknown-linux-musl.tar.gz",
     "sha256": "beb339e8ecd9ba057a6bb2dc81ad8ca474812edfbf0fc5056ca818797648dde4",
@@ -61,7 +61,8 @@
     "crates/cm/src/profile.rs": "codex-rs/cm/src/profile.rs",
     "crates/cm/src/mod_install.rs": "codex-rs/cm/src/mod_install.rs",
     "crates/cm/src/launcher.rs": "codex-rs/cm/src/launcher.rs",
-    "crates/cm/src/state.rs": "codex-rs/cm/src/state.rs"
+    "crates/cm/src/state.rs": "codex-rs/cm/src/state.rs",
+    "crates/cm/src/diagnostics.rs": "codex-rs/cm/src/diagnostics.rs"
   },
   "patches": [
     "cli.patch",

@@ -1,6 +1,6 @@
 # CM Linux x64 CI
 
-CM source is DSLZL/CM; the independent GitHub-hosted ubuntu-24.04 X64 producer and cache owner is DSLZL/CM-build-linux-x64. The only CM target is x86_64-unknown-linux-gnu. All compilation, checks, tests, smoke runs and experiments execute there. Local work edits and reviews source/configuration and lightweight evidence. The current configuration selects CM-M04 file-state acceptance, qualified on exact source `41c5fde` / worker `4520956`; see the accepted runs below. Prior P01–M03 contracts remain separate current regressions.
+CM source is DSLZL/CM; the independent GitHub-hosted ubuntu-24.04 X64 producer and cache owner is DSLZL/CM-build-linux-x64. The only CM target is x86_64-unknown-linux-gnu. All compilation, checks, tests, smoke runs and experiments execute there. Local work edits and reviews source/configuration and lightweight evidence. The current candidate selects CM-M05 author workflow acceptance and has not run. M04's accepted exact source `41c5fde` / worker `4520956` remains recorded below; it does not qualify the new M05 Host.
 
 ## Publication inputs
 
@@ -142,7 +142,7 @@ Worker logs retain sccache statistics, restore/save observations and final accep
 
 ## Verification boundary
 
-CM-M04 remains not_run until the exact published source/worker revisions complete all current-source P01–M03 regressions, its six consumer checks and evidence review. Failed/partial runs cannot accept a newer source revision. A package or loader pass cannot establish whole-product or release readiness. No local build, test, lint or simulated CI is permitted. Publication and dispatch follow the current explicit session authorization; credentials and product Releases require separate concrete authorization.
+CM-M05 remains not_run until the exact published source/worker revisions complete qualification, the actual independent Mod-only update and all six consumer checks with evidence review. Failed/partial runs cannot accept a newer source revision. A package or loader pass cannot establish whole-product or release readiness. No local build, test, lint or simulated CI is permitted. Publication and dispatch follow the current explicit session authorization; credentials and product Releases require separate concrete authorization.
 
 ## CM-M01 regression acceptance
 
@@ -169,3 +169,46 @@ Public ownership, limits, compatibility and commands are in [docs/file-state.md]
 `runtime_state.prepare` independently builds v1, compatible-v1 and incompatible-v2 SDK Mod binaries, preserving their source/environment/dependency/payload identities and the frozen production H. Precise state/profile test results are bound to the successful Host-test log and identified as a different test binary. The consumer receives only precompiled payloads and necessary Python fixtures. P04/M01/M02 run concurrently; after joining and missing-library recovery, M03 runs before M04. Every nonzero phase propagates failure. Per-case logging and the existing 30-second heartbeat remain active.
 
 The M04 root has only `restart-disable-remove.json`, `empty-set-restart.json`, `mod-state-retention.json`, `precompiled-state-rollback.json`, `migration-interruption.json` and `runtime-dependency-ownership.json`. P01–M03 results retain separate acceptance roots. Each actual PTY MCP listener is independently bound to its Host PID/socket and observed accept, rather than granting an unobserved loopback port. Final immutable-input and credential-redaction audits, source/worker/run/attempt/request identities, successful producer/consumer jobs and upload digests remain required. All six M04 gates passed on source [`41c5fde`](https://github.com/DSLZL/CM/commit/41c5fde583d85fafe13ecbad4895cf03cece1dbb) / worker [`4520956`](https://github.com/DSLZL/CM-build-linux-x64/commit/45209569ce74096f9155588a7710ddb89238182d): [qualification 40807296438/1](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/40807296438) and [independent unchanged-input reuse 40812023657/1](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/40812023657). The reviewed originals, receipt-named report copies and final job/API conclusions agree. Both rounds reuse identical H bytes and the original successful Host/linked build evidence while current runtime checks rerun; the reuse producer recorded 153 sccache hits, zero misses and zero compilations, with all five linked recipes reused in 0.514 seconds. Author fixture builds remain separately reported. The consumer exposes stage/case progress, elapsed time and 30-second running heartbeats. These controlled Linux x64 results leave full upstream Core/TUI, S04, other platforms and release gates pending.
+
+
+## CM-M05 author and zero-build user candidate
+
+[The author guide](../docs/mod-author-guide.md), [user guide](../docs/mod-user-guide.md)
+and `templates/native-mod` describe the fixed reviewed source path. The template
+is an independent cdylib workspace pinned to SDK source `d3abb2b`; its lock includes
+only cm-native-mod, cm-sdk and cm-abi. Cargo format/Clippy/test/build and packaging
+run on the independent worker. Editor configuration disables the named automatic
+build paths; it cannot police unrelated installed extensions.
+
+`cm-mod-author.yml` is a trusted CM dispatcher; the template carries an identical
+reference workflow. Existing routing remains disabled. Missing routing/token or an
+unavailable CI blocks with no local build fallback. Source CI runs the dispatcher
+negative cases with a mocked transport; those cases are not a successful fanout.
+No credentials or repository settings are changed by M05.
+
+Worker `build_kind=qualification` follows the existing Host/linked acceptance cache
+contract, then builds all required regressions and M05 author variants after H is
+frozen. `build_kind=mod-only` requires the exact successful M05 qualification origin:
+run/attempt, source/workflow revisions, request, and input/consumer/receipt artifact
+IDs and SHA-256 digests. Trusted worker policy checks actual API status/jobs/ancestry,
+expiry, all six qualified reports and downloaded artifact bytes before current CM
+source handles those inputs. Current Host production inputs must still match H.
+Only the current target Mod and its pinned SDK/ABI dependencies compile in an empty
+author target. Strace records actual compiler/linker descendants; unexpected crates,
+helper build tools, native source or linker outputs outside that target fail closed.
+No Host, helper, private Core or other fixture build step runs on this path.
+
+The Mod-only handoff preserves original v1/error/baseline inputs and their original
+source; only the current v2 package, runtime drivers and provenance change. The
+compiler-free cache-none consumer executes current M05 install, real native tool
+outputs, explicit replacement, restart/disable/enable/remove, state/other-Mod/H
+retention, metadata sentinel/redaction and diagnostic cases, plus actual runtime
+library removal/recovery. Qualification additionally runs current P01–M04 regressions.
+The six root reports have M05 IDs; earlier acceptance roots keep their own IDs.
+Per-case starts, completion/failure and 30-second heartbeat remain active.
+
+Metadata schema 2 exposes a redacted noncanonical `plan_projection`; canonical
+RuntimePlan/lock bytes and hashes stay internal to their existing integrity flow.
+Public errors keep bounded attribution and typed native ABI status while omitting
+untrusted free text. Static success remains unqualified. All M05 product checks
+remain NOT_RUN until exact remote source/worker execution and evidence review.

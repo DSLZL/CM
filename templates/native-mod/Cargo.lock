@@ -1,0 +1,23 @@
+# Candidate lock assembled from the pinned SDK dependency graph.
+# Verify or regenerate only on the independent hosted worker.
+version = 4
+
+[[package]]
+name = "cm-abi"
+version = "0.1.0"
+source = "git+https://github.com/DSLZL/CM.git?rev=d3abb2bea2dda5964ba2725b1abd095c3f46678b#d3abb2bea2dda5964ba2725b1abd095c3f46678b"
+
+[[package]]
+name = "cm-native-mod"
+version = "0.1.0"
+dependencies = [
+ "cm-sdk",
+]
+
+[[package]]
+name = "cm-sdk"
+version = "0.1.0"
+source = "git+https://github.com/DSLZL/CM.git?rev=d3abb2bea2dda5964ba2725b1abd095c3f46678b#d3abb2bea2dda5964ba2725b1abd095c3f46678b"
+dependencies = [
+ "cm-abi",
+]

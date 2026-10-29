@@ -67,8 +67,8 @@ does not establish a successful compatibility run.
 
 The binary uses `abi_minor_min` as its native entry protocol; `abi_minor_max`
 describes its declared upper bound. Both must belong to the current Host's
-1.0/2.0/2.1 support. ABI 1.0 uses `cm_mod_entry_v1` and its original single legacy
-contribution; it cannot receive configuration. ABI 2.0/2.1 use
+1.0/2.0/2.1/2.2 support. ABI 1.0 uses `cm_mod_entry_v1` and its original single legacy
+contribution; it cannot receive configuration. ABI 2.0/2.1/2.2 use
 `cm_mod_entry_v2`, and actual descriptors are checked after native loading.
 The only declared CPU baseline is `x86-64`; the current glibc must meet
 `glibc_min`. This is a startup check, not certification of every Linux distribution.
@@ -174,6 +174,15 @@ actual executable identity, candidates/selected content and provenance,
 configuration hashes/origins, both graphs and stable order. It contains neither
 absolute input paths nor configuration secrets. A lock cannot create a
 `PreparedPlan` or bypass input snapshots and commit checks.
+
+Metadata response schema 2 exposes a noncanonical `plan_projection` instead of
+`plan`. Untrusted provenance text is replaced with its declaration hash;
+`projection.canonical=false` makes this explicit. `plan_sha256` and `lock_sha256`
+still identify the internal original plan and lock. Qualification remains
+unverified until an exact external worker run and artifact receipt are checked.
+Public errors omit raw messages and URLs while preserving safe bounded
+code/stage/Mod/contribution/resource/field/graph and native status, plus a next
+action. Native panic status comes from the ABI status, not message matching.
 
 `plan` is read only. `doctor` reports `absent` when there is no lock and checks
 it when present. `lock --check` requires an exact current canonical record and

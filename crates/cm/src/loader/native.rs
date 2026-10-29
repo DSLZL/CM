@@ -51,10 +51,11 @@ pub(crate) fn invoke(
         .map_err(|_| LoadError::native(stage, "error buffer is not UTF-8"))?;
     match status {
         OK => Ok(()),
-        FAILED | PANICKED => Err(LoadError::native(
-            stage,
-            &format!("status={status}: {message}"),
-        )),
+        FAILED | PANICKED => {
+            let mut error = LoadError::native(stage, &format!("status={status}: {message}"));
+            error.native_status = Some(status);
+            Err(error)
+        }
         _ => Err(LoadError::native(stage, "unknown ABI status")),
     }
 }
@@ -253,6 +254,18 @@ impl NativeMod {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validated_abi_status_survives_error_context_without_exporting_the_message() {
+        for status in [FAILED, PANICKED] {
+            let mut error = invoke("runtime_dispatch", |_| status).unwrap_err();
+            error.message.push_str("; thread=private-input");
+            assert_eq!(error.native_status, Some(status));
+            let public = serde_json::to_value(&error).unwrap();
+            assert_eq!(public["native_status"], status);
+            assert!(!public.to_string().contains("private-input"));
+        }
+    }
 
     #[test]
     fn short_header_and_error_lengths_are_rejected() {

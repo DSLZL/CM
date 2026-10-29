@@ -1,0 +1,42 @@
+format_version = 3
+id = "native-mod"
+version = "0.1.0"
+kind = "sdk"
+dependencies = []
+conflicts = []
+resources = []
+
+# The worker seals these binary fields from the actual built ELF before packaging.
+[binary]
+path = "payload.so"
+size = 0
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+target = "x86_64-unknown-linux-gnu"
+entry = "cm_mod_entry_v2"
+glibc_min = "2.17"
+cpu = "x86-64"
+
+[compat]
+abi_major = 2
+abi_minor_min = 2
+abi_minor_max = 2
+host_api_min = "0.6.0"
+required_capabilities = ["runtime.tool.v1"]
+
+[[contributions]]
+id = "greet"
+kind = "tool"
+capability = "runtime.tool.v1"
+resource = "native-mod__greet"
+
+[state]
+owner = "native-mod"
+schema = "greeting-state"
+version = 1
+preserve = true
+
+[provenance]
+repository = "https://github.com/DSLZL/CM"
+revision = "d3abb2bea2dda5964ba2725b1abd095c3f46678b"
+release_notes = "Independent native greeting tool; provenance remains a declaration."
+license = "Apache-2.0"

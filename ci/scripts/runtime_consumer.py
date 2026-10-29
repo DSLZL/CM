@@ -160,7 +160,7 @@ def produce():
     lock = sha(root / unit["lockfile"])
     authors = {"a": read(logs / "mod-build.json")}
     for variant in ("normal", "two-limiters", "init-fail", *ENTRY_INVALID, *CALL_INVALID,
-                    *(("config",) if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04") else ())):
+                    *(("config",) if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05") else ())):
         target = Path(os.environ["CARGO_TARGET_DIR"]) / ("output-limit-" + variant)
         assert not target.exists(), "Independent author target must start empty"
         env = {**os.environ, "CARGO_TARGET_DIR": str(target), "CM_LIMIT_VARIANT": variant}
@@ -205,7 +205,7 @@ def produce():
         shutil.copyfile(root / relative, destination)
     metadata_audit = None
     binary_packages = None
-    if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04"):
+    if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05"):
         import mod_manifest
         legacy = read(artifact / "evidence/runtime-plan-determinism.json")["mods"]["a/normal"]
         composition.install(inputs, legacy, directory="m01-legacy-v2")
@@ -236,15 +236,19 @@ def produce():
                       "prepared_profile": inventory(inputs / "official/profile")}
     write(logs / "official-profile-setup.json", official_setup)
     runtime_sdk = None
-    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04"):
+    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05"):
         from runtime_sdk import prepare
         runtime_sdk = prepare(inputs, package, authors)
-    if cfg["task_id"] in ("CM-M03", "CM-M04"):
+    if cfg["task_id"] in ("CM-M03", "CM-M04", "CM-M05"):
         import managed_package
         managed_package.prepare(inputs, package, frozen, logs)
-    if cfg["task_id"] == "CM-M04":
+    if cfg["task_id"] in ("CM-M04", "CM-M05"):
         import runtime_state
         runtime_state.prepare(inputs, package, frozen, logs, authors)
+    m05 = None
+    if cfg["task_id"] == "CM-M05":
+        import mod_author
+        m05 = mod_author.prepare(inputs, package, frozen, logs)
     write(inputs / "producer.json", {"schema_version": 1, "task_id": cfg["task_id"], "target": TARGET,
         "provenance": provenance(), "producer_job": os.environ["GITHUB_JOB"], "host": frozen, "authors": authors,
         "entry_invalid": ENTRY_INVALID, "call_invalid": CALL_INVALID,
@@ -252,7 +256,7 @@ def produce():
         "maintained_source": read(logs / "host-source-provenance.json"), "official": host.manifest(inputs / "official"),
         "official_profile_setup": official_setup, "c_layout": read(logs / "output-limit-c-layout.log"),
         "metadata_source_attachment_audit": metadata_audit, "binary_packages": binary_packages,
-        "runtime_sdk": runtime_sdk})
+        "runtime_sdk": runtime_sdk, "m05": m05})
     entries = inventory(inputs)
     write(inputs / "input-manifest.json", {"files": entries, "sha256": digest(entries)})
     write(logs / "consumer-input-links.json", [entry for entry in entries if "link" in entry])
@@ -460,6 +464,8 @@ def self_check():
     managed_package.self_check()
     import runtime_state
     runtime_state.self_check()
+    import mod_author
+    mod_author.self_check()
     with tempfile.TemporaryDirectory() as directory:
         base = Path(directory)
         source = base / "source"
@@ -922,7 +928,7 @@ def observe(directory, evidence):
     observer.check_network_audit()
     scripts = ("fixtures/native-loader/tool_barrier.py", "fixtures/runtime-consumer/driver.py",
                "ci/scripts/mod_manifest.py", "ci/scripts/runtime_sdk.py", "ci/scripts/managed_package.py",
-               "ci/scripts/runtime_state.py")
+               "ci/scripts/runtime_state.py", "ci/scripts/mod_author.py")
     network = []
     sockets = []
     tcp_metadata = []
@@ -1013,7 +1019,10 @@ def consume():
     manifest = validate_inputs(inputs)
     producer = read(inputs / "producer.json")
     assert producer["provenance"] == provenance(), "Input is not from this exact run/attempt/request/source/workflow"
-    assert producer["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04") and producer["target"] == TARGET
+    assert producer["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05") and producer["target"] == TARGET
+    m05_only = producer["task_id"] == "CM-M05" and producer["m05"]["build_kind"] == "mod-only"
+    if producer["task_id"] == "CM-M05":
+        assert producer["m05"]["build_kind"] == os.environ["CM_BUILD_KIND"]
     artifact = Path(os.environ["CM_CI_ARTIFACT_DIR"])
     logs = Path(os.environ["CM_CI_LOG_DIR"])
     artifact.mkdir(parents=True)
@@ -1026,29 +1035,35 @@ def consume():
     sys.path.insert(0, str(inputs / "fixture/ci/scripts"))
     import mod_manifest
     m01_acceptance = None
-    if producer["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04"):
+    if not m05_only and producer["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05"):
         m01_acceptance = {"schema_version": 1, "task_id": "CM-M01", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M01-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(mod_manifest.REPORTS, 1)]}
     m02_acceptance = None
-    if producer["task_id"] in ("CM-M02", "CM-M03", "CM-M04"):
+    if not m05_only and producer["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05"):
         import runtime_sdk
         m02_acceptance = {"schema_version": 1, "task_id": "CM-M02", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M02-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(runtime_sdk.REPORTS, 1)]}
     m03_acceptance = None
-    if producer["task_id"] in ("CM-M03", "CM-M04"):
+    if not m05_only and producer["task_id"] in ("CM-M03", "CM-M04", "CM-M05"):
         import managed_package
         m03_acceptance = {"schema_version": 1, "task_id": "CM-M03", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M03-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(managed_package.REPORTS, 1)]}
     m04_acceptance = None
-    if producer["task_id"] == "CM-M04":
+    if not m05_only and producer["task_id"] in ("CM-M04", "CM-M05"):
         import runtime_state
         m04_acceptance = {"schema_version": 1, "task_id": "CM-M04", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M04-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(runtime_state.REPORTS, 1)]}
-    acceptance = m04_acceptance or m03_acceptance or m02_acceptance or m01_acceptance or p04_acceptance
+    m05_acceptance = None
+    if producer["task_id"] == "CM-M05":
+        import mod_author
+        m05_acceptance = {"schema_version": 1, "task_id": "CM-M05", "target": TARGET, "status": "not_run",
+            "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M05-AC0" + str(index),
+            "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(mod_author.REPORTS, 1)]}
+    acceptance = m05_acceptance or m04_acceptance or m03_acceptance or m02_acceptance or m01_acceptance or p04_acceptance
     write(artifact / "acceptance.json", acceptance)
     stage = "rootfs"
     try:
@@ -1112,7 +1127,10 @@ def consume():
                 "-o", str(trusted / "syscalls"), "--"]
             write(logs / "consumer-command.json", {"command": [*trace, *base, "--", *driver, "matrix"],
                 "cache_mode": "none", "producer_input_manifest_sha256": manifest["sha256"], "provenance": provenance()})
-            commands = [("consumer-matrix", [*trace, *base, "--", *driver, "matrix"], 1800)]
+            commands = [] if m05_only else [("consumer-matrix", [*trace, *base, "--", *driver, "matrix"], 1800)]
+            if m05_acceptance is not None:
+                commands.append(("m05-consumer-matrix", [*trace, *base, "--", *CONSUMER_ENV_PREFIX,
+                    "/usr/bin/python3", "-B", "/fixture/ci/scripts/mod_author.py", "matrix"], 1200))
             if m01_acceptance is not None:
                 commands.append(("m01-consumer-matrix", [*trace, *base, "--", *CONSUMER_ENV_PREFIX,
                     "/usr/bin/python3", "-B", "/fixture/ci/scripts/mod_manifest.py", "matrix"], 1200))
@@ -1120,7 +1138,7 @@ def consume():
                 commands.append(("m02-consumer-matrix", [*trace, *base, "--", *CONSUMER_ENV_PREFIX,
                     "/usr/bin/python3", "-B", "/fixture/ci/scripts/runtime_sdk.py", "matrix"], 1200))
             results = parallel_matrices(logs, commands)
-            result = results["consumer-matrix"]
+            result = results["m05-consumer-matrix" if m05_only else "consumer-matrix"]
             write(logs / "consumer-return.json", {"return_code": result.returncode, "stage": stage})
             for label in ("m01", "m02"):
                 if label + "-consumer-matrix" in results:
@@ -1167,11 +1185,11 @@ def consume():
             assert not canary_hits
             stage = "final read-only input audit"
             assert inventory(root) == closure["files"], "Read-only runtime inputs changed"
-            suite = read(evidence / "suite.json")
+            suite = read(evidence / ("m05/suite.json" if m05_only else "suite.json"))
             assert suite["status"] == "pass"
             missing = read(evidence / "missing-library.json")
             assert missing["status"] == "pass"
-            for name in ("runtime-package-integrity.json", "zero-build-failure-matrix.json"):
+            for name in (() if m05_only else ("runtime-package-integrity.json", "zero-build-failure-matrix.json")):
                 report = read(evidence / name)
                 report["actual_removed_library"] = missing
                 report["actual_library_recovery"] = read(evidence / "actual-missing-library-recovery.json")
@@ -1180,7 +1198,11 @@ def consume():
                 "consumer_job": os.environ["GITHUB_JOB"], "consumer_cache_mode": "none", "target": TARGET,
                 "host": producer["host"], "input_manifest_sha256": manifest["sha256"], "rootfs_sha256": closure["sha256"],
                 "outer_audit": audit, "release_ready": False}
-            if producer["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04"):
+            if m05_acceptance is not None:
+                common["host_origin"] = producer.get("host_origin")
+                common["baseline_origin"] = producer.get("baseline_origin")
+                common["build_kind"] = producer["m05"]["build_kind"]
+            if m01_acceptance is not None:
                 assert read(evidence / "m01/suite.json")["status"] == "pass"
                 stage = "evidence redaction audit"
                 check_evidence_redaction([*evidence.rglob("*.json"), *evidence.rglob("*.jsonl"),
@@ -1189,10 +1211,13 @@ def consume():
                 report["producer_source_attachment_audit"] = producer["metadata_source_attachment_audit"]
                 assert report["producer_source_attachment_audit"]["status"] == "pass"
                 write(evidence / "metadata-only-resolution.json", report)
-            if producer["task_id"] in ("CM-M02", "CM-M03", "CM-M04"):
+            if m02_acceptance is not None:
                 assert read(evidence / "m02/suite.json")["status"] == "pass"
+            if m05_acceptance is not None:
+                check_evidence_redaction([*evidence.rglob("*.json"), *evidence.rglob("*.jsonl"),
+                                          *evidence.rglob("*.log"), *logs.glob("*.log")])
             stage = "acceptance report promotion"
-            report_sets = [p04_acceptance]
+            report_sets = [] if m05_only else [p04_acceptance]
             if m01_acceptance is not None:
                 report_sets.append(m01_acceptance)
             if m02_acceptance is not None:
@@ -1203,6 +1228,9 @@ def consume():
             if m04_acceptance is not None:
                 assert read(evidence / "m04/suite.json")["status"] == "pass"
                 report_sets.append(m04_acceptance)
+            if m05_acceptance is not None:
+                assert read(evidence / "m05/suite.json")["status"] == "pass"
+                report_sets.append(m05_acceptance)
             for report_set in report_sets:
                 for check in report_set["checks"]:
                     path = evidence / Path(check["evidence"][0]).name
@@ -1211,18 +1239,21 @@ def consume():
                     write(path, {**report, **common, "status": "pass"})
                     check.update(status="pass", command="isolated compiler-free consumer: " + report_set["task_id"] + " matrix")
                 report_set["status"] = "pass"
-            if producer["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04"):
+            if m01_acceptance is not None:
                 write(artifact / "p04-baseline-acceptance.json", p04_acceptance)
                 write(logs / "p04-baseline-acceptance.json", p04_acceptance)
-            if producer["task_id"] in ("CM-M02", "CM-M03", "CM-M04"):
+            if m02_acceptance is not None:
                 write(artifact / "m01-baseline-acceptance.json", m01_acceptance)
                 write(logs / "m01-baseline-acceptance.json", m01_acceptance)
-            if producer["task_id"] in ("CM-M03", "CM-M04"):
+            if m03_acceptance is not None:
                 write(artifact / "m02-baseline-acceptance.json", m02_acceptance)
                 write(logs / "m02-baseline-acceptance.json", m02_acceptance)
-            if producer["task_id"] == "CM-M04":
+            if m04_acceptance is not None:
                 write(artifact / "m03-baseline-acceptance.json", m03_acceptance)
                 write(logs / "m03-baseline-acceptance.json", m03_acceptance)
+            if m05_acceptance is not None and not m05_only:
+                write(artifact / "m04-baseline-acceptance.json", m04_acceptance)
+                write(logs / "m04-baseline-acceptance.json", m04_acceptance)
         finally:
             stopped.set()
             thread.join(timeout=1)
