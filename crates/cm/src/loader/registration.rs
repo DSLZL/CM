@@ -506,9 +506,9 @@ impl CompositionMod {
                 let id = unsafe { native::text(descriptor.id, 128)? };
                 let capability = unsafe { native::text(descriptor.capability, 128)? };
                 let resource = unsafe { native::text(descriptor.resource, 128)? };
-                if !(descriptor.kind == cm_abi::v22::KIND_SAMPLING_BUDGET
-                    && resource == cm_abi::v22::SAMPLING_BUDGET_CAPABILITY)
-                    && !crate::runtime::valid_name(&manifest.id, &resource)
+                if !(crate::runtime::valid_name(&manifest.id, &resource)
+                    || descriptor.kind == cm_abi::v22::KIND_SAMPLING_BUDGET
+                        && resource == cm_abi::v22::SAMPLING_BUDGET_CAPABILITY)
                 {
                     return Err(LoadError::native(
                         "negotiate",

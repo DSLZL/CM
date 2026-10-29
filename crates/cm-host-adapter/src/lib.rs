@@ -31,9 +31,9 @@ pub fn append<C: Send + Sync + 'static>(builder: &mut ExtensionRegistryBuilder<C
         }
         let mut sections = BTreeMap::new();
         for contribution in &contributions {
-            if !(contribution.kind == Kind::SamplingBudget
-                && contribution.name == v22::SAMPLING_BUDGET_CAPABILITY)
-                && !runtime::valid_name(&contribution.owner, &contribution.name)
+            if !(runtime::valid_name(&contribution.owner, &contribution.name)
+                || contribution.kind == Kind::SamplingBudget
+                    && contribution.name == v22::SAMPLING_BUDGET_CAPABILITY)
             {
                 return Err(runtime::registration_error(
                     &contribution.owner,
