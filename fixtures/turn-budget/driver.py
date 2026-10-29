@@ -259,6 +259,7 @@ def stop_reply():
 def stop_hook(home, directory):
     command = "/usr/bin/python3 -B /fixture/fixtures/turn-budget/driver.py " + stop_reply.__name__
     command += " " + str(home / "budget-stop.jsonl")
+    mod_manifest.write_toml(home / "config.toml", {"features": {"hooks": True}})
     write(home / "hooks.json", {"hooks": {"Stop": [{"hooks": [
         {"type": "command", "command": command, "timeout": 10}]}]}})
 
@@ -276,13 +277,30 @@ def pending_reply():
 def pending_hook(home, directory):
     command = "/usr/bin/python3 -B /fixture/fixtures/turn-budget/driver.py " + pending_reply.__name__
     command += " " + str(home / "budget-pending-entered.json")
+    mod_manifest.write_toml(home / "config.toml", {"features": {"hooks": True}})
     write(home / "hooks.json", {"hooks": {"Stop": [{"hooks": [
         {"type": "command", "command": command, "timeout": 30}]}]}})
+
+
+def trust_stop_hook(client, home, directory):
+    entries = client.call("hooks/list", {"cwds": [str(directory)]})["data"]
+    assert len(entries) == 1 and not entries[0]["warnings"], entries
+    hooks = entries[0]["hooks"]
+    assert len(hooks) == 1, hooks
+    hook = hooks[0]
+    expected = read(home / "hooks.json")["hooks"]["Stop"][0]["hooks"][0]
+    assert hook["sourcePath"] == str(home / "hooks.json") and hook["command"] == expected["command"], hook
+    assert re.fullmatch(r"[0-9a-f]{64}", hook["currentHash"]), hook
+    client.call("config/batchWrite", {"edits": [{"keyPath": "hooks.state",
+        "value": {hook["key"]: {"trusted_hash": hook["currentHash"]}}, "mergeStrategy": "upsert"}],
+        "reloadUserConfig": True})
+    write(directory / "trusted-stop-hook.json", hook)
 
 
 @ci_progress.case()
 def reentry():
     with session("reentry", "pending-input", 1, desired=1, setup=pending_hook) as (client, provider, home, directory):
+        trust_stop_hook(client, home, directory)
         thread = client.start()
         turn = begin(client, thread, "pending-main")
         entered = home / "budget-pending-entered.json"
@@ -298,6 +316,7 @@ def reentry():
         write(directory / "history.json", history)
         write(directory / "pending-stop-barrier.json", read(entered))
     with session("reentry", "stop-continuation", 1, desired=1, setup=stop_hook) as (client, provider, home, directory):
+        trust_stop_hook(client, home, directory)
         turn = begin(client, client.start(), "stop-continuation")
         complete(client, turn, "failed")
         rows = admissions(directory, turn)
@@ -311,13 +330,15 @@ def reentry():
 
 @ci_progress.case()
 def terminal():
-    with session("terminal", "failed-turn", 1, held=True) as (client, provider, home, directory):
+    with session("terminal", "failed-turn", 1, mode="async") as (client, provider, home, directory):
         thread = client.start()
         turn = begin(client, thread, "terminal-main")
-        provider.entered("terminal-main")
+        sdk = sdk_module()
+        sdk.core.await_barrier(lambda: any(row["event"] == "worker-entered" for row in
+            sdk.rows(directory / "events.jsonl")), client.process, "native tool before pending input")
         client.call("turn/steer", {"threadId": thread, "expectedTurnId": turn,
             "input": [{"type": "text", "text": "CM_M02_terminal-retained", "text_elements": []}]})
-        provider.release.set()
+        (directory / "release").touch()
         completed = complete(client, turn, "failed")
         history = client.call("thread/read", {"threadId": thread, "includeTurns": True})
         encoded = sdk_module().text_values(history)
@@ -408,6 +429,7 @@ def cancellation_recovery():
 
 def cm(home, directory, *arguments, success=True, binary=BINARY):
     sdk = sdk_module()
+    home.parent.mkdir(parents=True, exist_ok=True)
     directory = directory / ("operation-" + str(len(list(directory.glob("operation-*")))))
     directory.mkdir(parents=True, exist_ok=True)
     before = {name: (directory / name).exists() for name in ("native.jsonl", "events.jsonl")}
@@ -501,7 +523,24 @@ def plug_and_play():
 
 
 def self_check():
+    from tempfile import TemporaryDirectory
+    from unittest.mock import Mock
+
     assert policy(2)["request_kinds"] == ["turn"]
+    with TemporaryDirectory() as temporary:
+        home = Path(temporary)
+        for setup in (pending_hook, stop_hook):
+            setup(home, home / "evidence")
+            expected = read(home / "hooks.json")["hooks"]["Stop"][0]["hooks"][0]
+            hook = {"key": "fixture-stop", "sourcePath": str(home / "hooks.json"),
+                "command": expected["command"], "currentHash": "a" * 64}
+            client = Mock()
+            client.call.side_effect = [{"data": [{"warnings": [], "hooks": [hook]}]}, {}]
+            trust_stop_hook(client, home, home / "evidence")
+            assert tomllib.loads((home / "config.toml").read_text())["features"]["hooks"] is True
+            method, request = client.call.call_args.args
+            assert method == "config/batchWrite" and request["reloadUserConfig"] is True
+            assert request["edits"][0]["value"] == {"fixture-stop": {"trusted_hash": "a" * 64}}
     # The six entries must remain independently fingerprintable; no all-cases wrapper.
     from retry import projection
     text = Path(__file__).read_text()
