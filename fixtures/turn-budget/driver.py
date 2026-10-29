@@ -290,7 +290,7 @@ def trust_stop_hook(client, home, directory):
     hook = hooks[0]
     expected = read(home / "hooks.json")["hooks"]["Stop"][0]["hooks"][0]
     assert hook["sourcePath"] == str(home / "hooks.json") and hook["command"] == expected["command"], hook
-    assert re.fullmatch(r"[0-9a-f]{64}", hook["currentHash"]), hook
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", hook["currentHash"]), hook
     client.call("config/batchWrite", {"edits": [{"keyPath": "hooks.state",
         "value": {hook["key"]: {"trusted_hash": hook["currentHash"]}}, "mergeStrategy": "upsert"}],
         "reloadUserConfig": True})
@@ -466,11 +466,34 @@ def plug_and_play():
     cm(home, management, "lock")
 
     def business(name, expected):
-        with session(case, name, 1, home=home) as (client, provider, current, directory):
-            turn = begin(client, client.start(), name)
-            complete(client, turn, expected)
+        sdk = sdk_module()
+        directory = Path("/evidence/g02a") / case / name
+        directory.mkdir(parents=True)
+        provider = Provider()
+        arguments = sdk.command(directory, provider.endpoint, "embedded", token=name)[1:]
+        command = [str(BINARY), "cm", "--home", str(home), "launch", "--", *arguments]
+        try:
+            with (directory / "stdout.jsonl").open("w") as out, (directory / "stderr.log").open("w") as err:
+                result = subprocess.run(command, env=sdk.environment(home, directory), cwd=directory,
+                    stdout=out, stderr=err, timeout=90)
+            write(directory / "result.json", {"command": command, "return_code": result.returncode,
+                "provider_requests": provider.requests, "provider_errors": provider.errors})
+            assert (result.returncode != 0) is (expected == "failed"), (directory / "stderr.log").read_text()
+            assert not provider.errors, provider.errors
             assert len(business_requests(provider)) == (1 if expected == "failed" else 2)
-            return admissions(directory, turn)
+            sdk.settled(directory)
+            native = sdk.core.trace_rows(directory / "native.jsonl")
+            ready = next(row["detail"] for row in native if row["event"] == "ready")
+            assert ready["plan"]["host"]["executable_sha256"] == before_h
+            loaded = any(row["event"] == "init-complete" and row["detail"].get("mod") == OWNER for row in native)
+            if loaded:
+                released = [row for row in native if row["event"] == "userdata-released" and row["detail"]["mod"] == OWNER]
+                assert len(released) == 1 and released[0]["detail"]["count"] == 1, released
+                assert not any(row["seq"] > released[0]["seq"] and row["event"].startswith("runtime-")
+                    and row["detail"].get("mod") == OWNER for row in native), "Callback after budget userdata release"
+            return admissions(directory)
+        finally:
+            provider.close()
 
     assert charged(business("enabled", "failed")) == [1]
     cm(home, management, "disable", OWNER)
@@ -533,14 +556,14 @@ def self_check():
             setup(home, home / "evidence")
             expected = read(home / "hooks.json")["hooks"]["Stop"][0]["hooks"][0]
             hook = {"key": "fixture-stop", "sourcePath": str(home / "hooks.json"),
-                "command": expected["command"], "currentHash": "a" * 64}
+                "command": expected["command"], "currentHash": "sha256:" + "a" * 64}
             client = Mock()
             client.call.side_effect = [{"data": [{"warnings": [], "hooks": [hook]}]}, {}]
             trust_stop_hook(client, home, home / "evidence")
             assert tomllib.loads((home / "config.toml").read_text())["features"]["hooks"] is True
             method, request = client.call.call_args.args
             assert method == "config/batchWrite" and request["reloadUserConfig"] is True
-            assert request["edits"][0]["value"] == {"fixture-stop": {"trusted_hash": "a" * 64}}
+            assert request["edits"][0]["value"] == {"fixture-stop": {"trusted_hash": "sha256:" + "a" * 64}}
     # The six entries must remain independently fingerprintable; no all-cases wrapper.
     from retry import projection
     text = Path(__file__).read_text()
