@@ -118,7 +118,7 @@ struct Tables {
 
 enum Level {
     Scope(std::sync::Weak<ScopeInner>),
-    Failed(LoadError),
+    Failed(Box<LoadError>),
 }
 
 struct Hub {
@@ -449,7 +449,7 @@ pub fn bind_level(level: &str, scope: &Result<Scope, LoadError>) -> Result<(), L
         level.into(),
         match scope {
             Ok(scope) => Level::Scope(Arc::downgrade(&scope.0)),
-            Err(error) => Level::Failed(error.clone()),
+            Err(error) => Level::Failed(Box::new(error.clone())),
         },
     );
     Ok(())
@@ -468,7 +468,7 @@ pub fn check_level(level: &str) -> Result<(), LoadError> {
         }
         match tables.levels.get(level) {
             Some(Level::Scope(scope)) => scope.upgrade().map(Scope),
-            Some(Level::Failed(error)) => return Err(error.clone()),
+            Some(Level::Failed(error)) => return Err(error.as_ref().clone()),
             None => None,
         }
     };
