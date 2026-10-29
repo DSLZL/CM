@@ -1,6 +1,6 @@
 # CM Linux x64 CI
 
-CM source is DSLZL/CM; the independent GitHub-hosted ubuntu-24.04 X64 producer and cache owner is DSLZL/CM-build-linux-x64. The only CM target is x86_64-unknown-linux-gnu. All compilation, checks, tests, smoke runs and experiments execute there. Local work edits and reviews source/configuration and lightweight evidence. The current candidate selects CM-M05 author workflow acceptance and has not run. M04's accepted exact source `41c5fde` / worker `4520956` remains recorded below; it does not qualify the new M05 Host.
+CM source is DSLZL/CM; the independent GitHub-hosted ubuntu-24.04 X64 producer and cache owner is DSLZL/CM-build-linux-x64. The only CM target is x86_64-unknown-linux-gnu. All compilation, checks, tests, smoke runs and experiments execute there. Local work edits and reviews source/configuration and lightweight evidence. The current candidate selects CM-G02A turn sampling budget acceptance; all six checks are not_run. M05's accepted exact product source `dd4890a` / worker `d353841` and its earlier execution origins remain recorded below; they do not qualify the new G02A Host.
 
 ## Publication inputs
 
@@ -10,7 +10,7 @@ The source workflow checks tracked paths against .gitignore, payload/worker mapp
 
 ## Host producer and identity
 
-adapters/codex-e4568a3/source.json pins the original upstream commit/tree, original input hashes and separate official release reference. The worker preserves the complete pristine Git snapshot and original lock, creates a separate Host worktree, applies the five registered patches and copies only the explicit overlay paths. This includes the native runtime/ABI crates, CLI startup, the actual Core gate, terminal exec cleanup, managed launcher/TUI integration and their manifest/lock edges. The existing app-server Clippy cleanup remains explicit. The complete source delta, original/final locks and their hashes are recorded separately from pristine S0. No full upstream development tree is published in CM or bundled with the Host.
+adapters/codex-e4568a3/source.json pins the original upstream commit/tree, original input hashes and separate official release reference. The worker preserves the complete pristine Git snapshot and original lock, creates a separate Host worktree, applies the six registered patches and copies only the explicit overlay paths. This includes the native runtime/ABI crates, CLI startup, the actual Core gate, terminal exec cleanup, managed launcher/TUI integration, main sampling admission and their manifest/lock edges. The existing app-server Clippy cleanup remains explicit. The complete source delta, original/final locks and their hashes are recorded separately from pristine S0. No full upstream development tree is published in CM or bundled with the Host.
 
 The builder runs host.py prepare before loading real Cargo mappings, then installs Rust 1.95.0 and native dependencies. host.py native reuses the pinned upstream V8 resolver and records verified V8 bytes, actual Rust binaries, native tools/packages/files. Generated native identity files are required during cache identification, after materialization; they are not publication inputs. Cargo runs from its manifest directory so workspace .cargo configuration is discovered.
 
@@ -235,3 +235,35 @@ on source `dd4890a` / worker `d353841` reused all three stages: producer 18 seco
 strict consume 13 seconds, no compilation or large artifact uploads. Each run keeps
 original build/execution origins separate from current validation. These scoped
 Linux x64 observations do not establish full program or release readiness.
+
+## G02A candidate
+
+The [turn budget](../docs/turn-budget.md) adds a general Host admission seam and an
+independent `examples/mods/turn-budget` author workspace. Host API 0.7.0 advertises
+`core.turn_sampling_budget.v1`; ABI 2.2 layouts stay unchanged. One new H is required
+for the new framework seam. It is frozen before the separate A author target starts;
+install, restart, disable and remove compile neither artifact.
+
+The six `g02a-*` stages run distinct driver commands and own distinct evidence and
+root reports. Each uses the existing successful-stage checkpoint and outer audit.
+A case-only Python edit invalidates its reachable AST dependencies, preserving
+unaffected passes. Shared helpers, runtime inputs, commands or audit changes
+invalidate their consumers. Producer reuse keeps the original artifact IDs/digests
+and skips compilation and large uploads; current input/isolation checks, validation
+overlay, logs and receipt still run. Necessary input/AST self-checks run before the
+expensive toolchain/build steps and also on a producer hit. Existing observer smoke
+checks retain their helper dependency and run before H compilation.
+
+Counting, real pending-input/Stop continuation, failed terminal/history, scope,
+provider/native cancellation, process resume/fork and managed installation use
+packaged H. Internal model/step and scope branches are separately labelled private
+Core probes, included in M02's existing test executable with no second compilation.
+The strict consumer also runs an actual M05 API 0.6.0 Host from a pinned successful
+qualification receipt/input artifact, only for pre-native installation rejection.
+Its exact path, bytes and metadata-only command are bound by the outer audit.
+Missing/expired reference artifacts block explicitly. P01–M05 regressions retain
+their own reports; only the six G02A reports form this task's acceptance root.
+
+No G02A source CI, Cargo check, runtime case or cold/warm qualification has executed
+for this candidate. A workflow success must still be checked against every report,
+actual jobs, source/workflow revisions and original build/execution provenance.

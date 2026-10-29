@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "configured": true,
-  "task_id": "CM-M05",
+  "task_id": "CM-G02A",
   "required_checks": [
-    "CM-M05-AC01",
-    "CM-M05-AC02",
-    "CM-M05-AC03",
-    "CM-M05-AC04",
-    "CM-M05-AC05",
-    "CM-M05-AC06"
+    "CM-G02A-AC01",
+    "CM-G02A-AC02",
+    "CM-G02A-AC03",
+    "CM-G02A-AC04",
+    "CM-G02A-AC05",
+    "CM-G02A-AC06"
   ],
   "target": "x86_64-unknown-linux-gnu",
   "rust_toolchain": "1.95.0",
@@ -38,7 +38,7 @@
       "no_default_features": false
     }
   ],
-  "acceptance_script": "fixtures/mod-author/acceptance.sh",
+  "acceptance_script": "fixtures/turn-budget/acceptance.sh",
   "cargo_config_files": [
     "adapters/codex-e4568a3/host/codex-rs/.cargo/config.toml"
   ],
@@ -83,7 +83,9 @@
     "crates/cm/src/mod_install.rs",
     "crates/cm/src/launcher.rs",
     "crates/cm/src/state.rs",
-    "crates/cm/src/diagnostics.rs"
+    "crates/cm/src/diagnostics.rs",
+    "crates/cm/src/sampling_budget.rs",
+    "adapters/codex-e4568a3/sampling-budget.patch"
   ],
   "generated_native_identity_files": [
     "adapters/codex-e4568a3/inputs/native.json"

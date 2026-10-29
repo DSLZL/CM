@@ -54,3 +54,7 @@ checkpoints, `rollback --restore` and exact cleanup follow [state management](fi
 Unsupported ABI/capability/backend/platform, missing libraries, incompatible state,
 invalid origin, unavailable CI or expired artifacts fail explicitly. Obtain a
 compatible prebuilt artifact; do not install a compiler or build locally to repair it.
+
+The pending [turn sampling budget candidate](turn-budget.md) uses these same
+commands and a policy in `cm-runtime.toml`. It requires a compatible Host API 0.7.0
+and `core.turn_sampling_budget.v1`; the new increment is not yet qualified.

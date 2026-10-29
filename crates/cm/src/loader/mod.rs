@@ -47,6 +47,7 @@ pub(crate) enum Kind {
     Lifecycle,
     Tool,
     ContextSection,
+    SamplingBudget,
 }
 
 impl Kind {
@@ -61,11 +62,15 @@ impl Kind {
             Self::Lifecycle => cm_abi::v22::KIND_LIFECYCLE,
             Self::Tool => cm_abi::v22::KIND_TOOL,
             Self::ContextSection => cm_abi::v22::KIND_CONTEXT_SECTION,
+            Self::SamplingBudget => cm_abi::v22::KIND_SAMPLING_BUDGET,
         }
     }
 
     pub(crate) fn runtime(&self) -> bool {
-        matches!(self, Self::Lifecycle | Self::Tool | Self::ContextSection)
+        matches!(
+            self,
+            Self::Lifecycle | Self::Tool | Self::ContextSection | Self::SamplingBudget
+        )
     }
 }
 

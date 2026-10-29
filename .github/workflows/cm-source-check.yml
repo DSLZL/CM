@@ -71,7 +71,8 @@ jobs:
           scripts = [*Path("ci/scripts").glob("*.py"), *Path("fixtures/runtime-consumer").glob("*.py"),
                      *Path("fixtures/native-loader").glob("*.py"), *Path("fixtures/host-baseline").glob("*.py"),
                      *Path("fixtures/runtime-sdk").glob("*.py"), *Path("fixtures/managed-package").glob("*.py"),
-                     *Path("fixtures/state").glob("*.py"), *Path("fixtures/mod-author").glob("*.py")]
+                     *Path("fixtures/state").glob("*.py"), *Path("fixtures/mod-author").glob("*.py"),
+                     *Path("fixtures/turn-budget").glob("*.py")]
           for script in scripts:
               py_compile.compile(str(script), cfile=str(Path(os.environ["RUNNER_TEMP"]) / (script.stem + ".pyc")),
                                  doraise=True)
@@ -100,7 +101,9 @@ jobs:
           PY
 
       - name: Check product reuse and partial failure recovery
-        run: python3 -B ci/scripts/retry.py self-check
+        run: |
+          python3 -B ci/scripts/retry.py self-check
+          python3 -B ci/scripts/turn_budget.py self-check
 
       - name: Verify pinned Codex build inputs
         env:

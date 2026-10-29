@@ -318,7 +318,7 @@ pub unsafe extern "C" fn dispatch<T: Mod>(
             let request = &*request;
             if !valid_header::<v22::Request>(request.header)
                 || request.reserved != 0
-                || !(v22::THREAD_START..=v22::SECTION).contains(&request.event)
+                || !(v22::THREAD_START..=v22::SAMPLING_BUDGET).contains(&request.event)
                 || request.handle == Handle::NONE
                 || request.mod_scope == Handle::NONE
                 || request.thread_scope == Handle::NONE

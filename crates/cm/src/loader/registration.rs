@@ -506,7 +506,10 @@ impl CompositionMod {
                 let id = unsafe { native::text(descriptor.id, 128)? };
                 let capability = unsafe { native::text(descriptor.capability, 128)? };
                 let resource = unsafe { native::text(descriptor.resource, 128)? };
-                if !crate::runtime::valid_name(&manifest.id, &resource) {
+                if !(descriptor.kind == cm_abi::v22::KIND_SAMPLING_BUDGET
+                    && resource == cm_abi::v22::SAMPLING_BUDGET_CAPABILITY)
+                    && !crate::runtime::valid_name(&manifest.id, &resource)
+                {
                     return Err(LoadError::native(
                         "negotiate",
                         "runtime name outside owner namespace",
@@ -553,6 +556,7 @@ impl CompositionMod {
                     Kind::Lifecycle => crate::runtime::Kind::Lifecycle,
                     Kind::Tool => crate::runtime::Kind::Tool,
                     Kind::ContextSection => crate::runtime::Kind::ContextSection,
+                    Kind::SamplingBudget => crate::runtime::Kind::SamplingBudget,
                     _ => {
                         return Err(LoadError::native(
                             "negotiate",

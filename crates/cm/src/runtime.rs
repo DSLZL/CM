@@ -10,7 +10,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use cm_abi::{Bytes, ErrorBuffer, Header, v22};
-use serde_json::json;
+use serde_json::{Value, json};
 pub use v22::Handle;
 
 use crate::loader::native;
@@ -25,6 +25,7 @@ pub enum Kind {
     Lifecycle,
     Tool,
     ContextSection,
+    SamplingBudget,
 }
 
 #[derive(Clone, Debug)]
@@ -457,8 +458,12 @@ pub fn bind_level(level: &str, scope: &Result<Scope, LoadError>) -> Result<(), L
 
 /// Low-level Core error gate; Core never depends on the adapter's Rust types.
 pub fn check_level(level: &str) -> Result<(), LoadError> {
+    scope_for_level(level)?.map_or(Ok(()), |scope| scope.check())
+}
+
+pub(crate) fn scope_for_level(level: &str) -> Result<Option<Scope>, LoadError> {
     let Some(hub) = HUB.get() else {
-        return Ok(());
+        return Ok(None);
     };
     let hub = hub.as_ref().map_err(Clone::clone)?;
     let scope = {
@@ -467,12 +472,16 @@ pub fn check_level(level: &str) -> Result<(), LoadError> {
             return Err(error.clone());
         }
         match tables.levels.get(level) {
-            Some(Level::Scope(scope)) => scope.upgrade().map(Scope),
+            Some(Level::Scope(scope)) => Some(Scope(
+                scope
+                    .upgrade()
+                    .ok_or_else(|| failure("stale extension level"))?,
+            )),
             Some(Level::Failed(error)) => return Err(error.as_ref().clone()),
             None => None,
         }
     };
-    scope.map_or(Ok(()), |scope| scope.check())
+    Ok(scope)
 }
 
 pub fn forget_level(level: &str) {
@@ -531,6 +540,7 @@ struct ScopeInner {
     thread_id: String,
     turn_id: String,
     errors: Mutex<Vec<LoadError>>,
+    budget: crate::sampling_budget::Gate,
 }
 
 impl Scope {
@@ -600,6 +610,7 @@ impl Scope {
             thread_id: thread_id.into(),
             turn_id: turn_id.into(),
             errors: Mutex::new(Vec::new()),
+            budget: crate::sampling_budget::Gate::default(),
         })))
     }
 
@@ -614,6 +625,32 @@ impl Scope {
             .first()
             .cloned()
             .map_or(Ok(()), Err)
+    }
+
+    /// The ledger belongs to this actual turn, independent of model/step/client rebuilds.
+    pub async fn admit_sampling(
+        &self,
+        source: &str,
+        request_kind: &str,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<(), LoadError> {
+        self.check()?;
+        if self.0.parent.is_none() {
+            return Err(failure("sampling admission requires a turn scope"));
+        }
+        self.0
+            .budget
+            .admit(self, source, request_kind, cancelled)
+            .await
+    }
+
+    pub(crate) fn identity(&self, instance: Handle) -> Result<(&str, &str, Value), LoadError> {
+        let handle = *self
+            .0
+            .members
+            .get(&instance)
+            .ok_or_else(|| failure("turn scope missing"))?;
+        Ok((&self.0.thread_id, &self.0.turn_id, handle_json(handle)))
     }
 
     pub fn fail(&self, error: LoadError) {
@@ -632,6 +669,7 @@ impl Scope {
     }
 
     pub fn begin_close(&self) -> Result<(), LoadError> {
+        self.0.budget.close()?;
         let hub = hub()?;
         let requests = {
             let mut tables = hub.tables.lock().map_err(|_| lock_error())?;
@@ -911,6 +949,7 @@ pub fn dispatch(
         Kind::Lifecycle => (v22::THREAD_START..=v22::TURN_ERROR).contains(&event_kind),
         Kind::Tool => event_kind == v22::TOOL_CALL,
         Kind::ContextSection => event_kind == v22::SECTION,
+        Kind::SamplingBudget => event_kind == v22::SAMPLING_BUDGET,
     };
     if !expected || ((event_kind >= v22::TURN_START) != scope.0.parent.is_some()) {
         return Err(failure("event/contribution/scope kind mismatch"));

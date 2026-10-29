@@ -4,9 +4,11 @@
 #define CM_RUNTIME_LIFECYCLE "runtime.lifecycle.v1"
 #define CM_RUNTIME_TOOL "runtime.tool.v1"
 #define CM_RUNTIME_CONTEXT_SECTION "runtime.context_section.v1"
+#define CM_SAMPLING_BUDGET_CAPABILITY "core.turn_sampling_budget.v1"
 #define CM_RUNTIME_KIND_LIFECYCLE 6u
 #define CM_RUNTIME_KIND_TOOL 7u
 #define CM_RUNTIME_KIND_CONTEXT_SECTION 8u
+#define CM_RUNTIME_KIND_SAMPLING_BUDGET 9u
 #define CM_THREAD_START 1u
 #define CM_THREAD_READY 2u
 #define CM_THREAD_RESUME 3u
@@ -18,6 +20,7 @@
 #define CM_TURN_ERROR 9u
 #define CM_TOOL_CALL 10u
 #define CM_SECTION 11u
+#define CM_SAMPLING_BUDGET 12u
 #define CM_RUNTIME_SUCCEEDED 0u
 #define CM_RUNTIME_FAILED 1u
 #define CM_RUNTIME_CANCELLED 2u

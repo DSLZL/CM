@@ -30,6 +30,7 @@ pub mod package;
 pub mod profile;
 pub mod runtime;
 pub mod runtime_plan;
+pub mod sampling_budget;
 pub mod state;
 pub mod tool_policy;
 

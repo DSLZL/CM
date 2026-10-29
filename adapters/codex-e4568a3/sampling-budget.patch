@@ -1,0 +1,34 @@
+diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
+--- a/codex-rs/core/src/session/turn.rs
++++ b/codex-rs/core/src/session/turn.rs
+@@ -569,3 +569,30 @@
++            // One admission per logical main request, outside HTTP/stream retries.
++            let source = match &turn_context.session_source {
++                SessionSource::Cli => "cli",
++                SessionSource::VSCode => "vscode",
++                SessionSource::Exec => "exec",
++                _ => "other",
++            };
++            tokio::select! {
++                biased;
++                _ = cancellation_token.cancelled() => {
++                    return Err(CodexErrorDetails::TurnAborted.into());
++                }
++                result = cm_runtime::sampling_budget::admit(
++                    turn_context.extension_data.level_id(),
++                    source,
++                    "turn",
++                    || cancellation_token.is_cancelled(),
++                ) => {
++                    if let Err(error) = result {
++                        if cancellation_token.is_cancelled() {
++                            return Err(CodexErrorDetails::TurnAborted.into());
++                        }
++                        return Err(CodexErr::Fatal(error.to_string()));
++                    }
++                }
++            }
++
+             run_sampling_request(
+                 Arc::clone(&sess),
+                 Arc::clone(&step_context),

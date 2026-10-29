@@ -1,0 +1,72 @@
+format_version = 3
+id = "org.example.turn-budget"
+version = "0.1.0"
+kind = "sdk"
+dependencies = []
+conflicts = []
+resources = []
+
+# The author step seals these fields from the built ELF before packaging.
+[binary]
+path = "payload.so"
+size = 0
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+target = "x86_64-unknown-linux-gnu"
+entry = "cm_mod_entry_v2"
+glibc_min = "2.17"
+cpu = "x86-64"
+
+[compat]
+abi_major = 2
+abi_minor_min = 2
+abi_minor_max = 2
+host_api_min = "0.7.0"
+required_capabilities = ["core.turn_sampling_budget.v1"]
+
+[[contributions]]
+id = "main-sampling"
+kind = "sampling_budget"
+capability = "core.turn_sampling_budget.v1"
+resource = "core.turn_sampling_budget.v1"
+
+[config]
+schema_version = 1
+defaults = {}
+
+[config.schema]
+type = "object"
+additionalProperties = false
+
+[config.schema.properties.policy]
+type = "object"
+additionalProperties = false
+required = ["max_main_samples", "session_sources", "request_kinds"]
+
+[config.schema.properties.policy.properties.max_main_samples]
+type = "integer"
+minimum = 1
+maximum = 4294967295
+
+[config.schema.properties.policy.properties.session_sources]
+type = "array"
+minItems = 1
+maxItems = 3
+
+[config.schema.properties.policy.properties.session_sources.items]
+type = "string"
+enum = ["cli", "vscode", "exec"]
+
+[config.schema.properties.policy.properties.request_kinds]
+type = "array"
+minItems = 1
+maxItems = 1
+
+[config.schema.properties.policy.properties.request_kinds.items]
+type = "string"
+enum = ["turn"]
+
+[provenance]
+repository = "https://github.com/DSLZL/CM"
+revision = "89e1255083df94f8a78959ac12b0dff4d5acc9c9"
+release_notes = "Runtime-turn main sampling budget; unfinished-turn budgets are not persisted across processes."
+license = "Apache-2.0"

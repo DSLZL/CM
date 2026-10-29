@@ -80,6 +80,10 @@ def native_probe_source(root):
     shutil.copyfile(test_source, core / "src/cm_runtime_native.rs")
     with (core / "src/thread_manager_tests.rs").open("a") as stream:
         stream.write('\ninclude!("cm_runtime_native.rs");\n')
+        from linux_ci import load_config
+        if load_config(root)["task_id"] == "CM-G02A":
+            shutil.copyfile(root / "fixtures/turn-budget/scope_probe.rs", core / "src/cm_turn_budget.rs")
+            stream.write('include!("cm_turn_budget.rs");\n')
     manifest = core / "Cargo.toml"
     text = manifest.read_text()
     assert text.count("[dev-dependencies]\n") == 1

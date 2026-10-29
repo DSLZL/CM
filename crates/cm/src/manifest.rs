@@ -206,7 +206,7 @@ impl BinaryManifest {
             }
         }
         if abi.required_capabilities.is_empty()
-            || abi.required_capabilities.len() > 7
+            || abi.required_capabilities.len() > 8
             || abi
                 .required_capabilities
                 .iter()

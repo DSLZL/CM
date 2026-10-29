@@ -273,6 +273,7 @@ fn phase(kind: &Kind) -> &'static str {
         Kind::Lifecycle => "lifecycle",
         Kind::Tool => "tool",
         Kind::ContextSection => "context_section",
+        Kind::SamplingBudget => "sampling_budget",
     }
 }
 
@@ -447,7 +448,13 @@ fn resolve(
                     Kind::Lifecycle => cm_abi::v22::LIFECYCLE,
                     Kind::Tool => cm_abi::v22::TOOL,
                     Kind::ContextSection => cm_abi::v22::CONTEXT_SECTION,
+                    Kind::SamplingBudget => cm_abi::v22::SAMPLING_BUDGET_CAPABILITY,
                     _ => unreachable!("runtime kind"),
+                };
+                let valid_resource = if contribution.kind == Kind::SamplingBudget {
+                    contribution.resource == capability
+                } else {
+                    crate::runtime::valid_name(id, &contribution.resource)
                 };
                 manifest.format_version == 3
                     && manifest.abi_major == 2
@@ -456,7 +463,7 @@ fn resolve(
                     && manifest
                         .required_capabilities
                         .contains(&contribution.capability)
-                    && crate::runtime::valid_name(id, &contribution.resource)
+                    && valid_resource
                     && contribution.priority == 0
                     && contribution.order_before.is_empty()
                     && contribution.order_after.is_empty()
@@ -492,7 +499,11 @@ fn resolve(
                     runtime_names.insert(name, format!("{id}::{}", contribution.id))
                 {
                     let mut error = failure(
-                        "runtime_name_collision",
+                        if contribution.kind == Kind::SamplingBudget {
+                            "exclusive_conflict"
+                        } else {
+                            "runtime_name_collision"
+                        },
                         id,
                         Some(&contribution.id),
                         &format!(
@@ -943,6 +954,92 @@ fn prepare_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn budget_manifest(id: &str) -> Manifest {
+        let hash = "a".repeat(64);
+        let revision = "b".repeat(40);
+        let text = format!(
+            r#"format_version = 3
+id = "{id}"
+version = "0.1.0"
+kind = "sdk"
+[binary]
+path = "payload.so"
+size = 1
+sha256 = "{hash}"
+target = "x86_64-unknown-linux-gnu"
+entry = "cm_mod_entry_v2"
+glibc_min = "2.17"
+cpu = "x86-64"
+[compat]
+abi_major = 2
+abi_minor_min = 2
+abi_minor_max = 2
+host_api_min = "0.7.0"
+required_capabilities = ["core.turn_sampling_budget.v1"]
+[[contributions]]
+id = "budget"
+kind = "sampling_budget"
+capability = "core.turn_sampling_budget.v1"
+resource = "core.turn_sampling_budget.v1"
+[provenance]
+repository = "https://example.com/fixture"
+revision = "{revision}"
+release_notes = "metadata-only fixture"
+license = "Apache-2.0"
+"#
+        );
+        crate::manifest::parse(text.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn sampling_budget_is_exclusive_and_requires_the_exact_host_capability() {
+        let capability = cm_abi::v22::SAMPLING_BUDGET_CAPABILITY;
+        let host = HostIdentity {
+            build_id: format!("sha256:{}", "a".repeat(64)),
+            executable_sha256: "b".repeat(64),
+            target: loader::TARGET.into(),
+            api_version: "0.7.0".into(),
+            capabilities: vec![capability.into()],
+            abis: vec!["2.2".into()],
+        };
+        let config = ConfigIdentity {
+            present: false,
+            sha256: None,
+            mods: BTreeMap::new(),
+        };
+        let mut selected = BTreeMap::from([(
+            "budget-a".into(),
+            (budget_manifest("budget-a"), "c".repeat(64)),
+        )]);
+        let plan = resolve(&selected, host.clone(), config.clone(), BTreeMap::new()).unwrap();
+        assert_eq!(plan.phases["sampling_budget"], ["budget-a::budget"]);
+        let mut missing = host.clone();
+        missing.capabilities.clear();
+        let error = resolve(&selected, missing, config.clone(), BTreeMap::new())
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "unknown_capability");
+        assert!(!error.already_native_executed);
+        let mut older = host.clone();
+        older.api_version = "0.6.0".into();
+        let error = resolve(&selected, older, config.clone(), BTreeMap::new())
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "compatibility");
+        assert!(!error.already_native_executed);
+        selected.insert(
+            "budget-b".into(),
+            (budget_manifest("budget-b"), "d".repeat(64)),
+        );
+        let error = resolve(&selected, host, config, BTreeMap::new())
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "exclusive_conflict");
+        assert_eq!(error.resource.as_deref(), Some(capability));
+        assert_eq!(error.related_contributions.len(), 2);
+        assert!(!error.already_native_executed);
+    }
 
     #[test]
     fn stable_topology_is_independent_of_edge_insertion_and_detects_cycles() {

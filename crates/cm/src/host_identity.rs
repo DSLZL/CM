@@ -20,7 +20,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing Host build identity"))?;
         assert_eq!(build_id.len(), "sha256:".len() + 64);
         assert!(build_id.starts_with("sha256:"));
-        assert_eq!(identity["stage"], "mod-author-workflow");
+        assert_eq!(identity["stage"], "turn-sampling-budget");
         assert_eq!(
             identity["capabilities"],
             serde_json::json!([
@@ -30,7 +30,8 @@ mod tests {
                 "runtime.lifecycle.v1",
                 "runtime.tool.v1",
                 "runtime.context_section.v1",
-                "state.files.v1"
+                "state.files.v1",
+                "core.turn_sampling_budget.v1"
             ])
         );
         assert!(identity.get("artifact_sha256").is_none());

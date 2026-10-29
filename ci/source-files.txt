@@ -9,6 +9,7 @@ adapters/codex-e4568a3/host-lock.patch
 adapters/codex-e4568a3/managed.patch
 adapters/codex-e4568a3/native.patch
 adapters/codex-e4568a3/runtime.patch
+adapters/codex-e4568a3/sampling-budget.patch
 adapters/codex-e4568a3/source.json
 ci/README.md
 ci/scripts/acceptance_cache.py
@@ -26,6 +27,7 @@ ci/scripts/runtime_composition.py
 ci/scripts/runtime_consumer.py
 ci/scripts/runtime_sdk.py
 ci/scripts/runtime_state.py
+ci/scripts/turn_budget.py
 ci/scripts/worker_policy.py
 ci/source-files.txt
 ci/worker-files.json
@@ -66,6 +68,7 @@ crates/cm/src/package.rs
 crates/cm/src/profile.rs
 crates/cm/src/runtime.rs
 crates/cm/src/runtime_plan.rs
+crates/cm/src/sampling_budget.rs
 crates/cm/src/state.rs
 crates/cm/src/tool_policy.rs
 docs/mod-manifest.md
@@ -74,6 +77,11 @@ docs/mod-user-guide.md
 docs/managed-package.md
 docs/runtime-sdk.md
 docs/file-state.md
+docs/turn-budget.md
+examples/mods/turn-budget/Cargo.lock
+examples/mods/turn-budget/Cargo.toml
+examples/mods/turn-budget/mod.toml
+examples/mods/turn-budget/src/lib.rs
 fixtures/host-baseline/acceptance.sh
 fixtures/host-baseline/test_identity.py
 fixtures/managed-package/acceptance.sh
@@ -117,6 +125,9 @@ fixtures/runtime-sdk/host_scopes.rs
 fixtures/runtime-sdk/layout.c
 fixtures/state/acceptance.sh
 fixtures/state/driver.py
+fixtures/turn-budget/acceptance.sh
+fixtures/turn-budget/driver.py
+fixtures/turn-budget/scope_probe.rs
 schemas/cm-runtime.schema.json
 schemas/mod-lock.schema.json
 schemas/mod.schema.json

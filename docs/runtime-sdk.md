@@ -20,6 +20,10 @@ Host 不链接具体 Mod。`fixtures/mods/lifecycle-audit` 和 `example-tool` �
 | `runtime.tool.v1` | `tool` | 接收 JSON object，返回 JSON 值的普通模型工具 |
 | `runtime.context_section.v1` | `context_section` | 在模型请求前渲染 UTF-8 上下文 section |
 
+CM-G02A 候选另增 API 0.7.0 的 `core.turn_sampling_budget.v1` / `sampling_budget`，
+沿用 ABI 2.2 布局，使用独占全局预算资源。该增量尚未验收；策略、错误、恢复限制和
+独立检查点见 [主采样预算](turn-budget.md)，不继承上面的 M02 验收结论。
+
 资源名必须为 `<Mod ID>__<局部名称>`，仅含 ASCII 小写字母、数字、`_`、`-`，
 总长最多 64 字节。因此包含点号的 Mod ID 当前不能声明这三种运行时贡献。
 名称、kind、capability、贡献 ID 必须与二进制入口的描述表完全一致。
