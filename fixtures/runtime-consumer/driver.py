@@ -415,10 +415,15 @@ def matrix():
 
 def missing_library():
     context = read(Path("/fixture/missing-library.json"))
+    removed = Path(context["removed_library"])
+    assert str(removed) in read(INPUTS / "host/cm-runtime-files.json")["system_files"]
+    assert not removed.exists()
     report = startup("failures/missing-library", PROFILE, require_cm=False)
     assert not report["trace"]
-    assert Path(context["removed_library"]).name in report["stderr"]
-    assert "CM package" in report["stderr"] or "error while loading shared libraries" in report["stderr"]
+    if "CM package [package]" in report["stderr"]:
+        assert "already_native_executed=false" in report["stderr"]
+    else:
+        assert "error while loading shared libraries" in report["stderr"] and removed.name in report["stderr"]
     write(EVIDENCE / "missing-library.json", {"status": "pass", "mutation": context, "result": report})
 
 
