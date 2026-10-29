@@ -663,6 +663,7 @@ fn resolve(
         "lifecycle",
         "tool",
         "context_section",
+        "sampling_budget",
     ] {
         let nodes: BTreeSet<_> = hooks
             .iter()
@@ -683,7 +684,7 @@ fn resolve(
         }
         if !matches!(
             name,
-            "output_limit" | "lifecycle" | "tool" | "context_section"
+            "output_limit" | "lifecycle" | "tool" | "context_section" | "sampling_budget"
         ) || !order.is_empty()
         {
             phases.insert(name.into(), order);
