@@ -61,6 +61,13 @@ async fn cm_review_nondestructive() {
     let _guard = runtime();
     let (mut composer, mut rx) = new_composer("  Unicode 中文 draft\nsecond line  ");
     composer.handle_paste("x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 200));
+    composer.insert_selected_mention(0..0, "$docs", Some("/skills/original/SKILL.md"));
+    let image = PathBuf::from(std::env::var_os("CM_REVIEW_IMAGE").expect("image fixture"));
+    composer.attach_image(image.clone());
+    composer.attach_image(image);
+    composer.set_remote_image_urls(vec!["https://example.invalid/review.png".into()]);
+    assert_eq!(composer.attachments.local_images().len(), 2);
+    assert!(!composer.draft.mention_bindings.is_empty());
     let before = snapshot(&composer);
     assert!(composer.cm_review_key(KeyCode::Enter.into()));
     assert_eq!(snapshot(&composer), before);
