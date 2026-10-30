@@ -63,6 +63,8 @@ def probe(case, *, changed=False):
     names += ["chatwidget::tests::cm_review_probe::cm_review_" + name for name in {
         "entry-coverage": ["programmatic", "admission"], "queue-lifecycle": ["queue"],
     }.get(case, [])]
+    if case == "entry-coverage":
+        names.append("app::tests::cm_review_probe::cm_review_programmatic_events")
     sdk = module("runtime-sdk/driver.py")
     for index, name in enumerate(names):
         run = directory / str(index)

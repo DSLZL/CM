@@ -140,6 +140,7 @@ examples/mods/review-before-send/Cargo.toml
 examples/mods/review-before-send/mod.toml
 examples/mods/review-before-send/src/lib.rs
 fixtures/review-before-send/acceptance.sh
+fixtures/review-before-send/app_probe.rs
 fixtures/review-before-send/composer_probe.rs
 fixtures/review-before-send/dispatch_probe.rs
 fixtures/review-before-send/driver.py

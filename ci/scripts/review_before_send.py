@@ -135,6 +135,9 @@ def native_probe_source(root):
     shutil.copyfile(root / "fixtures/review-before-send/dispatch_probe.rs", tui / "chatwidget/tests/cm_review_probe.rs")
     with (tui / "chatwidget/tests.rs").open("a") as stream:
         stream.write('\n#[path = "tests/cm_review_probe.rs"]\nmod cm_review_probe;\n')
+    shutil.copyfile(root / "fixtures/review-before-send/app_probe.rs", tui / "app/tests/cm_review_probe.rs")
+    with (tui / "app/tests.rs").open("a") as stream:
+        stream.write('\n#[path = "tests/cm_review_probe.rs"]\nmod cm_review_probe;\n')
     return probe
 
 
