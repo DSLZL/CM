@@ -62,8 +62,17 @@ async fn cm_review_cli_image() {
     chat.submit_initial_user_message_if_pending();
     assert!(!chat.bottom_pane.cm_review_pending());
     assert_no_submit_op(&mut ops);
+    // MCP startup changes task state; keep its draft intent until that state settles.
+    chat.mcp_startup_status = Some(Default::default());
+    chat.bottom_pane.set_task_running(true);
     chat.restore_startup_input_when_ready(&mut startup_draft, &mut startup_submission);
     assert!(startup_draft.is_none());
+    assert!(chat.input_queue.startup_submission.is_some());
+    assert!(!chat.bottom_pane.cm_review_pending());
+    assert_no_submit_op(&mut ops);
+    chat.finish_mcp_startup(Vec::new(), Vec::new());
+    chat.restore_startup_input_when_ready(&mut startup_draft, &mut startup_submission);
+    assert!(chat.input_queue.startup_submission.is_none());
     assert!(chat.bottom_pane.cm_review_pending());
     let before = chat.bottom_pane.composer_draft_snapshot();
     assert_eq!(before.local_images.len(), 1);

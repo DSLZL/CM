@@ -1009,7 +1009,15 @@ diff --git a/codex-rs/tui/src/chatwidget/startup_submission.rs b/codex-rs/tui/sr
 index 7c2f0ca..9669e92 100644
 --- a/codex-rs/tui/src/chatwidget/startup_submission.rs
 +++ b/codex-rs/tui/src/chatwidget/startup_submission.rs
-@@ -65,6 +65,9 @@ impl ChatWidget {
+@@ -51,6 +51,7 @@ impl ChatWidget {
+             || self.startup_submission_has_protected_input()
+             || self.is_plan_streaming_in_tui()
+             || self.is_user_turn_pending_or_running()
++            || cm_runtime::tui_review::configured() && self.mcp_startup_status.is_some()
+             || self.input_queue.submissions_paused()
+             || self.input_queue.rate_limit_recovery_pending
+             || self.input_queue.recovered_queue
+@@ -65,6 +66,9 @@ impl ChatWidget {
              return;
          }
          let Some(confirmed) = self.input_queue.startup_submission.take() else {
@@ -1019,7 +1027,7 @@ index 7c2f0ca..9669e92 100644
              crate::startup_recovery::clear();
              return;
          };
-@@ -79,6 +82,12 @@ impl ChatWidget {
+@@ -79,6 +83,12 @@ impl ChatWidget {
          {
              return;
          }
