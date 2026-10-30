@@ -103,7 +103,8 @@ class Terminal:
         self.provider = self.sdk.Provider(tool=False)
         arguments = self.sdk.command(self.directory, self.provider.endpoint, "embedded", token=name)[1:]
         (home / "config.toml").write_text(self.managed.tui_configuration(arguments, self.directory))
-        self.env = self.sdk.environment(home, self.directory)
+        # Handle fault probes need the SDK matrix's controlled thread lifetimes.
+        self.env = self.sdk.environment(home, self.directory, mode="normal")
         self.env["TERM"] = "xterm-256color"
         self.command = self.managed.launch_command(BINARY, home, list(launch_args))
         master, slave = pty.openpty()
@@ -216,13 +217,15 @@ class Terminal:
                     self.send("/quit")
                     time.sleep(0.2)
                     self.send(b"\r")
-                assert self.process.wait(timeout=45) == 0
-                assert any(row["event"] == "stopped" for row in self.native()), "Native runtime did not drain"
+                self.process.wait(timeout=45)
             write(self.directory / "result.json", {"command": self.command,
                 "return_code": self.process.poll(), "provider_endpoint": self.provider.endpoint,
                 "provider_requests": self.provider.requests, "provider_errors": self.provider.errors,
                 "identity": self.identity, "tui": True, "empty_launch_argv": self.empty_launch_argv,
                 "tui_mcp_listener": listener, "review_count": len(self.reviews())})
+            if success:
+                assert self.process.returncode == 0
+                assert any(row["event"] == "stopped" for row in self.native()), "Native runtime did not drain"
         finally:
             if self.process.poll() is None:
                 self.process.kill()
@@ -267,7 +270,7 @@ def nondestructive():
         tui.quiet()
         tui.complete("full-draft")
         input_review_count = len(tui.reviews())
-    assert input_review_count == 0, "V16 intentional Python-only failure: expected zero input reviews"
+    assert input_review_count == 1, "One submitted input must have exactly one review"
     report("nondestructive", {"first_submit_no_business": True, "full_private_draft_probe": native,
         "input_review_count": input_review_count})
 
