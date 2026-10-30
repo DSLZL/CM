@@ -246,6 +246,55 @@ async fn cm_review_key_events() {
 #[ignore = "requires frozen hosted Linux B profile"]
 async fn cm_review_entry_coverage() {
     let _guard = runtime();
+    for (case, text, key) in [
+        ("bare", "/init", KeyCode::Enter),
+        ("popup", "/di", KeyCode::Enter),
+        ("inline", "/plan investigate this", KeyCode::Enter),
+        ("selected-tail", "/plan investigate this", KeyCode::Enter),
+        ("service-tier", "/fast", KeyCode::Enter),
+        ("skills-tab", "/skills", KeyCode::Tab),
+    ] {
+        let (mut composer, mut rx) = new_composer("");
+        composer.set_collaboration_modes_enabled(true);
+        composer.set_service_tier_commands_enabled(true);
+        composer.set_service_tier_commands(vec![ServiceTierCommand {
+            id: "priority".into(), name: "fast".into(), description: "Fast inference".into(),
+        }]);
+        composer.set_text_content(text.into(), Vec::new(), Vec::new());
+        if matches!(case, "bare" | "inline") {
+            composer.popups.active = ActivePopup::None;
+        } else {
+            assert!(matches!(composer.popups.active, ActivePopup::Command(_)), "{case}: command popup");
+        }
+        let before = snapshot(&composer);
+        assert!(composer.cm_review_key(key.into()), "{case}: review intercepted");
+        assert_eq!(snapshot(&composer), before, "{case}: first key side effect");
+        prepared(&mut composer, &mut rx).await;
+        assert_eq!(snapshot(&composer), before, "{case}: preparation side effect");
+        let result = confirm(&mut composer, &mut rx).await;
+        match (case, result) {
+            ("bare", InputResult::Command(SlashCommand::Init))
+            | ("popup", InputResult::Command(SlashCommand::Diff))
+            | ("skills-tab", InputResult::Command(SlashCommand::Skills)) => {}
+            ("inline" | "selected-tail", InputResult::CommandWithArgs(SlashCommand::Plan, args, elements)) => {
+                assert_eq!(args, "investigate this");
+                assert!(elements.is_empty());
+            }
+            ("service-tier", InputResult::ServiceTierCommand(command)) => {
+                assert_eq!(command.id, "priority");
+                assert_eq!(command.name, "fast");
+            }
+            (case, result) => panic!("{case}: unexpected confirmed action {result:?}"),
+        }
+        assert!(composer.cm_take_receipt().is_some(), "{case}: reviewed command receipt");
+        assert!(composer.cm_take_receipt().is_none(), "{case}: duplicate receipt");
+    }
+    let (mut completion_only, _) = new_composer("/di");
+    assert!(!completion_only.cm_review_key(KeyCode::Tab.into()));
+    assert_eq!(completion_only.handle_key_event(KeyCode::Tab.into()).0, InputResult::None);
+    assert_eq!(completion_only.current_text(), "/diff ");
+    assert!(!completion_only.cm_review_pending());
+    assert!(completion_only.cm_take_receipt().is_none());
     for (text, intent) in [("prompt", "send"), ("!echo retained", "send"), ("/init", "command")] {
         let (mut composer, mut rx) = new_composer(text);
         let before = snapshot(&composer);
