@@ -90,18 +90,19 @@ def probe(case, *, changed=False):
 
 
 class Terminal:
-    def __init__(self, case, name, home, *, reviewed=True):
+    def __init__(self, case, name, home, *, reviewed=True, launch_args=()):
         self.sdk = module("runtime-sdk/driver.py")
         self.managed = module("managed-package/driver.py")
         self.directory = Path("/evidence/review") / case / name
         self.directory.mkdir(parents=True)
         self.home, self.reviewed = home, reviewed
+        self.empty_launch_argv = not launch_args
         self.provider = self.sdk.Provider(tool=False)
         arguments = self.sdk.command(self.directory, self.provider.endpoint, "embedded", token=name)[1:]
         (home / "config.toml").write_text(self.managed.tui_configuration(arguments, self.directory))
         self.env = self.sdk.environment(home, self.directory)
         self.env["TERM"] = "xterm-256color"
-        self.command = self.managed.launch_command(BINARY, home, [])
+        self.command = self.managed.launch_command(BINARY, home, list(launch_args))
         master, slave = pty.openpty()
         self.master, self.output = master, bytearray()
         self.reader_error = None
@@ -163,8 +164,11 @@ class Terminal:
             self.send(text)
             time.sleep(0.2)
         self.send(key)
-        self.wait(lambda: len(self.reviews()) > before, "native review prepared")
-        prepared = self.reviews()[before]["detail"]
+        self.wait_review(before)
+
+    def wait_review(self, index):
+        self.wait(lambda: len(self.reviews()) > index, "native review prepared")
+        prepared = self.reviews()[index]["detail"]
         self.wait(lambda: any(row["event"] == "tui-review-ready"
             and row["detail"]["actor"] == prepared["actor"]
             and row["detail"]["review_id"] == prepared["review_id"]
@@ -201,7 +205,7 @@ class Terminal:
             write(self.directory / "result.json", {"command": self.command,
                 "return_code": self.process.poll(), "provider_endpoint": self.provider.endpoint,
                 "provider_requests": self.provider.requests, "provider_errors": self.provider.errors,
-                "identity": self.identity, "tui": True, "empty_launch_argv": True,
+                "identity": self.identity, "tui": True, "empty_launch_argv": self.empty_launch_argv,
                 "tui_mcp_listener": listener, "review_count": len(self.reviews())})
         finally:
             if self.process.poll() is None:
@@ -215,11 +219,11 @@ class Terminal:
 
 
 @contextmanager
-def terminal(case, name, *, home=None, enabled=True):
+def terminal(case, name, *, home=None, enabled=True, launch_args=()):
     if home is None:
         home = Path("/profile/review") / case / name
         install(home, enabled)
-    process = Terminal(case, name, home, reviewed=enabled)
+    process = Terminal(case, name, home, reviewed=enabled, launch_args=launch_args)
     try:
         yield process
     except BaseException:
@@ -281,7 +285,19 @@ def entry_coverage():
         tui.send(b"\x1b\x03")
         tui.review("CM_M02_command")
         tui.complete("command")
-    report("entry-coverage", {"commands_not_dispatched_before_y": True, "startup_and_programmatic": native})
+    image = Path("/profile/review/entry-coverage/probe-0/review.png")
+    with terminal("entry-coverage", "cli-image",
+            launch_args=["--image", str(image), "--", "CM_M02_cli-image"]) as tui:
+        tui.wait_review(0)
+        tui.quiet()
+        tui.send(b"\r\t\r")
+        tui.quiet()
+        tui.complete("cli-image")
+        request = next(row for row in tui.provider.requests if row["purpose"] == "business")
+        assert "input_image" in tui.sdk.text_values(request["input"])
+        assert "data:image/" in tui.sdk.text_values(request["input"])
+    report("entry-coverage", {"commands_not_dispatched_before_y": True,
+        "cli_initial_prompt_and_image_reviewed": True, "startup_and_programmatic": native})
 
 
 @ci_progress.case()
