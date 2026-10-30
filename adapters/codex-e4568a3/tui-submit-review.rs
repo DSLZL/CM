@@ -189,11 +189,12 @@ impl ChatComposer {
     }
 
     pub(crate) fn cm_invalidate_review(&mut self) {
-        self.cm_review.generation = self
-            .cm_review
-            .generation
-            .checked_add(1)
-            .expect("review version exhausted");
+        if let Some(generation) = self.cm_review.generation.checked_add(1) {
+            self.cm_review.generation = generation;
+        } else {
+            self.cm_review.actor = uuid::Uuid::new_v4().to_string();
+            self.cm_review.generation = 1;
+        }
         self.cm_review.pending = None;
         self.cm_review.receipt = None;
     }
@@ -513,7 +514,9 @@ impl ChatComposer {
             }
             KeyCode::Enter | KeyCode::Tab => return true,
             KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown => {
-                let pending = self.cm_review.pending.as_mut().expect("pending review");
+                let Some(pending) = self.cm_review.pending.as_mut() else {
+                    return true;
+                };
                 let amount = if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
                     10
                 } else {
@@ -542,20 +545,15 @@ impl ChatComposer {
                     );
                     return true;
                 }
-                let pending = self.cm_review.pending.as_mut().expect("pending review");
+                let Some(pending) = self.cm_review.pending.as_mut() else {
+                    return true;
+                };
+                let Some(work) = pending.work.as_ref() else {
+                    return true;
+                };
+                let files = work.files.clone();
+                let images = work.images.clone();
                 pending.validating = true;
-                let files = pending
-                    .work
-                    .as_ref()
-                    .expect("prepared review")
-                    .files
-                    .clone();
-                let images = pending
-                    .work
-                    .as_ref()
-                    .expect("prepared review")
-                    .images
-                    .clone();
                 let tx = self.app_event_tx.clone();
                 let actor = self.cm_review.actor.clone();
                 let generation = pending.generation;

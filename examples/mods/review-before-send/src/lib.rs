@@ -20,16 +20,29 @@ struct ReviewInput {
 
 fn validate(input: &[u8]) -> Result<(), String> {
     let input: ReviewInput = serde_json::from_slice(input).map_err(|_| "invalid review request")?;
-    if input.schema_version != 1 || input.actor.is_empty() || input.actor.len() > 128
-        || input.review_id == 0 || input.origin.len() > 128 || input.preview.len() > 8192
+    if input.schema_version != 1
+        || input.actor.is_empty()
+        || input.actor.len() > 128
+        || input.review_id == 0
+        || input.origin.len() > 128
+        || input.preview.len() > 8192
         || !["send", "queue", "command"].contains(&input.intent.as_str())
         || input.content_sha256.len() != 64
-        || !input.content_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !input
+            .content_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
     {
         return Err("invalid review identity or bounded preview".into());
     }
     // Counts describe the Host-owned full snapshot; the preview cannot authorize it.
-    let _ = (input.edit_version, input.text_bytes, input.attachments, input.mentions, input.preview_truncated);
+    let _ = (
+        input.edit_version,
+        input.text_bytes,
+        input.attachments,
+        input.mentions,
+        input.preview_truncated,
+    );
     Ok(())
 }
 
@@ -44,15 +57,23 @@ fn create(init: Init) -> Result<ReviewBeforeSend, String> {
 
 impl Mod for ReviewBeforeSend {
     fn dispatch(&mut self, request: Request) -> Result<(), String> {
-        if request.event != v22::SUBMIT_REVIEW || request.route != 1
-            || request.thread_scope != v22::Handle::NONE || request.turn_scope != v22::Handle::NONE
-            || !request.thread_id.is_empty() || !request.turn_id.is_empty()
+        if request.event != v22::SUBMIT_REVIEW
+            || request.route != 1
+            || request.thread_scope != v22::Handle::NONE
+            || request.turn_scope != v22::Handle::NONE
+            || !request.thread_id.is_empty()
+            || !request.turn_id.is_empty()
         {
             return Err("review requires an owned UI request without Core scopes".into());
         }
         validate(&request.input)?;
-        self.0.complete(request.handle, v22::SUCCEEDED,
-            br#"{"schema_version":1,"require_review":true}"#, true)
+        self.0
+            .complete(
+                request.handle,
+                v22::SUCCEEDED,
+                br#"{"schema_version":1,"require_review":true}"#,
+                true,
+            )
             .map_err(|_| "review completion rejected".into())
     }
 
@@ -71,7 +92,12 @@ const CONTRIBUTIONS: &[v22::RuntimeContribution] = &[v22::RuntimeContribution {
     route: 1,
 }];
 
-cm_sdk::export_mod!(ReviewBeforeSend, "org.example.review-before-send", create, crate::CONTRIBUTIONS);
+cm_sdk::export_mod!(
+    ReviewBeforeSend,
+    "org.example.review-before-send",
+    create,
+    crate::CONTRIBUTIONS
+);
 
 #[cfg(test)]
 mod tests {

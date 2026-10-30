@@ -135,6 +135,14 @@ async fn cm_review_invalidation() {
     assert!(composer.cm_review_completed(failed).is_none());
     assert!(composer.cm_take_receipt().is_none());
     assert_eq!(snapshot(&composer), before);
+
+    let actor = composer.cm_review.actor.clone();
+    composer.cm_review.generation = u64::MAX;
+    composer.cm_invalidate_review();
+    assert_ne!(composer.cm_review.actor, actor);
+    assert_eq!(composer.cm_review.generation, 1);
+    assert!(composer.cm_take_receipt().is_none());
+    assert_eq!(snapshot(&composer), before);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

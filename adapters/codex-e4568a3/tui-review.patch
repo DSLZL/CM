@@ -262,7 +262,7 @@ index 756c2d6..3f3fed8 100644
              status,
              composer: composer_rect,
 diff --git a/codex-rs/tui/src/bottom_pane/mod.rs b/codex-rs/tui/src/bottom_pane/mod.rs
-index 90ed97e..898b975 100644
+index 90ed97e..9404c72 100644
 --- a/codex-rs/tui/src/bottom_pane/mod.rs
 +++ b/codex-rs/tui/src/bottom_pane/mod.rs
 @@ -52,6 +52,10 @@ use crate::tui::FrameRequester;
@@ -276,11 +276,10 @@ index 90ed97e..898b975 100644
  use codex_app_server_protocol::SkillMetadata;
  use codex_app_server_protocol::ToolRequestUserInputParams;
  use codex_features::Features;
-@@ -4323,3 +4327,28 @@ mod tests {
-         assert_eq!(lower_view_handle_calls.get(), 0);
+@@ -2654,6 +2658,31 @@ impl Renderable for BottomPane {
      }
  }
-+
+ 
 +impl BottomPane {
 +    pub(crate) fn cm_review_context(&mut self, route: String, ready: bool) {
 +        self.composer.cm_review_context(route, ready);
@@ -305,6 +304,10 @@ index 90ed97e..898b975 100644
 +        self.composer.cm_startup_review()
 +    }
 +}
++
+ #[cfg(test)]
+ mod tests {
+     #[path = "actionable_banner_tests.rs"]
 diff --git a/codex-rs/tui/src/chatwidget/backend_banners.rs b/codex-rs/tui/src/chatwidget/backend_banners.rs
 index e769319..4a24ad2 100644
 --- a/codex-rs/tui/src/chatwidget/backend_banners.rs
@@ -331,10 +334,10 @@ index 8ef5040..c22beee 100644
              permission_shortcut_pending: false,
              show_welcome_banner: is_first_run,
 diff --git a/codex-rs/tui/src/chatwidget/image_submission.rs b/codex-rs/tui/src/chatwidget/image_submission.rs
-index 832104c..51dfaeb 100644
+index 832104c..dd76892 100644
 --- a/codex-rs/tui/src/chatwidget/image_submission.rs
 +++ b/codex-rs/tui/src/chatwidget/image_submission.rs
-@@ -172,3 +172,76 @@ fn prepare_images(
+@@ -172,3 +172,78 @@ fn prepare_images(
          })
          .collect()
  }
@@ -343,8 +346,9 @@ index 832104c..51dfaeb 100644
 +    images: Vec<LocalImageAttachment>,
 +    remote_urls: Vec<String>,
 +) -> Result<crate::bottom_pane::ReviewWork, String> {
-+    let _guard = IMAGE_PREPARATION.lock().await;
++    let permit = IMAGE_PREPARATION.lock().await;
 +    tokio::task::spawn_blocking(move || {
++        let _permit = permit;
 +        let remote_bytes = remote_urls
 +            .iter()
 +            .try_fold(0_usize, |bytes, url| bytes.checked_add(url.len()))
@@ -369,8 +373,9 @@ index 832104c..51dfaeb 100644
 +
 +pub(crate) async fn revalidate_cm_review_images(files: &[(PathBuf, String)]) -> Result<(), String> {
 +    let files = files.to_vec();
-+    let _guard = IMAGE_PREPARATION.lock().await;
++    let permit = IMAGE_PREPARATION.lock().await;
 +    tokio::task::spawn_blocking(move || {
++        let _permit = permit;
 +        let current = cm_image_identities(files.iter().map(|(path, _)| path.clone()))?;
 +        if current != files {
 +            return Err("attachment contents changed; review again".into());
