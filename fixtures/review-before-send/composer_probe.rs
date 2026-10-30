@@ -293,9 +293,8 @@ async fn cm_review_entry_coverage() {
         assert_eq!(snapshot(&composer), before, "{case}: preparation side effect");
         assert_eq!(preparations(), initial_preparations, "{case}: preparation before Y");
         let result = confirm(&mut composer, &mut rx).await;
-        let expected_preparations = usize::from(matches!(case, "inline" | "selected-tail"));
-        assert_eq!(preparations(), initial_preparations + expected_preparations, "{case}: confirmed preparation count");
-        eprintln!("CM preparation calls: command={case}, review=0, confirmed={expected_preparations}");
+        assert_eq!(preparations(), initial_preparations, "{case}: raw command dispatch must not prepare arguments");
+        eprintln!("CM preparation calls: command={case}, review=0, composer dispatch=0");
         match (case, result) {
             ("bare", InputResult::Command(SlashCommand::Init))
             | ("popup", InputResult::Command(SlashCommand::Diff))

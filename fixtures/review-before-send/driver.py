@@ -72,6 +72,8 @@ def probe(case, *, changed=False):
         home = Path("/profile/review") / case / ("probe-" + str(index))
         install(home)
         env = sdk.environment(home, run)
+        # The private App fixture needs more stack than libtest's default thread.
+        env["RUST_MIN_STACK"] = str(64 * 1024 * 1024)
         env["CM_REVIEW_PROBE_PROFILE"] = str(home)
         image = home / "review.png"
         def chunk(kind, data):
@@ -83,6 +85,7 @@ def probe(case, *, changed=False):
         with (run / "stdout.log").open("w") as out, (run / "stderr.log").open("w") as err:
             result = subprocess.run(command, env=env, cwd=run, stdout=out, stderr=err, timeout=90)
         write(run / "result.json", {"command": command, "return_code": result.returncode,
+            "rust_min_stack": env["RUST_MIN_STACK"],
             "probe_sha256": sha(INPUTS / "probes/cm-review-tui"), "production_cli_sha256": sha(BINARY)})
         assert result.returncode == 0, (name, (run / "stderr.log").read_text(), (run / "stdout.log").read_text())
         assert "1 passed" in (run / "stdout.log").read_text(), "Exact probe name did not execute"
@@ -389,11 +392,27 @@ def plug_and_play():
     cm(home, directory, "enable", OWNER)
     sdk = module("runtime-sdk/driver.py")
     provider = sdk.Provider(tool=False)
+    backend_rejections = []
     try:
         arguments = sdk.command(directory, provider.endpoint, "embedded", token="unsupported-exec")[1:]
-        rejected_exec = cm(home, directory, "launch", "--", *arguments, success=False)
-        rejected_stdio = cm(home, directory, "launch", "--", "app-server", "--listen", "stdio://", success=False)
-        assert rejected_exec["stage"] == rejected_stdio["stage"] == "backend"
+        for name, launch_args in (("exec", arguments), ("stdio", ["app-server", "--listen", "stdio://"])):
+            run = directory / ("unsupported-" + name)
+            run.mkdir()
+            command = [str(BINARY), "cm", "--home", str(home), "launch", "--", *launch_args]
+            result = subprocess.run(command, env=sdk.environment(home, run), cwd=run,
+                capture_output=True, text=True, timeout=90)
+            write(run / "result.json", {"command": command, "return_code": result.returncode,
+                "stdout": result.stdout, "stderr": result.stderr})
+            assert result.returncode != 0, name
+            assert "CM backend [backend] mod=- (already_native_executed=false):" in result.stderr, result.stderr
+            trace = sdk.rows(run / "native.jsonl")
+            assert [row["event"] for row in trace] == ["planned", "startup-failed"], trace
+            assert all(row["detail"]["already_native_executed"] is False for row in trace), trace
+            diagnostic = trace[-1]["detail"]
+            assert diagnostic["stage"] == diagnostic["code"] == "backend", diagnostic
+            assert diagnostic["reason"] == "input_rejected" and diagnostic["actual"]["native_executed"] is False, diagnostic
+            assert not (run / "events.jsonl").exists(), "Unsupported backend ran a Mod callback"
+            backend_rejections.append({"backend": name, "diagnostic": diagnostic, "trace": run.relative_to(directory).as_posix()})
         assert not provider.requests, "Unsupported backend opened business"
     finally:
         provider.close()
@@ -425,7 +444,8 @@ def plug_and_play():
         assert not tui.reviews()
     assert sha(BINARY) == frozen
     report(case, {"managed_install_disable_enable_remove": True, "old_host_rejected_before_native": rejected_old,
-        "exclusive_conflict": rejected, "host_bytes_unchanged": True, "probe": native, "protocol_cases": protocols})
+        "exclusive_conflict": rejected, "host_bytes_unchanged": True, "probe": native, "protocol_cases": protocols,
+        "backend_rejections": backend_rejections})
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-# 发送前审核（CM-G02B，待独立验收）
+# 发送前审核（CM-G02B）
 
 `org.example.review-before-send` 是独立编译的原生 Mod B。安装后在本地 Embedded
 TUI 中，第一次正常提交只展示审核面板；按 **Y** 才提交一次，**Esc** 返回编辑。
@@ -56,9 +56,11 @@ plug-and-play。实际打包 H 通过 PTY、受控 provider 和 Worktrees MCP �
 
 生产者冻结 H 后才独立构建 B。A 使用已验收 payload 原样回归，不重新编译。
 探针有独立编译缓存；仅改 Python 驱动或自检时复用 H、B、探针和大输入工件。
+Actions 的 `reuse_run_id` 可指定必须复用的生产 run；输入或环境不匹配时在构建前失败。
 每个验收阶段按 AST 依赖计算检查点，失败阶段独立重跑；共享依赖变化使对应检查点失效。
 当前 rootfs、命名空间隔离、外部执行/网络审计、API 与来源收据每轮仍重新验证。
-消费者无源码、编译器、Cargo lock、构建缓存或 CI 服务凭据，进度每 30 秒输出。
+消费者只带受审 Python 驱动和预编译工件，不带 Host/Rust 源码、编译器、Cargo lock、
+构建缓存或 CI 服务凭据；进度每 30 秒输出。
 
-当前仅完成本地源码准备，六项验收保持 NOT_RUN；构建、格式、clippy 和运行测试
-须在独立 hosted ubuntu-24.04 X64 GNU Actions 执行。本文件不表示发布就绪。
+构建、格式、clippy 和运行验收统一在独立 hosted ubuntu-24.04 X64 GNU Actions 执行。
+验收记录绑定源码、工作流和工件摘要；其他平台与版本发布需分别验证。
