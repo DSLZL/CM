@@ -243,6 +243,8 @@ def produce():
 
 def self_check():
     from retry import PHASES, projection
+    from unittest.mock import patch
+    import runtime_consumer
     assert list(CASES) == [label.removeprefix("review-") for label in PHASES if label.startswith("review-")]
     text = (Path(__file__).resolve().parents[2] / "fixtures/review-before-send/driver.py").read_text()
     names = ("nondestructive", "invalidation", "key_events", "entry_coverage", "queue_lifecycle", "plug_and_play")
@@ -252,6 +254,21 @@ def self_check():
     assert all(projection(changed, (name,)) == original[name] for name in names[1:])
     manifest = tomllib.loads((Path(__file__).resolve().parents[2] / "examples/mods/review-before-send/mod.toml").read_text())
     assert manifest["id"] == OWNER and manifest["compat"]["required_capabilities"] == [CAPABILITY]
+    probe = {"path": "/inputs/probes/cm-review-tui", "sha256": "a" * 64, "separate_from_cli": True}
+    producer = {"review": {"probe": probe, "cases": list(CASES)}}
+    call = '1 execve("' + probe["path"] + '", ["' + probe["path"] + '", "--ignored", "--exact", ' \
+        '"chatwidget::tests::cm_review_probe::cm_review_cli_image", "--nocapture"], 0x1) = 0'
+    with patch.object(runtime_consumer, "read", return_value=producer), \
+            patch.object(runtime_consumer, "sha", return_value=probe["sha256"]) as hashed:
+        assert runtime_consumer.bind_review_probes([call], Path("/consumer")) == [probe["path"]]
+        for invalid in (call.replace("cli_image", "unregistered"), call.replace('"--exact"', '"--list"'), call):
+            if invalid == call:
+                hashed.return_value = "b" * 64
+            try:
+                runtime_consumer.bind_review_probes([invalid], Path("/consumer"))
+            except AssertionError:
+                continue
+            raise AssertionError("Unbound review probe accepted: " + invalid)
 
 
 if __name__ == "__main__":

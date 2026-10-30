@@ -1094,7 +1094,7 @@ def bind_review_probes(executions, root):
     dispatch_prefix = "chatwidget::tests::cm_review_probe::cm_review_"
     names = {prefix + case.replace("-", "_") for case in review["cases"]}
     names.add(prefix + "protocol")
-    names.update(dispatch_prefix + name for name in ("programmatic", "admission", "queue"))
+    names.update(dispatch_prefix + name for name in ("programmatic", "admission", "queue", "cli_image"))
     names.add("app::tests::cm_review_probe::cm_review_programmatic_events")
     for line in executions:
         if 'execve("' + probe["path"] + '"' in line:
