@@ -266,7 +266,10 @@ def nondestructive():
         tui.review("\x1b[200~CM_M02_full-draft 中文 " + "x" * 1500 + "\x1b[201~")
         tui.quiet()
         tui.complete("full-draft")
-    report("nondestructive", {"first_submit_no_business": True, "full_private_draft_probe": native})
+        input_review_count = len(tui.reviews())
+    assert input_review_count == 0, "V16 intentional Python-only failure: expected zero input reviews"
+    report("nondestructive", {"first_submit_no_business": True, "full_private_draft_probe": native,
+        "input_review_count": input_review_count})
 
 
 @ci_progress.case()
