@@ -222,7 +222,11 @@ class Terminal:
 def terminal(case, name, *, home=None, enabled=True, launch_args=()):
     if home is None:
         home = Path("/profile/review") / case / name
-        install(home, enabled)
+        directory = Path("/evidence/review") / case / ("management-" + name)
+        for owner in ("lifecycle-audit", "example-tool"):
+            cm(home, directory, "install", INPUTS / "mods/m02" / owner / "normal")
+        if enabled:
+            cm(home, directory, "install", INPUTS / "mods/g02b/review-before-send.cmod")
     process = Terminal(case, name, home, reviewed=enabled, launch_args=launch_args)
     try:
         yield process
@@ -338,8 +342,14 @@ def protocol_cases():
         expected_release = 0 if mode in ("error", "panic") else 1
         assert len([row for row in rows if row["event"] == "request-release"]) == expected_release, rows
         if expected_release == 0:
-            assert "pinned" in (directory / "stderr.log").read_text() or any(
-                "pinned" in json.dumps(row) for row in sdk.rows(directory / "native.jsonl")), "Nonquiescent request was not pinned"
+            native = sdk.rows(directory / "native.jsonl")
+            assert any(row["event"] == "runtime-ui-failed" and row["detail"].get("mod_id") == OWNER
+                and row["detail"].get("resource") == "tui.submit_review.v1"
+                and (row["detail"].get("native_status") or 0) > 0 for row in native), native
+            assert any(row["event"] == "release-failed" and row["detail"].get("mod_id") == OWNER
+                and row["detail"]["code"] == "runtime" for row in native), native
+            assert not any(row["event"] == "userdata-released" and row["detail"]["mod"] == OWNER
+                for row in native), "Nonquiescent request userdata was released"
         if mode in ("duplicate", "stale", "late"):
             assert any(row["event"] == mode + "-completion" and row["code"] != 0 for row in rows), rows
         results.append({"mode": mode, "callbacks": rows})

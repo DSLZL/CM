@@ -321,7 +321,12 @@ async fn cm_review_entry_coverage() {
     composer.cm_review_context("embedded-ready".into(), true);
     assert!(composer.cm_startup_review());
     prepared(&mut composer, &mut rx).await;
-    assert!(matches!(confirm(&mut composer, &mut rx).await, InputResult::Submitted { .. }));
+    match confirm(&mut composer, &mut rx).await {
+        InputResult::Queued { text, .. } => assert_eq!(text, "startup handoff"),
+        result => panic!("startup handoff was not queued: {result:?}"),
+    }
+    assert!(composer.cm_take_receipt().is_some());
+    assert!(composer.cm_take_receipt().is_none());
     let (mut question, _) = new_composer("question answer");
     question.config.slash_commands_enabled = false;
     assert!(!question.cm_review_key(KeyCode::Enter.into()));
@@ -401,7 +406,9 @@ async fn cm_review_protocol() {
     } else {
         let error = shutdown.expect_err("protocol failure remains visible at shutdown");
         if matches!(mode.as_str(), "error" | "panic") {
-            assert!(error.to_string().contains("pinned"));
+            assert_eq!(error.stage, "runtime");
+            assert!(error.already_native_executed);
+            assert_eq!(error.mod_id.as_deref(), Some("org.example.review-before-send"));
         }
         eprintln!("controlled shutdown failure: {error}");
     }

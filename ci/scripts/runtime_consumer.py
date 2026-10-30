@@ -579,9 +579,11 @@ def self_check():
             'execve("/proc/self/fd/3", ["bwrap", "--version"], 0x1) = 0',
             'execve("/inputs/host/codex-path/rg", ["rg"], 0x1) = 0']) + "\n")
         (trusted / "syscalls.101").write_text('openat(AT_FDCWD, "/inputs/host/bin/codex", O_RDONLY) = 4\n')
+        (trusted / "syscalls.102").write_text("")
         with patch.dict(sys.modules, observer=observer):
             report = observe(trusted, evidence)
-        assert report["status"] == "pass" and report["trace_files"] == ["syscalls.100", "syscalls.101"]
+        assert report["status"] == "pass" and report["trace_files"] == ["syscalls.100", "syscalls.101", "syscalls.102"]
+        assert (trusted / "syscalls.102").read_text() == ""
         assert report["bound_host_executables"] == bound and report["file_load_count"] == 2
         assert report["sandbox_aliases"] == [{"path": alias, "target": unicode_host}]
         tui = {"command": ["/inputs/host/bin/codex", "cm", "--home", "/profile/m03/tui", "launch", "--"],
@@ -596,6 +598,16 @@ def self_check():
             "port": "8080", "listener_inode": "81", "accepted_socket_inodes": ["71"]}
         m04_tui = tui | {"command": [*tui["command"][:3], "/profile/m04/tui", "launch", "--"]}
         assert bind_tui_mcp_listener(m04_tui, metadata, bound, observer) == bind_tui_mcp_listener(tui, metadata, bound, observer)
+        image_tui = tui | {"command": [*tui["command"][:3], "/profile/review/entry-coverage/cli-image", "launch", "--",
+            "--image", "/profile/review/entry-coverage/probe-0/review.png", "--", "CM_M02_cli-image"], "empty_launch_argv": False}
+        assert bind_tui_mcp_listener(image_tui, metadata, bound, observer) == bind_tui_mcp_listener(tui, metadata, bound, observer)
+        for change in ({"empty_launch_argv": True}, {"command": [*image_tui["command"][:-1], "other-prompt"]},
+                       {"command": [*image_tui["command"][:7], "/profile/other.png", *image_tui["command"][8:]]}):
+            try:
+                bind_tui_mcp_listener(image_tui | change, metadata, bound, observer)
+            except AssertionError:
+                continue
+            raise AssertionError("Unbound initial image arguments accepted: " + repr(change))
         for change in ({"tui": False}, {"empty_launch_argv": False},
                        {"command": [*tui["command"], "exec"]}, {"provider_requests": []},
                        {"command": [*tui["command"][:3], "/profile/m04/other", "launch", "--"]},
@@ -948,11 +960,13 @@ def bind_host_executables(executions, root):
 
 def bind_tui_mcp_listener(record, metadata, bound_hosts, observer):
     command = record["command"]
-    assert len(command) == 6 and command[:3] == ["/inputs/host/bin/codex", "cm", "--home"]
-    assert command[4:] == ["launch", "--"]
+    assert len(command) >= 6 and command[:3] == ["/inputs/host/bin/codex", "cm", "--home"]
+    initial_image = command[3] == "/profile/review/entry-coverage/cli-image"
+    expected = ["launch", "--", "--image", "/profile/review/entry-coverage/probe-0/review.png", "--", "CM_M02_cli-image"] if initial_image else ["launch", "--"]
+    assert command[4:] == expected
     assert command[3] in ("/profile/m03/tui", "/profile/m04/tui") or re.fullmatch(
         r"/profile/review/(?:nondestructive|invalidation|key-events|entry-coverage|queue-lifecycle|plug-and-play)/[a-z0-9-]+", command[3])
-    assert record["tui"] and record["empty_launch_argv"]
+    assert record["tui"] and record["empty_launch_argv"] is (not initial_image)
     assert record["identity"]["proc_exe"] == command[0]
     assert record["identity"]["executable_sha256"] == bound_hosts[command[0]]
     assert any(item.get("name") == "mcp__codex_worktrees" for request in record["provider_requests"] for item in request["tools"])
@@ -990,7 +1004,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
     for index, path in enumerate(trace_files, 1):
         assert path.suffix[1:].isdigit(), path
         pid = path.suffix[1:]
-        text = redact_trace("\n".join(pid + " " + line for line in path.read_text().splitlines()) + "\n", observer)
+        text = redact_trace("".join(pid + " " + line + "\n" for line in path.read_text().splitlines()), observer)
         path.write_text(text, encoding="utf-8")
         assert not re.search(r'\b(?:sendto|recvfrom)\([^\n]*?, "(?!<payload redacted>)', text)
         calls = observer.complete_syscalls(text.splitlines())
@@ -1081,6 +1095,7 @@ def bind_review_probes(executions, root):
     names = {prefix + case.replace("-", "_") for case in review["cases"]}
     names.add(prefix + "protocol")
     names.update(dispatch_prefix + name for name in ("programmatic", "admission", "queue"))
+    names.add("app::tests::cm_review_probe::cm_review_programmatic_events")
     for line in executions:
         if 'execve("' + probe["path"] + '"' in line:
             assert '"--exact"' in line and any('"' + name + '"' in line for name in names), line
@@ -1422,7 +1437,7 @@ def consume():
                     # No raw payload escapes on exception paths either.
                     text = path.read_text()
                     if not re.match(r'^\d+ ', text):
-                        text = "\n".join(path.suffix[1:] + " " + line for line in text.splitlines()) + "\n"
+                        text = "".join(path.suffix[1:] + " " + line + "\n" for line in text.splitlines())
                     path.write_text(redact_trace(text, observer), encoding="utf-8")
                     target = evidence / "traces" / path.relative_to(temp / "trusted-observer")
                     target.parent.mkdir(parents=True, exist_ok=True)
