@@ -61,7 +61,7 @@ def probe(case, *, changed=False):
     directory.mkdir(parents=True)
     names = ["bottom_pane::chat_composer::submit_review::cm_probe::cm_review_" + case.replace("-", "_")]
     names += ["chatwidget::tests::cm_review_probe::cm_review_" + name for name in {
-        "entry-coverage": ["programmatic", "admission"], "queue-lifecycle": ["queue"],
+        "entry-coverage": ["programmatic", "admission", "cli_image"], "queue-lifecycle": ["queue"],
     }.get(case, [])]
     if case == "entry-coverage":
         names.append("app::tests::cm_review_probe::cm_review_programmatic_events")
@@ -182,9 +182,7 @@ class Terminal:
         time.sleep(0.35)
         assert len(self.provider.requests) == before == 0, "Business started before explicit Y"
 
-    def complete(self, token):
-        self.send("y")
-        self.wait(lambda: self.managed.tui_message_visible(self.output, token), "reviewed provider response")
+    def wait_turns(self):
         def turns_settled():
             native = self.native()
             opened = {(row["detail"]["thread"], row["detail"]["turn"]) for row in native
@@ -193,6 +191,11 @@ class Terminal:
                 if row["event"] == "runtime-scope-closed" and row["detail"]["turn"]}
             return bool(opened) and opened <= closed
         self.wait(turns_settled, "native turns settled before next input")
+
+    def complete(self, token):
+        self.send("y")
+        self.wait(lambda: self.managed.tui_message_visible(self.output, token), "reviewed provider response")
+        self.wait_turns()
         requests = [row for row in self.provider.requests if row["purpose"] == "business"]
         assert len(requests) == 1 and not self.provider.errors, (requests, self.provider.errors)
         assert any("CM_M02_" + token in self.sdk.text_values(row["input"]) for row in requests)
@@ -201,6 +204,8 @@ class Terminal:
         try:
             listener = None
             if success:
+                # A visible reply can precede completion of the auxiliary title turn.
+                self.wait_turns()
                 listener = self.managed.tui_mcp_listener(self.process.pid)
                 assert any(item.get("name") == "mcp__codex_worktrees"
                     for row in self.provider.requests for item in row["tools"])

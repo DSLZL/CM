@@ -48,6 +48,36 @@ async fn cm_review_programmatic() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires frozen hosted Linux B profile"]
+async fn cm_review_cli_image() {
+    let _guard = runtime();
+    let (mut chat, mut rx, mut ops) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let image = std::path::PathBuf::from(std::env::var_os("CM_REVIEW_IMAGE").expect("image"));
+    let initial = create_initial_user_message(Some("CLI image".into()), vec![image.clone()], Vec::new())
+        .expect("initial message");
+    assert!(initial.text_elements.is_empty());
+    chat.initial_user_message = Some(initial);
+    chat.submit_initial_user_message_if_pending();
+    let before = chat.bottom_pane.composer_draft_snapshot();
+    assert_eq!(before.local_images.len(), 1);
+    assert_eq!(before.local_images[0].path, image);
+    assert!(before.text_elements.iter().any(|element| {
+        element.placeholder(&before.text) == Some(before.local_images[0].placeholder.as_str())
+    }));
+    assert!(chat.initial_user_message.is_none());
+    assert_no_submit_op(&mut ops);
+    review_event(&mut chat, &mut rx, false).await;
+    assert_eq!(chat.bottom_pane.composer_draft_snapshot(), before);
+    chat.submit_initial_user_message_if_pending();
+    assert_no_submit_op(&mut ops);
+    chat.handle_key_event(KeyCode::Char('y').into());
+    review_event(&mut chat, &mut rx, true).await;
+    assert!(matches!(next_submit_op(&mut ops), Op::UserTurn { .. }));
+    assert_no_submit_op(&mut ops);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires frozen hosted Linux B profile"]
 async fn cm_review_admission() {
     let _guard = runtime();
     let (mut chat, mut rx, mut ops) = make_chatwidget_manual(None).await;
