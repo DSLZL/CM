@@ -150,7 +150,8 @@ mod tests {
             {
                 return v22::INVALID;
             }
-            let actual = unsafe { std::slice::from_raw_parts(completion.result.data, result.len()) };
+            let actual =
+                unsafe { std::slice::from_raw_parts(completion.result.data, result.len()) };
             if actual != result {
                 return v22::INVALID;
             }
