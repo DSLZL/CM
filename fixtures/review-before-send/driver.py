@@ -182,6 +182,14 @@ class Terminal:
     def complete(self, token):
         self.send("y")
         self.wait(lambda: self.managed.tui_message_visible(self.output, token), "reviewed provider response")
+        def turns_settled():
+            native = self.native()
+            opened = {(row["detail"]["thread"], row["detail"]["turn"]) for row in native
+                if row["event"] == "runtime-scope-open" and row["detail"]["turn"]}
+            closed = {(row["detail"]["thread"], row["detail"]["turn"]) for row in native
+                if row["event"] == "runtime-scope-closed" and row["detail"]["turn"]}
+            return bool(opened) and opened <= closed
+        self.wait(turns_settled, "native turns settled before next input")
         requests = [row for row in self.provider.requests if row["purpose"] == "business"]
         assert len(requests) == 1 and not self.provider.errors, (requests, self.provider.errors)
         assert any("CM_M02_" + token in self.sdk.text_values(row["input"]) for row in requests)
@@ -247,7 +255,7 @@ def report(case, checks):
 def nondestructive():
     native = probe("nondestructive")
     with terminal("nondestructive", "full-draft") as tui:
-        tui.review("CM_M02_full-draft 中文 " + "x" * 1500)
+        tui.review("\x1b[200~CM_M02_full-draft 中文 " + "x" * 1500 + "\x1b[201~")
         tui.quiet()
         tui.complete("full-draft")
     report("nondestructive", {"first_submit_no_business": True, "full_private_draft_probe": native})
@@ -364,6 +372,8 @@ def plug_and_play():
     home = Path("/profile/review") / case / "managed"
     directory = Path("/evidence/review") / case / "management"
     frozen = sha(BINARY)
+    for owner in ("lifecycle-audit", "example-tool"):
+        cm(home, directory, "install", INPUTS / "mods/m02" / owner / "normal")
     cm(home, directory, "install", INPUTS / "mods/g02b/review-before-send.cmod")
     with terminal(case, "enabled", home=home) as tui:
         tui.review("CM_M02_enabled")

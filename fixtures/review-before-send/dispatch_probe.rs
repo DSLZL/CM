@@ -55,7 +55,11 @@ async fn cm_review_admission() {
     chat.bottom_pane.insert_str("reviewed once");
     let before = chat.bottom_pane.composer_draft_snapshot();
     chat.handle_key_event(KeyCode::Enter.into());
-    assert_eq!(chat.bottom_pane.composer_draft_snapshot(), before);
+    let mut after = chat.bottom_pane.composer_draft_snapshot();
+    assert!(after.last_composer_activity_at.is_some());
+    // Real key input records activity before the Composer review intercept.
+    after.last_composer_activity_at = before.last_composer_activity_at;
+    assert_eq!(after, before);
     assert_no_submit_op(&mut ops);
     review_event(&mut chat, &mut rx, false).await;
     chat.handle_key_event(KeyCode::Enter.into());

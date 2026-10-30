@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use std::io::Write;
 
 const DECISION: &[u8] = br#"{"schema_version":1,"require_review":true}"#;
+static LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 struct Fixture {
     host: Host,
@@ -10,6 +11,7 @@ struct Fixture {
 }
 
 fn record(event: &str, code: u32) {
+    let _lock = LOG.lock().expect("fault log lock");
     let path = std::env::var_os("CM_REVIEW_FAULT_LOG").expect("fault log");
     let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path).expect("open log");
     writeln!(file, "{{\"event\":\"{event}\",\"code\":{code}}}").expect("record");
