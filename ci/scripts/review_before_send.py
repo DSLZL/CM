@@ -123,6 +123,11 @@ def native_probe_source(root):
          "#[derive(Clone, Debug)]\npub(crate) struct ChatComposerHistory"),
         ("bottom_pane/paste_burst.rs", "#[derive(Clone, Default)]\npub(crate) struct PasteBurst",
          "#[derive(Clone, Debug, Default)]\npub(crate) struct PasteBurst"),
+        ("bottom_pane/chat_composer.rs",
+         "        pending_paste_handling: PendingPasteHandling,\n    ) -> Option<(String, Vec<TextElement>)> {\n",
+         "        pending_paste_handling: PendingPasteHandling,\n    ) -> Option<(String, Vec<TextElement>)> {\n"
+         "        #[cfg(test)]\n"
+         "        submit_review::CM_PREPARATION_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n"),
     ):
         path = tui / relative
         text = path.read_text()
@@ -131,6 +136,7 @@ def native_probe_source(root):
     destination = tui / "bottom_pane/chat_composer/cm_review_probe.rs"
     shutil.copyfile(root / "fixtures/review-before-send/composer_probe.rs", destination)
     with (tui / "bottom_pane/chat_composer/submit_review.rs").open("a") as stream:
+        stream.write('\n#[cfg(test)]\npub(super) static CM_PREPARATION_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\n')
         stream.write('\n#[cfg(test)]\n#[path = "cm_review_probe.rs"]\nmod cm_probe;\n')
     shutil.copyfile(root / "fixtures/review-before-send/dispatch_probe.rs", tui / "chatwidget/tests/cm_review_probe.rs")
     with (tui / "chatwidget/tests.rs").open("a") as stream:

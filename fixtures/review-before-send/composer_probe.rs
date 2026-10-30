@@ -30,6 +30,10 @@ fn snapshot(composer: &ChatComposer) -> String {
     ), (&composer.draft.recent_submission_mention_bindings, &composer.draft.paste_burst))
 }
 
+fn preparations() -> usize {
+    CM_PREPARATION_CALLS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 async fn completion(rx: &mut UnboundedReceiver<AppEvent>) -> ReviewCompletion {
     tokio::time::timeout(std::time::Duration::from_secs(40), async {
         loop {
@@ -59,6 +63,7 @@ async fn confirm(composer: &mut ChatComposer, rx: &mut UnboundedReceiver<AppEven
 #[ignore = "requires frozen hosted Linux B profile"]
 async fn cm_review_nondestructive() {
     let _guard = runtime();
+    let initial_preparations = preparations();
     let (mut composer, mut rx) = new_composer("  Unicode 中文 draft\nsecond line  ");
     composer.handle_paste("x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 200));
     composer.insert_selected_mention(0..0, "$docs", Some("/skills/original/SKILL.md"));
@@ -71,6 +76,7 @@ async fn cm_review_nondestructive() {
     let before = snapshot(&composer);
     assert!(composer.cm_review_key(KeyCode::Enter.into()));
     assert_eq!(snapshot(&composer), before);
+    assert_eq!(preparations(), initial_preparations);
     prepared(&mut composer, &mut rx).await;
     assert_eq!(snapshot(&composer), before);
     let area = Rect::new(0, 0, 100, 14);
@@ -79,10 +85,13 @@ async fn cm_review_nondestructive() {
     assert_eq!(snapshot(&composer), before);
     assert!(composer.cm_review_key(KeyCode::Esc.into()));
     assert_eq!(snapshot(&composer), before);
+    assert_eq!(preparations(), initial_preparations);
     assert!(composer.cm_take_receipt().is_none());
     assert!(composer.cm_review_key(KeyCode::Enter.into()));
     prepared(&mut composer, &mut rx).await;
+    assert_eq!(preparations(), initial_preparations);
     assert!(matches!(confirm(&mut composer, &mut rx).await, InputResult::Submitted { .. }));
+    assert_eq!(preparations(), initial_preparations + 1);
     assert!(composer.cm_take_receipt().is_some());
     assert!(composer.cm_take_receipt().is_none());
 
@@ -94,6 +103,7 @@ async fn cm_review_nondestructive() {
     assert!(composer.cm_review_key(KeyCode::Enter.into()));
     prepared(&mut composer, &mut rx).await;
     assert_eq!(snapshot(&composer), before);
+    assert_eq!(preparations(), initial_preparations + 1);
     let pending = composer.cm_review.pending.as_ref().expect("literal paste review");
     assert_eq!(pending.text, pasted);
     assert_eq!(pending.intent, "queue");
@@ -101,8 +111,10 @@ async fn cm_review_nondestructive() {
         panic!("pasted shell syntax remains a literal queued prompt");
     };
     let (expanded, _) = ChatComposer::expand_pending_pastes(&text, text_elements, &pending_pastes);
+    assert_eq!(preparations(), initial_preparations + 2);
     assert_eq!(expanded, pasted);
     assert_eq!(composer.cm_take_receipt().expect("literal receipt").text, expanded);
+    eprintln!("CM preparation calls: review=0, confirmed prompt=1, confirmed literal queue=1");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -262,6 +274,7 @@ async fn cm_review_entry_coverage() {
         ("skills-tab", "/skills", KeyCode::Tab),
     ] {
         let (mut composer, mut rx) = new_composer("");
+        let initial_preparations = preparations();
         composer.set_collaboration_modes_enabled(true);
         composer.set_service_tier_commands_enabled(true);
         composer.set_service_tier_commands(vec![ServiceTierCommand {
@@ -278,7 +291,11 @@ async fn cm_review_entry_coverage() {
         assert_eq!(snapshot(&composer), before, "{case}: first key side effect");
         prepared(&mut composer, &mut rx).await;
         assert_eq!(snapshot(&composer), before, "{case}: preparation side effect");
+        assert_eq!(preparations(), initial_preparations, "{case}: preparation before Y");
         let result = confirm(&mut composer, &mut rx).await;
+        let expected_preparations = usize::from(matches!(case, "inline" | "selected-tail"));
+        assert_eq!(preparations(), initial_preparations + expected_preparations, "{case}: confirmed preparation count");
+        eprintln!("CM preparation calls: command={case}, review=0, confirmed={expected_preparations}");
         match (case, result) {
             ("bare", InputResult::Command(SlashCommand::Init))
             | ("popup", InputResult::Command(SlashCommand::Diff))
