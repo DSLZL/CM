@@ -38,12 +38,12 @@ async fn cm_review_programmatic_events() -> Result<()> {
         },
     ] {
         app.handle_event(&mut tui, &mut server, event).await?;
-        assert_eq!(app.chat_widget.composer_text_with_pending(), draft);
-        assert_eq!(app.chat_widget.effective_collaboration_mode(), mode);
+        std::assert_eq!(app.chat_widget.composer_text_with_pending(), draft);
+        std::assert_eq!(app.chat_widget.effective_collaboration_mode(), mode);
         assert!(app.chat_widget.queued_user_message_texts().is_empty());
-        assert_eq!(app.active_thread_id, Some(thread));
-        assert_eq!(app.primary_thread_id, Some(thread));
-        assert_eq!(app.transcript_cells.len(), 1);
+        std::assert_eq!(app.active_thread_id, Some(thread));
+        std::assert_eq!(app.primary_thread_id, Some(thread));
+        std::assert_eq!(app.transcript_cells.len(), 1);
         assert!(Arc::ptr_eq(&app.transcript_cells[0], &cell));
         assert!(
             ops.try_recv().is_err(),
