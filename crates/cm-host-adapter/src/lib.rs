@@ -26,8 +26,10 @@ struct Adapter {
 /// Call after built-ins and before `builder.build()` in the real composition root.
 pub fn append<C: Send + Sync + 'static>(builder: &mut ExtensionRegistryBuilder<C>) {
     let result = (|| {
-        let contributions: Vec<_> = runtime::contributions()?.into_iter()
-            .filter(|item| item.kind != Kind::SubmitReview).collect();
+        let contributions: Vec<_> = runtime::contributions()?
+            .into_iter()
+            .filter(|item| item.kind != Kind::SubmitReview)
+            .collect();
         if contributions.is_empty() {
             return Ok(None);
         }

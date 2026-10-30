@@ -115,13 +115,19 @@ impl ReviewAdmission {
     }
 
     pub(crate) fn deliver(&self) -> bool {
-        self.delivered.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
+        self.delivered
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 
     pub(crate) fn derive_init(&self, message_key: String) -> Self {
         Self {
-            actor: self.actor.clone(), route: self.route.clone(), digest: self.digest.clone(),
-            message_key, images: Vec::new(), delivered: self.delivered.clone(),
+            actor: self.actor.clone(),
+            route: self.route.clone(),
+            digest: self.digest.clone(),
+            message_key,
+            images: Vec::new(),
+            delivered: self.delivered.clone(),
             command_used: self.command_used.clone(),
             retry_used: AtomicBool::new(false),
         }
@@ -129,20 +135,29 @@ impl ReviewAdmission {
 
     pub(crate) fn retry_after_rejection(&self) -> Option<Self> {
         if !self.delivered.load(Ordering::Acquire)
-            || self.retry_used.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err()
+            || self
+                .retry_used
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
         {
             return None;
         }
         Some(Self {
-            actor: self.actor.clone(), route: self.route.clone(), digest: self.digest.clone(),
-            message_key: self.message_key.clone(), images: self.images.clone(),
+            actor: self.actor.clone(),
+            route: self.route.clone(),
+            digest: self.digest.clone(),
+            message_key: self.message_key.clone(),
+            images: self.images.clone(),
             delivered: std::sync::Arc::new(AtomicBool::new(false)),
-            command_used: self.command_used.clone(), retry_used: AtomicBool::new(false),
+            command_used: self.command_used.clone(),
+            retry_used: AtomicBool::new(false),
         })
     }
 
     pub(crate) fn claim_command(&self) -> bool {
-        self.command_used.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
+        self.command_used
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 }
 
@@ -174,7 +189,11 @@ impl ChatComposer {
     }
 
     pub(crate) fn cm_invalidate_review(&mut self) {
-        self.cm_review.generation = self.cm_review.generation.checked_add(1).expect("review version exhausted");
+        self.cm_review.generation = self
+            .cm_review
+            .generation
+            .checked_add(1)
+            .expect("review version exhausted");
         self.cm_review.pending = None;
         self.cm_review.receipt = None;
     }
@@ -188,8 +207,12 @@ impl ChatComposer {
     }
 
     fn cm_snapshot_key(&self, action: ReviewAction) -> String {
-        let mut bindings: Vec<_> = self.draft.mention_bindings.iter()
-            .map(|(id, binding)| (*id, binding.sigil, &binding.mention, &binding.path)).collect();
+        let mut bindings: Vec<_> = self
+            .draft
+            .mention_bindings
+            .iter()
+            .map(|(id, binding)| (*id, binding.sigil, &binding.mention, &binding.path))
+            .collect();
         bindings.sort_by_key(|(id, ..)| *id);
         let value = serde_json::json!({
             "domain": "cm-tui-review-v1",
@@ -224,7 +247,10 @@ impl ChatComposer {
         cm_runtime::tui_review::digest(value.to_string().as_bytes())
     }
 
-    fn cm_projection(&self, action: ReviewAction) -> Option<(String, Vec<TextElement>, &'static str)> {
+    fn cm_projection(
+        &self,
+        action: ReviewAction,
+    ) -> Option<(String, Vec<TextElement>, &'static str)> {
         if self.history_search.is_some() || self.is_empty() || self.is_in_paste_burst() {
             return None;
         }
@@ -236,13 +262,16 @@ impl ChatComposer {
                 ActivePopup::Command(popup) => {
                     let selected = popup.selected_item();
                     let dispatch = key.code == KeyCode::Enter && key.modifiers.is_empty()
-                        || key.code == KeyCode::Tab && selected.as_ref()
-                            .is_some_and(slash_input::selected_command_dispatches_immediately_on_tab);
+                        || key.code == KeyCode::Tab
+                            && selected.as_ref().is_some_and(
+                                slash_input::selected_command_dispatches_immediately_on_tab,
+                            );
                     if !dispatch {
                         return None;
                     }
                     if let Some(selected) = selected {
-                        if self.blocks_direct_input && !matches!(&selected,
+                        if self.blocks_direct_input
+                            && !matches!(&selected,
                             CommandItem::Builtin(cmd) if parse_slash_name(&text)
                                 .is_some_and(|(_, args, _)| parent_owned_command_is_allowed(*cmd, args)))
                         {
@@ -250,9 +279,10 @@ impl ChatComposer {
                         }
                         if let Some((end, replacement)) = self.slash_inline_replacement(&selected) {
                             text.replace_range(0..end, &replacement);
-                        } else if let Some(completed) =
-                            slash_input::selected_command_completion(text.lines().next().unwrap_or(""), &selected)
-                        {
+                        } else if let Some(completed) = slash_input::selected_command_completion(
+                            text.lines().next().unwrap_or(""),
+                            &selected,
+                        ) {
                             text = completed;
                         }
                         popup_command = true;
@@ -261,7 +291,9 @@ impl ChatComposer {
                 }
                 ActivePopup::None => {
                     if self.queue_keys.is_pressed(key)
-                        && (self.is_task_running || self.queue_submissions || !self.is_bang_shell_command())
+                        && (self.is_task_running
+                            || self.queue_submissions
+                            || !self.is_bang_shell_command())
                     {
                         queue = self.is_task_running || self.queue_submissions;
                     } else if !self.submit_keys.is_pressed(key) {
@@ -274,7 +306,8 @@ impl ChatComposer {
                 _ => return None,
             }
         }
-        if self.blocks_direct_input && !popup_command
+        if self.blocks_direct_input
+            && !popup_command
             && !parse_slash_name(&text).is_some_and(|(name, args, _)| {
                 matches!(self.slash_input().command(name),
                     Some(crate::bottom_pane::slash_commands::SlashCommandItem::Builtin(command))
@@ -283,19 +316,34 @@ impl ChatComposer {
         {
             return None;
         }
-        let command = popup_command || !queue && (self.slash_input().bare_command(&text).is_some()
-            || self.slash_input().inline_command(&text).is_some());
-        let (expanded, expanded_elements) = project_text(text.clone(), self.current_text_elements(),
-            &self.draft.pending_pastes, self.config.trim_submission, true);
-        let literal_paste = self.config.slash_commands_enabled && expanded.starts_with('!')
+        let command = popup_command
+            || !queue
+                && (self.slash_input().bare_command(&text).is_some()
+                    || self.slash_input().inline_command(&text).is_some());
+        let (expanded, expanded_elements) = project_text(
+            text.clone(),
+            self.current_text_elements(),
+            &self.draft.pending_pastes,
+            self.config.trim_submission,
+            true,
+        );
+        let literal_paste = self.config.slash_commands_enabled
+            && expanded.starts_with('!')
             && !text.trim_start().starts_with('!');
-        let preserved_goal = queue && self.slash_input().should_parse_on_dequeue(&text)
+        let preserved_goal = queue
+            && self.slash_input().should_parse_on_dequeue(&text)
             && !self.draft.pending_pastes.is_empty()
-            && parse_slash_name(&text).is_some_and(|(name, _, _)| name == SlashCommand::Goal.command());
+            && parse_slash_name(&text)
+                .is_some_and(|(name, _, _)| name == SlashCommand::Goal.command());
         let (text, elements) = if literal_paste || preserved_goal {
             // Formal queue preparation trims placeholders before expanding their payloads.
-            let (text, elements) = project_text(text, self.current_text_elements(), &[],
-                literal_paste || self.config.trim_submission, false);
+            let (text, elements) = project_text(
+                text,
+                self.current_text_elements(),
+                &[],
+                literal_paste || self.config.trim_submission,
+                false,
+            );
             project_text(text, elements, &self.draft.pending_pastes, false, true)
         } else {
             (expanded, expanded_elements)
@@ -304,11 +352,23 @@ impl ChatComposer {
         if text.chars().count() > MAX_USER_INPUT_TEXT_CHARS {
             return None;
         }
-        Some((text, elements, if queue { "queue" } else if command { "command" } else { "send" }))
+        Some((
+            text,
+            elements,
+            if queue {
+                "queue"
+            } else if command {
+                "command"
+            } else {
+                "send"
+            },
+        ))
     }
 
     fn cm_begin_review(&mut self, action: ReviewAction) -> bool {
-        let Some((text, elements, intent)) = self.cm_projection(action) else { return false; };
+        let Some((text, elements, intent)) = self.cm_projection(action) else {
+            return false;
+        };
         if !self.cm_review.ready {
             self.cm_review_notice("Waiting for the Embedded review bridge; draft retained.");
             return true;
@@ -322,47 +382,86 @@ impl ChatComposer {
         let generation = self.cm_review.generation;
         let actor = self.cm_review.actor.clone();
         let mut local_images = self.attachments.local_images();
-        let placeholders: std::collections::HashSet<_> = elements.iter()
-            .filter_map(|element| element.placeholder(&text)).collect();
+        let placeholders: std::collections::HashSet<_> = elements
+            .iter()
+            .filter_map(|element| element.placeholder(&text))
+            .collect();
         local_images.retain(|image| placeholders.contains(image.placeholder.as_str()));
         let remote_urls = self.attachments.remote_image_urls();
         let mentions = self.snapshot_mention_bindings();
-        let message_key = review_message_key(&text, elements, &local_images, &remote_urls, &mentions, &[]);
+        let message_key =
+            review_message_key(&text, elements, &local_images, &remote_urls, &mentions, &[]);
         let display = format!(
             "{}\n\n{}\n\nLocal attachments: {:?}\nRemote URLs: {:?}\nMentions: {:?}\n\nY confirm · Esc edit · ↑/↓ scroll",
-            if intent == "queue" { "Queue admission review (final model request may resolve later)" } else { "Review before send" },
-            text, local_images, remote_urls, mentions,
+            if intent == "queue" {
+                "Queue admission review (final model request may resolve later)"
+            } else {
+                "Review before send"
+            },
+            text,
+            local_images,
+            remote_urls,
+            mentions,
         );
         let tx = self.app_event_tx.clone();
-        let preview: String = text.chars().scan(0_usize, |bytes, character| {
-            *bytes += character.len_utf8();
-            (*bytes <= 8192).then_some(character)
-        }).collect();
+        let preview: String = text
+            .chars()
+            .scan(0_usize, |bytes, character| {
+                *bytes += character.len_utf8();
+                (*bytes <= 8192).then_some(character)
+            })
+            .collect();
         let input = cm_runtime::tui_review::ReviewInput {
-            schema_version: 1, actor: actor.clone(), review_id: generation,
+            schema_version: 1,
+            actor: actor.clone(),
+            review_id: generation,
             edit_version: generation,
-            origin: match action { ReviewAction::Key(_) => "composer-key", ReviewAction::Startup => "startup-handoff" }.into(),
+            origin: match action {
+                ReviewAction::Key(_) => "composer-key",
+                ReviewAction::Startup => "startup-handoff",
+            }
+            .into(),
             intent: intent.into(),
-            content_sha256: key.clone(), text_bytes: text.len(),
-            attachments: local_images.len() + remote_urls.len(), mentions: mentions.len(),
-            preview_truncated: preview.len() != text.len(), preview,
+            content_sha256: key.clone(),
+            text_bytes: text.len(),
+            attachments: local_images.len() + remote_urls.len(),
+            mentions: mentions.len(),
+            preview_truncated: preview.len() != text.len(),
+            preview,
         };
         let task = tokio::spawn(async move {
             let result = async {
-                let work = crate::chatwidget::prepare_cm_review_images(local_images, remote_urls).await?;
-                let scope = cm_runtime::runtime::UiScope::new().map_err(|error| error.to_string())?;
+                let work =
+                    crate::chatwidget::prepare_cm_review_images(local_images, remote_urls).await?;
+                let scope =
+                    cm_runtime::runtime::UiScope::new().map_err(|error| error.to_string())?;
                 let mut input = input;
                 input.content_sha256 = review_digest(&input.content_sha256, &work);
-                cm_runtime::tui_review::request(&scope, &input).await.map_err(|error| error.to_string())?;
+                cm_runtime::tui_review::request(&scope, &input)
+                    .await
+                    .map_err(|error| error.to_string())?;
                 Ok(work)
-            }.await;
+            }
+            .await;
             tx.send(AppEvent::CmReviewCompleted(Box::new(ReviewCompletion {
-                actor, generation, confirm: false, result,
+                actor,
+                generation,
+                confirm: false,
+                result,
             })));
         });
         self.cm_review.pending = Some(PendingReview {
-            generation, action, key, text, intent, message_key, display, scroll: 0,
-            work: None, validating: false, task,
+            generation,
+            action,
+            key,
+            text,
+            intent,
+            message_key,
+            display,
+            scroll: 0,
+            work: None,
+            validating: false,
+            task,
         });
         true
     }
@@ -390,7 +489,12 @@ impl ChatComposer {
         }
         let Some(pending) = &self.cm_review.pending else {
             if key.kind != KeyEventKind::Press {
-                return self.cm_projection(ReviewAction::Key(KeyEvent { kind: KeyEventKind::Press, ..key })).is_some();
+                return self
+                    .cm_projection(ReviewAction::Key(KeyEvent {
+                        kind: KeyEventKind::Press,
+                        ..key
+                    }))
+                    .is_some();
             }
             return key.kind == KeyEventKind::Press && self.cm_begin_review(ReviewAction::Key(key));
         };
@@ -410,35 +514,60 @@ impl ChatComposer {
             KeyCode::Enter | KeyCode::Tab => return true,
             KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown => {
                 let pending = self.cm_review.pending.as_mut().expect("pending review");
-                let amount = if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) { 10 } else { 1 };
+                let amount = if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
+                    10
+                } else {
+                    1
+                };
                 pending.scroll = if matches!(key.code, KeyCode::Up | KeyCode::PageUp) {
                     pending.scroll.saturating_sub(amount)
-                } else { pending.scroll.saturating_add(amount) };
+                } else {
+                    pending.scroll.saturating_add(amount)
+                };
                 return true;
             }
-            KeyCode::Char('y' | 'Y') if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            KeyCode::Char('y' | 'Y')
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
                 if pending.validating || pending.work.is_none() {
                     return true;
                 }
-                if self.cm_snapshot_key(pending.action) != pending.key || !self.cm_review.ready
+                if self.cm_snapshot_key(pending.action) != pending.key
+                    || !self.cm_review.ready
                     || cm_runtime::runtime::check_ui().is_err()
                 {
                     self.cm_invalidate_review();
-                    self.cm_review_notice("Draft or destination changed. Review again before sending.");
+                    self.cm_review_notice(
+                        "Draft or destination changed. Review again before sending.",
+                    );
                     return true;
                 }
                 let pending = self.cm_review.pending.as_mut().expect("pending review");
                 pending.validating = true;
-                let files = pending.work.as_ref().expect("prepared review").files.clone();
-                let images = pending.work.as_ref().expect("prepared review").images.clone();
+                let files = pending
+                    .work
+                    .as_ref()
+                    .expect("prepared review")
+                    .files
+                    .clone();
+                let images = pending
+                    .work
+                    .as_ref()
+                    .expect("prepared review")
+                    .images
+                    .clone();
                 let tx = self.app_event_tx.clone();
                 let actor = self.cm_review.actor.clone();
                 let generation = pending.generation;
                 pending.task = tokio::spawn(async move {
-                    let result = crate::chatwidget::revalidate_cm_review_images(&files).await
+                    let result = crate::chatwidget::revalidate_cm_review_images(&files)
+                        .await
                         .map(|()| ReviewWork { images, files });
                     tx.send(AppEvent::CmReviewCompleted(Box::new(ReviewCompletion {
-                        actor, generation, confirm: true, result,
+                        actor,
+                        generation,
+                        confirm: true,
+                        result,
                     })));
                 });
                 return true;
@@ -448,7 +577,10 @@ impl ChatComposer {
         false
     }
 
-    pub(crate) fn cm_review_completed(&mut self, completion: ReviewCompletion) -> Option<InputResult> {
+    pub(crate) fn cm_review_completed(
+        &mut self,
+        completion: ReviewCompletion,
+    ) -> Option<InputResult> {
         if completion.actor != self.cm_review.actor {
             return None;
         }
@@ -486,9 +618,13 @@ impl ChatComposer {
         }
         let pending = self.cm_review.pending.take()?;
         self.cm_review.receipt = Some(ReviewReceipt {
-            actor: self.cm_review.actor.clone(), route: self.cm_review.route.clone(),
-            digest: review_digest(&pending.key, &work), text: pending.text.clone(),
-            intent: pending.intent, message_key: pending.message_key.clone(), images: work.images,
+            actor: self.cm_review.actor.clone(),
+            route: self.cm_review.route.clone(),
+            digest: review_digest(&pending.key, &work),
+            text: pending.text.clone(),
+            intent: pending.intent,
+            message_key: pending.message_key.clone(),
+            images: work.images,
         });
         // Only this branch runs destructive preparation. The receipt is taken by the UI consumer.
         Some(match pending.action {
@@ -498,10 +634,16 @@ impl ChatComposer {
     }
 
     pub(super) fn cm_render_review(&self, area: Rect, buf: &mut Buffer) -> bool {
-        let Some(pending) = &self.cm_review.pending else { return false; };
-        let title = if pending.validating { "Validating confirmation…" }
-            else if pending.work.is_none() { "Preparing review…" }
-            else { "Review · Y confirm · Esc edit" };
+        let Some(pending) = &self.cm_review.pending else {
+            return false;
+        };
+        let title = if pending.validating {
+            "Validating confirmation…"
+        } else if pending.work.is_none() {
+            "Preparing review…"
+        } else {
+            "Review · Y confirm · Esc edit"
+        };
         ratatui::widgets::Clear.render(area, buf);
         ratatui::widgets::Paragraph::new(pending.display.as_str())
             .block(ratatui::widgets::Block::bordered().title(title))
@@ -513,20 +655,32 @@ impl ChatComposer {
 }
 
 fn review_digest(key: &str, work: &ReviewWork) -> String {
-    cm_runtime::tui_review::digest(serde_json::json!({
-        "domain": "cm-tui-review-content-v1", "draft": key,
-        "files": work.files, "images": work.images,
-    }).to_string().as_bytes())
+    cm_runtime::tui_review::digest(
+        serde_json::json!({
+            "domain": "cm-tui-review-content-v1", "draft": key,
+            "files": work.files, "images": work.images,
+        })
+        .to_string()
+        .as_bytes(),
+    )
 }
 
 pub(crate) fn review_message_key(
-    text: &str, elements: Vec<TextElement>, images: &[LocalImageAttachment],
-    remote_urls: &[String], mentions: &[MentionBinding], pastes: &[(String, String)],
+    text: &str,
+    elements: Vec<TextElement>,
+    images: &[LocalImageAttachment],
+    remote_urls: &[String],
+    mentions: &[MentionBinding],
+    pastes: &[(String, String)],
 ) -> String {
     let (text, elements) = project_text(text.to_owned(), elements, pastes, false, true);
-    cm_runtime::tui_review::digest(serde_json::json!({
-        "domain": "cm-reviewed-message-v1", "text": text, "elements": elements,
-        "local_images": format!("{images:?}"), "remote_images": remote_urls,
-        "mentions": format!("{mentions:?}"),
-    }).to_string().as_bytes())
+    cm_runtime::tui_review::digest(
+        serde_json::json!({
+            "domain": "cm-reviewed-message-v1", "text": text, "elements": elements,
+            "local_images": format!("{images:?}"), "remote_images": remote_urls,
+            "mentions": format!("{mentions:?}"),
+        })
+        .to_string()
+        .as_bytes(),
+    )
 }

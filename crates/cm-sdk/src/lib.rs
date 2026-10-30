@@ -324,7 +324,9 @@ pub unsafe extern "C" fn dispatch<T: Mod>(
                 || request.route == 0
                 || !valid_request_scopes(request.event, request.thread_scope, request.turn_scope)
                 || (request.event == v22::SUBMIT_REVIEW
-                    && (request.thread_id.len != 0 || request.turn_id.len != 0 || request.call_id.len != 0))
+                    && (request.thread_id.len != 0
+                        || request.turn_id.len != 0
+                        || request.call_id.len != 0))
             {
                 return Err("invalid request".into());
             }
@@ -484,15 +486,35 @@ mod tests {
 
     #[test]
     fn ui_and_core_requests_have_distinct_scope_shapes() {
-        let owned = Handle { epoch: 1, slot: 2, generation: 1 };
-        assert!(valid_request_scopes(v22::SUBMIT_REVIEW, Handle::NONE, Handle::NONE));
-        assert!(!valid_request_scopes(v22::SUBMIT_REVIEW, owned, Handle::NONE));
+        let owned = Handle {
+            epoch: 1,
+            slot: 2,
+            generation: 1,
+        };
+        assert!(valid_request_scopes(
+            v22::SUBMIT_REVIEW,
+            Handle::NONE,
+            Handle::NONE
+        ));
+        assert!(!valid_request_scopes(
+            v22::SUBMIT_REVIEW,
+            owned,
+            Handle::NONE
+        ));
         assert!(!valid_request_scopes(v22::SUBMIT_REVIEW, owned, owned));
         assert!(valid_request_scopes(v22::THREAD_START, owned, Handle::NONE));
-        assert!(!valid_request_scopes(v22::THREAD_START, Handle::NONE, Handle::NONE));
+        assert!(!valid_request_scopes(
+            v22::THREAD_START,
+            Handle::NONE,
+            Handle::NONE
+        ));
         assert!(!valid_request_scopes(v22::THREAD_READY, owned, owned));
         assert!(valid_request_scopes(v22::SAMPLING_BUDGET, owned, owned));
-        assert!(!valid_request_scopes(v22::SAMPLING_BUDGET, owned, Handle::NONE));
+        assert!(!valid_request_scopes(
+            v22::SAMPLING_BUDGET,
+            owned,
+            Handle::NONE
+        ));
         assert!(!valid_request_scopes(v22::SUBMIT_REVIEW + 1, owned, owned));
     }
 

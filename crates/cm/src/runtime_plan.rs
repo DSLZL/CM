@@ -453,11 +453,12 @@ fn resolve(
                     Kind::SubmitReview => cm_abi::v22::SUBMIT_REVIEW_CAPABILITY,
                     _ => unreachable!("runtime kind"),
                 };
-                let valid_resource = if matches!(contribution.kind, Kind::SamplingBudget | Kind::SubmitReview) {
-                    contribution.resource == capability
-                } else {
-                    crate::runtime::valid_name(id, &contribution.resource)
-                };
+                let valid_resource =
+                    if matches!(contribution.kind, Kind::SamplingBudget | Kind::SubmitReview) {
+                        contribution.resource == capability
+                    } else {
+                        crate::runtime::valid_name(id, &contribution.resource)
+                    };
                 manifest.format_version == 3
                     && manifest.abi_major == 2
                     && manifest.abi_minor == 2
@@ -687,7 +688,12 @@ fn resolve(
         }
         if !matches!(
             name,
-            "output_limit" | "lifecycle" | "tool" | "context_section" | "sampling_budget" | "submit_review"
+            "output_limit"
+                | "lifecycle"
+                | "tool"
+                | "context_section"
+                | "sampling_budget"
+                | "submit_review"
         ) || !order.is_empty()
         {
             phases.insert(name.into(), order);

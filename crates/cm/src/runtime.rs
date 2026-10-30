@@ -5,8 +5,8 @@ use std::future::Future;
 use std::io::Read;
 use std::mem::{align_of, size_of};
 use std::pin::Pin;
-use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
@@ -554,7 +554,12 @@ impl UiScope {
         if self.0.closed.load(Ordering::Acquire) {
             return Err(failure("UI actor closed"));
         }
-        self.0.error.lock().map_err(|_| lock_error())?.clone().map_or(Ok(()), Err)?;
+        self.0
+            .error
+            .lock()
+            .map_err(|_| lock_error())?
+            .clone()
+            .map_or(Ok(()), Err)?;
         check_ui()
     }
 
@@ -570,16 +575,26 @@ pub fn check_ui() -> Result<(), LoadError> {
     if tables.stopping {
         return Err(failure("UI runtime stopping"));
     }
-    tables.failed.clone().or_else(|| tables.shutdown_error.clone()).map_or(Ok(()), Err)
+    tables
+        .failed
+        .clone()
+        .or_else(|| tables.shutdown_error.clone())
+        .map_or(Ok(()), Err)
 }
 
 impl Drop for UiScope {
     fn drop(&mut self) {
         self.0.closed.store(true, Ordering::Release);
         if let Some(Ok(hub)) = HUB.get() {
-            let requests = hub.tables.lock().ok().map(|tables| tables.requests()).unwrap_or_default();
+            let requests = hub
+                .tables
+                .lock()
+                .ok()
+                .map(|tables| tables.requests())
+                .unwrap_or_default();
             for request in requests {
-                if matches!(&request.owner, RequestOwner::Ui(owner) if Arc::ptr_eq(owner, &self.0)) {
+                if matches!(&request.owner, RequestOwner::Ui(owner) if Arc::ptr_eq(owner, &self.0))
+                {
                     request.cancel(false);
                 }
             }
@@ -1007,7 +1022,8 @@ impl Future for RequestFuture {
             Err(_) => return Poll::Ready(Err(lock_error())),
         };
         if matches!(&self.request.owner, RequestOwner::Ui(_))
-            && !state.started_returned && !state.cancelled
+            && !state.started_returned
+            && !state.cancelled
         {
             state.waker = Some(context.waker().clone());
             return Poll::Pending;
@@ -1051,13 +1067,27 @@ pub fn dispatch(
         Kind::SamplingBudget => event_kind == v22::SAMPLING_BUDGET,
         Kind::SubmitReview => false,
     };
-    let turn_event = matches!(event_kind,
-        v22::TURN_START | v22::TURN_STOP | v22::TURN_ABORT | v22::TURN_ERROR
-        | v22::TOOL_CALL | v22::SECTION | v22::SAMPLING_BUDGET);
+    let turn_event = matches!(
+        event_kind,
+        v22::TURN_START
+            | v22::TURN_STOP
+            | v22::TURN_ABORT
+            | v22::TURN_ERROR
+            | v22::TOOL_CALL
+            | v22::SECTION
+            | v22::SAMPLING_BUDGET
+    );
     if !expected || (turn_event != scope.0.parent.is_some()) {
         return Err(failure("event/contribution/scope kind mismatch"));
     }
-    dispatch_owned(RequestOwner::Core(scope.clone()), contribution, event_kind, input, call_id, cleanup)
+    dispatch_owned(
+        RequestOwner::Core(scope.clone()),
+        contribution,
+        event_kind,
+        input,
+        call_id,
+        cleanup,
+    )
 }
 
 pub fn dispatch_ui(
@@ -1069,7 +1099,14 @@ pub fn dispatch_ui(
     if contribution.kind != Kind::SubmitReview {
         return Err(failure("UI request/contribution kind mismatch"));
     }
-    dispatch_owned(RequestOwner::Ui(Arc::clone(&scope.0)), contribution, v22::SUBMIT_REVIEW, input, "", false)
+    dispatch_owned(
+        RequestOwner::Ui(Arc::clone(&scope.0)),
+        contribution,
+        v22::SUBMIT_REVIEW,
+        input,
+        "",
+        false,
+    )
 }
 
 fn dispatch_owned(
@@ -1098,10 +1135,20 @@ fn dispatch_owned(
     let (thread, turn) = match &owner {
         RequestOwner::Core(scope) => {
             let turn = if scope.0.parent.is_some() {
-                *scope.0.members.get(&module.instance).ok_or_else(|| failure("turn scope missing"))?
-            } else { Handle::NONE };
+                *scope
+                    .0
+                    .members
+                    .get(&module.instance)
+                    .ok_or_else(|| failure("turn scope missing"))?
+            } else {
+                Handle::NONE
+            };
             let thread_scope = scope.0.parent.as_ref().unwrap_or(scope);
-            let thread = *thread_scope.0.members.get(&module.instance).ok_or_else(|| failure("thread scope missing"))?;
+            let thread = *thread_scope
+                .0
+                .members
+                .get(&module.instance)
+                .ok_or_else(|| failure("thread scope missing"))?;
             (thread, turn)
         }
         RequestOwner::Ui(scope) => {
@@ -1376,7 +1423,8 @@ fn state_access(
     if matches!(&request.owner, RequestOwner::Ui(scope) if scope.closed.load(Ordering::Acquire)) {
         return Err(v22::STALE);
     }
-    if !request.cleanup && request.thread != Handle::NONE
+    if !request.cleanup
+        && request.thread != Handle::NONE
         && (!tables.scope(hub.epoch, request.thread)?.open
             || (request.turn != Handle::NONE && !tables.scope(hub.epoch, request.turn)?.open))
     {

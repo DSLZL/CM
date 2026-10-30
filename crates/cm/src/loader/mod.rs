@@ -71,7 +71,11 @@ impl Kind {
     pub(crate) fn runtime(&self) -> bool {
         matches!(
             self,
-            Self::Lifecycle | Self::Tool | Self::ContextSection | Self::SamplingBudget | Self::SubmitReview
+            Self::Lifecycle
+                | Self::Tool
+                | Self::ContextSection
+                | Self::SamplingBudget
+                | Self::SubmitReview
         )
     }
 }
