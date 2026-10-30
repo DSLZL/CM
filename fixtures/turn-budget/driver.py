@@ -198,7 +198,8 @@ def complete(client, turn, expected):
 
 
 def admissions(directory, turn=None):
-    rows = sdk_module().core.trace_rows(directory / "native.jsonl")
+    # The running process can still append lifecycle records after turn/completed.
+    rows = sdk_module().core.trace_rows(directory / "native.jsonl", waiting=True)
     return [row["detail"] for row in rows if row["event"] == "sampling-budget-admission"
         and (turn is None or row["detail"]["turn"] == turn)]
 
