@@ -403,8 +403,13 @@ def plug_and_play():
         for name, launch_args in (("exec", arguments), ("stdio", ["app-server", "--listen", "stdio://"])):
             run = directory / ("unsupported-" + name)
             run.mkdir()
+            backend_home = home
             command = [str(BINARY), "cm", "--home", str(home), "launch", "--", *launch_args]
-            result = subprocess.run(command, env=sdk.environment(home, run), cwd=run,
+            if name == "stdio":
+                backend_home = Path("/profile/review") / case / "stdio"
+                install(backend_home)
+                command = [str(BINARY), *launch_args]
+            result = subprocess.run(command, env=sdk.environment(backend_home, run), cwd=run,
                 capture_output=True, text=True, timeout=90)
             write(run / "result.json", {"command": command, "return_code": result.returncode,
                 "stdout": result.stdout, "stderr": result.stderr})

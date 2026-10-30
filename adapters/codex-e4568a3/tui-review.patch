@@ -628,7 +628,7 @@ diff --git a/codex-rs/tui/src/chatwidget/input_restore.rs b/codex-rs/tui/src/cha
 index 1f21ca9..a947ebc 100644
 --- a/codex-rs/tui/src/chatwidget/input_restore.rs
 +++ b/codex-rs/tui/src/chatwidget/input_restore.rs
-@@ -142,6 +142,32 @@ impl ChatWidget {
+@@ -142,6 +142,33 @@ impl ChatWidget {
      }
  
      pub(crate) fn submit_initial_user_message_if_pending(&mut self) {
@@ -652,8 +652,9 @@ index 1f21ca9..a947ebc 100644
 +                    }
 +                }
 +                self.restore_user_message_to_composer(message);
-+                self.cm_refresh_review_context();
-+                self.bottom_pane.cm_startup_review();
++                // Review only after the provisional draft finishes its startup handoff.
++                self.input_queue.startup_submission =
++                    Some(self.bottom_pane.composer_draft_snapshot());
 +                self.request_redraw();
 +            }
 +            return;
@@ -661,7 +662,7 @@ index 1f21ca9..a947ebc 100644
          if self.suppress_initial_user_message_submit || self.input_queue.rate_limit_recovery_pending
          {
              return;
-@@ -297,7 +323,13 @@ impl ChatWidget {
+@@ -297,7 +324,13 @@ impl ChatWidget {
              .push_back(pending_steer.user_message);
          self.input_queue
              .rejected_steer_sources
@@ -676,7 +677,7 @@ index 1f21ca9..a947ebc 100644
          self.input_queue
              .rejected_steer_history_records
              .push_back(pending_steer.history_record);
-@@ -368,7 +400,7 @@ impl ChatWidget {
+@@ -368,7 +401,7 @@ impl ChatWidget {
                          .push_back(pending.history_record);
                  }
                  if let Some((message, history_record)) = self.pop_next_queued_user_message() {
@@ -685,7 +686,7 @@ index 1f21ca9..a947ebc 100644
                      self.submit_user_message_with_history_and_shell_escape_policy(
                          message.into_user_message(),
                          history_record,
-@@ -383,12 +415,19 @@ impl ChatWidget {
+@@ -383,12 +416,19 @@ impl ChatWidget {
                          .map(|pending| (pending.user_message, pending.history_record))
                          .collect(),
                  );
@@ -711,7 +712,7 @@ index 1f21ca9..a947ebc 100644
              } else if let Some(combined) = self.drain_pending_messages_for_restore() {
                  self.restore_composer_state(combined);
              }
-@@ -578,7 +617,7 @@ impl ChatWidget {
+@@ -578,7 +618,7 @@ impl ChatWidget {
              pending_thread_settings: None,
              composer: composer.has_content().then_some(composer),
              safety_buffering_prompt: self.safety_buffering_prompt.clone(),

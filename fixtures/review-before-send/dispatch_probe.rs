@@ -52,12 +52,19 @@ async fn cm_review_cli_image() {
     let _guard = runtime();
     let (mut chat, mut rx, mut ops) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
+    let mut startup_draft = Some(chat.bottom_pane.composer_draft_snapshot());
+    let mut startup_submission = false;
     let image = std::path::PathBuf::from(std::env::var_os("CM_REVIEW_IMAGE").expect("image"));
     let initial = create_initial_user_message(Some("CLI image".into()), vec![image.clone()], Vec::new())
         .expect("initial message");
     assert!(initial.text_elements.is_empty());
     chat.initial_user_message = Some(initial);
     chat.submit_initial_user_message_if_pending();
+    assert!(!chat.bottom_pane.cm_review_pending());
+    assert_no_submit_op(&mut ops);
+    chat.restore_startup_input_when_ready(&mut startup_draft, &mut startup_submission);
+    assert!(startup_draft.is_none());
+    assert!(chat.bottom_pane.cm_review_pending());
     let before = chat.bottom_pane.composer_draft_snapshot();
     assert_eq!(before.local_images.len(), 1);
     assert_eq!(before.local_images[0].path, image);
