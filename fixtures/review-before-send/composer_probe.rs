@@ -143,6 +143,58 @@ async fn cm_review_invalidation() {
     assert_eq!(composer.cm_review.generation, 1);
     assert!(composer.cm_take_receipt().is_none());
     assert_eq!(snapshot(&composer), before);
+
+    for validating in [false, true] {
+        for change in ["paste-payload", "mention-target", "element", "attachment", "remote-url", "command", "queue-intent"] {
+            let (mut composer, mut rx) = new_composer("$docs ");
+            composer.insert_selected_mention(0..5, "$docs", Some("/skills/original/SKILL.md"));
+            composer.handle_paste("p".repeat(LARGE_PASTE_CHAR_THRESHOLD + 200));
+            composer.attach_image(image.clone());
+            composer.set_remote_image_urls(vec!["https://example.invalid/original.png".into()]);
+            assert!(!composer.draft.pending_pastes.is_empty());
+            assert!(!composer.draft.mention_bindings.is_empty());
+            assert!(composer.cm_review_key(KeyCode::Enter.into()));
+            prepared(&mut composer, &mut rx).await;
+            let late = if validating {
+                assert!(composer.cm_review_key(KeyCode::Char('y').into()));
+                Some(completion(&mut rx).await)
+            } else {
+                None
+            };
+            let visible = composer.current_text();
+            match change {
+                "paste-payload" => {
+                    composer.draft.pending_pastes[0].1.push('q');
+                    assert_eq!(composer.current_text(), visible);
+                }
+                "mention-target" => {
+                    for binding in composer.draft.mention_bindings.values_mut() {
+                        binding.path = "/skills/replaced/SKILL.md".into();
+                    }
+                    assert_eq!(composer.current_text(), visible);
+                }
+                "element" => { composer.draft.textarea.insert_element("atomic"); }
+                "attachment" => composer.attach_image(image.clone()),
+                "remote-url" => composer.set_remote_image_urls(vec!["https://example.invalid/replaced.png".into()]),
+                "command" => composer.set_text_content("/init".into(), Vec::new(), Vec::new()),
+                "queue-intent" => composer.queue_submissions = true,
+                _ => unreachable!(),
+            }
+            let edited = snapshot(&composer);
+            if let Some(late) = late {
+                assert!(composer.cm_review_completed(late).is_none(), "{change}: late confirmation");
+            } else {
+                let _ = composer.cm_review_key(KeyCode::Char('y').into());
+            }
+            assert!(!composer.cm_review_pending(), "{change}: stale review retained");
+            assert!(composer.cm_take_receipt().is_none(), "{change}: stale receipt");
+            assert_eq!(snapshot(&composer), edited, "{change}: stale confirmation edited the draft");
+            assert!(composer.cm_review_key(KeyCode::Enter.into()));
+            prepared(&mut composer, &mut rx).await;
+            assert_eq!(snapshot(&composer), edited, "{change}: re-review edited the draft");
+            assert!(composer.cm_review_key(KeyCode::Esc.into()));
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
