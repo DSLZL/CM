@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "configured": true,
-  "task_id": "CM-G02A",
+  "task_id": "CM-G02B",
   "required_checks": [
-    "CM-G02A-AC01",
-    "CM-G02A-AC02",
-    "CM-G02A-AC03",
-    "CM-G02A-AC04",
-    "CM-G02A-AC05",
-    "CM-G02A-AC06"
+    "CM-G02B-AC01",
+    "CM-G02B-AC02",
+    "CM-G02B-AC03",
+    "CM-G02B-AC04",
+    "CM-G02B-AC05",
+    "CM-G02B-AC06"
   ],
   "target": "x86_64-unknown-linux-gnu",
   "rust_toolchain": "1.95.0",
@@ -38,7 +38,7 @@
       "no_default_features": false
     }
   ],
-  "acceptance_script": "fixtures/turn-budget/acceptance.sh",
+  "acceptance_script": "fixtures/review-before-send/acceptance.sh",
   "cargo_config_files": [
     "adapters/codex-e4568a3/host/codex-rs/.cargo/config.toml"
   ],
@@ -85,7 +85,11 @@
     "crates/cm/src/state.rs",
     "crates/cm/src/diagnostics.rs",
     "crates/cm/src/sampling_budget.rs",
-    "adapters/codex-e4568a3/sampling-budget.patch"
+    "adapters/codex-e4568a3/sampling-budget.patch",
+    "crates/cm/src/tui_review.rs",
+    "adapters/codex-e4568a3/tui-submit-review.rs",
+    "adapters/codex-e4568a3/tui-review-dispatch.rs",
+    "adapters/codex-e4568a3/tui-review.patch"
   ],
   "generated_native_identity_files": [
     "adapters/codex-e4568a3/inputs/native.json"

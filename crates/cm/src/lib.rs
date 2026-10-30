@@ -33,6 +33,7 @@ pub mod runtime_plan;
 pub mod sampling_budget;
 pub mod state;
 pub mod tool_policy;
+pub mod tui_review;
 
 use loader::registration::RegistrationSet;
 
@@ -335,6 +336,13 @@ fn initialize_with(
             }),
         );
         prepared.validate_backend()?;
+        if prepared.plan().phases.contains_key("submit_review") && !tui_embedded_required() {
+            return Err(LoadError::new(
+                "backend",
+                false,
+                "tui.submit_review.v1 requires the local Embedded TUI; exec/stdio are unsupported",
+            ));
+        }
         if (prepared.managed() || !prepared.plan().mods.is_empty()) && !embedded_exec {
             return Err(LoadError::new(
                 "backend",

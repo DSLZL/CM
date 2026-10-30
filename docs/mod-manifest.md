@@ -154,6 +154,12 @@ State metadata alone retains its original descriptive meaning. M04 adds explicit
 
 ## Metadata commands and mod.lock
 
+The pending CM-G02B implementation adds the exclusive `tui.submit_review.v1`
+resource, `submit_review` kind, and minimum Host API 0.8.0 with unchanged ABI 2.2.
+It belongs to a local Embedded TUI owner, with NONE Core thread/turn scopes.
+See [review-before-send.md](review-before-send.md) for the bounded DTO, explicit
+Y confirmation, backend restrictions, and unverified acceptance status.
+
 ```sh
 codex cm list
 codex --cm-profile review cm plan

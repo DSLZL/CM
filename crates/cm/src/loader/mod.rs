@@ -48,6 +48,7 @@ pub(crate) enum Kind {
     Tool,
     ContextSection,
     SamplingBudget,
+    SubmitReview,
 }
 
 impl Kind {
@@ -63,13 +64,14 @@ impl Kind {
             Self::Tool => cm_abi::v22::KIND_TOOL,
             Self::ContextSection => cm_abi::v22::KIND_CONTEXT_SECTION,
             Self::SamplingBudget => cm_abi::v22::KIND_SAMPLING_BUDGET,
+            Self::SubmitReview => cm_abi::v22::KIND_SUBMIT_REVIEW,
         }
     }
 
     pub(crate) fn runtime(&self) -> bool {
         matches!(
             self,
-            Self::Lifecycle | Self::Tool | Self::ContextSection | Self::SamplingBudget
+            Self::Lifecycle | Self::Tool | Self::ContextSection | Self::SamplingBudget | Self::SubmitReview
         )
     }
 }

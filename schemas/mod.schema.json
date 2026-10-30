@@ -206,7 +206,7 @@
           "items": {
             "type": "string"
           },
-          "maxItems": 8,
+          "maxItems": 9,
           "minItems": 1,
           "uniqueItems": true
         },
@@ -263,7 +263,8 @@
             "lifecycle",
             "tool",
             "context_section",
-            "sampling_budget"
+            "sampling_budget",
+            "submit_review"
           ]
         },
         "capability": {

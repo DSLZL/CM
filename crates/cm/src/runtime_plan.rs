@@ -274,6 +274,7 @@ fn phase(kind: &Kind) -> &'static str {
         Kind::Tool => "tool",
         Kind::ContextSection => "context_section",
         Kind::SamplingBudget => "sampling_budget",
+        Kind::SubmitReview => "submit_review",
     }
 }
 
@@ -449,9 +450,10 @@ fn resolve(
                     Kind::Tool => cm_abi::v22::TOOL,
                     Kind::ContextSection => cm_abi::v22::CONTEXT_SECTION,
                     Kind::SamplingBudget => cm_abi::v22::SAMPLING_BUDGET_CAPABILITY,
+                    Kind::SubmitReview => cm_abi::v22::SUBMIT_REVIEW_CAPABILITY,
                     _ => unreachable!("runtime kind"),
                 };
-                let valid_resource = if contribution.kind == Kind::SamplingBudget {
+                let valid_resource = if matches!(contribution.kind, Kind::SamplingBudget | Kind::SubmitReview) {
                     contribution.resource == capability
                 } else {
                     crate::runtime::valid_name(id, &contribution.resource)
@@ -499,7 +501,7 @@ fn resolve(
                     runtime_names.insert(name, format!("{id}::{}", contribution.id))
                 {
                     let mut error = failure(
-                        if contribution.kind == Kind::SamplingBudget {
+                        if matches!(contribution.kind, Kind::SamplingBudget | Kind::SubmitReview) {
                             "exclusive_conflict"
                         } else {
                             "runtime_name_collision"
@@ -664,6 +666,7 @@ fn resolve(
         "tool",
         "context_section",
         "sampling_budget",
+        "submit_review",
     ] {
         let nodes: BTreeSet<_> = hooks
             .iter()
@@ -684,7 +687,7 @@ fn resolve(
         }
         if !matches!(
             name,
-            "output_limit" | "lifecycle" | "tool" | "context_section" | "sampling_budget"
+            "output_limit" | "lifecycle" | "tool" | "context_section" | "sampling_budget" | "submit_review"
         ) || !order.is_empty()
         {
             phases.insert(name.into(), order);

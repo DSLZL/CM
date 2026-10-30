@@ -318,12 +318,13 @@ pub unsafe extern "C" fn dispatch<T: Mod>(
             let request = &*request;
             if !valid_header::<v22::Request>(request.header)
                 || request.reserved != 0
-                || !(v22::THREAD_START..=v22::SAMPLING_BUDGET).contains(&request.event)
+                || !(v22::THREAD_START..=v22::SUBMIT_REVIEW).contains(&request.event)
                 || request.handle == Handle::NONE
                 || request.mod_scope == Handle::NONE
-                || request.thread_scope == Handle::NONE
                 || request.route == 0
-                || ((request.event >= v22::TURN_START) != (request.turn_scope != Handle::NONE))
+                || !valid_request_scopes(request.event, request.thread_scope, request.turn_scope)
+                || (request.event == v22::SUBMIT_REVIEW
+                    && (request.thread_id.len != 0 || request.turn_id.len != 0 || request.call_id.len != 0))
             {
                 return Err("invalid request".into());
             }
@@ -341,6 +342,15 @@ pub unsafe extern "C" fn dispatch<T: Mod>(
             };
             (&mut *userdata.cast::<T>()).dispatch(owned)
         })
+    }
+}
+
+fn valid_request_scopes(event: u32, thread: Handle, turn: Handle) -> bool {
+    match event {
+        v22::THREAD_START..=v22::THREAD_STOP => thread != Handle::NONE && turn == Handle::NONE,
+        v22::TURN_START..=v22::SAMPLING_BUDGET => thread != Handle::NONE && turn != Handle::NONE,
+        v22::SUBMIT_REVIEW => thread == Handle::NONE && turn == Handle::NONE,
+        _ => false,
     }
 }
 
@@ -471,6 +481,21 @@ macro_rules! export_mod {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_and_core_requests_have_distinct_scope_shapes() {
+        let owned = Handle { epoch: 1, slot: 2, generation: 1 };
+        assert!(valid_request_scopes(v22::SUBMIT_REVIEW, Handle::NONE, Handle::NONE));
+        assert!(!valid_request_scopes(v22::SUBMIT_REVIEW, owned, Handle::NONE));
+        assert!(!valid_request_scopes(v22::SUBMIT_REVIEW, owned, owned));
+        assert!(valid_request_scopes(v22::THREAD_START, owned, Handle::NONE));
+        assert!(!valid_request_scopes(v22::THREAD_START, Handle::NONE, Handle::NONE));
+        assert!(!valid_request_scopes(v22::THREAD_READY, owned, owned));
+        assert!(valid_request_scopes(v22::SAMPLING_BUDGET, owned, owned));
+        assert!(!valid_request_scopes(v22::SAMPLING_BUDGET, owned, Handle::NONE));
+        assert!(!valid_request_scopes(v22::SUBMIT_REVIEW + 1, owned, owned));
+    }
+
     #[test]
     fn panic_does_not_unwind_and_error_bytes_belong_to_caller() {
         let mut storage = [0_u8; abi::ERROR_CAPACITY];

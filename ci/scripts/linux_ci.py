@@ -208,7 +208,7 @@ def main():
     elif phase == "build-test":
         import host
         reused = host.reused_build(root, logs)
-        if cfg.get("task_id") in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A"):
+        if cfg.get("task_id") in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B"):
             format_errors = []
             for owner in ("lifecycle-audit", "example-tool"):
                 try:
@@ -226,7 +226,7 @@ def main():
             if unit["id"] == "host" and reused is not None:
                 print("CM CI: reuse verified Host binaries and original Cargo checks from", json.dumps(reused["origin"]), flush=True)
                 continue
-            if cfg.get("task_id") in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A") and unit["id"] == "host":
+            if cfg.get("task_id") in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B") and unit["id"] == "host":
                 boundary = {**unit, "packages": ["cm-abi", "cm-sdk", "cm-runtime"]}
                 execute(root, logs, "m02-abi-clippy",
                     cargo_args(boundary, "clippy", cfg, cfg["clippy_profile"]) + ["--all-targets", "--", "-D", "warnings"], env)
@@ -236,7 +236,7 @@ def main():
         artifact_dir = Path(os.environ["CM_CI_ARTIFACT_DIR"])
         artifact_dir.mkdir(parents=True, exist_ok=True)
         execute(root, logs, "current-task-acceptance", ["bash", str(source_file(root, cfg["acceptance_script"]))])
-        if cfg["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A"):
+        if cfg["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B"):
             from runtime_consumer import provenance, validate_inputs
             producer = json.loads((artifact_dir / "producer-inputs.json").read_text())
             inputs = Path(os.environ["CM_CONSUMER_INPUT_DIR"]).resolve()

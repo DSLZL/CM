@@ -24,6 +24,10 @@ CM-G02A 新增 API 0.7.0 的 `core.turn_sampling_budget.v1` / `sampling_budget`�
 沿用 ABI 2.2 布局，使用独占全局预算资源，六项独立 Linux x64 验收已通过。
 策略、错误、恢复限制、独立检查点及实际验收来源见 [主采样预算](turn-budget.md)。
 
+CM-G02B 的待验收实现新增 API 0.8.0 的 `tui.submit_review.v1` / `submit_review`，
+沿用 ABI 2.2 布局，专用于本地 Embedded TUI 的 UI owner。它不扩展上述 Core
+贡献的后端支持面，完整输入、Y 确认和六阶段验收见 [发送前审核](review-before-send.md)。
+
 资源名必须为 `<Mod ID>__<局部名称>`，仅含 ASCII 小写字母、数字、`_`、`-`，
 总长最多 64 字节。因此包含点号的 Mod ID 当前不能声明这三种运行时贡献。
 名称、kind、capability、贡献 ID 必须与二进制入口的描述表完全一致。

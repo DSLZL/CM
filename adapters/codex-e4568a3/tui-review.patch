@@ -1,0 +1,968 @@
+diff --git a/codex-rs/tui/src/app/event_dispatch.rs b/codex-rs/tui/src/app/event_dispatch.rs
+index 89bdf72..da8bdf1 100644
+--- a/codex-rs/tui/src/app/event_dispatch.rs
++++ b/codex-rs/tui/src/app/event_dispatch.rs
+@@ -202,6 +202,9 @@ impl App {
+             }
+             AppEvent::PluginMentionsLoaded { ref cwd, .. }
+                 if cwds_differ(cwd, self.config.cwd.as_path()) => {}
++            AppEvent::CmReviewCompleted(completion) => {
++                self.chat_widget.on_cm_review_completed(*completion);
++            }
+             AppEvent::NewSession { name } => {
+                 self.start_fresh_session(
+                     tui, app_server, /*session_start_source*/ None,
+@@ -467,6 +470,9 @@ impl App {
+                 self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
+             }
+             AppEvent::ClearUiAndSubmitUserMessage { text } => {
++                if self.chat_widget.cm_reject_programmatic_prompt() {
++                    return Ok(AppRunControl::Continue);
++                }
+                 if self.reject_pending_permission_root_switch() {
+                     self.chat_widget.restore_user_message_to_composer(text.into());
+                     return Ok(AppRunControl::Continue);
+diff --git a/codex-rs/tui/src/app_event.rs b/codex-rs/tui/src/app_event.rs
+index e2b86c9..2aa35b6 100644
+--- a/codex-rs/tui/src/app_event.rs
++++ b/codex-rs/tui/src/app_event.rs
+@@ -295,6 +295,7 @@ pub(crate) struct AgentPickerThreadRefresh {
+ #[allow(clippy::large_enum_variant)]
+ #[derive(Debug, IntoStaticStr)]
+ pub(crate) enum AppEvent {
++    CmReviewCompleted(Box<crate::bottom_pane::ReviewCompletion>),
+     AccountEmailLoaded {
+         request_id: uuid::Uuid,
+         email: Option<String>,
+diff --git a/codex-rs/tui/src/bottom_pane/chat_composer/composer_layout.rs b/codex-rs/tui/src/bottom_pane/chat_composer/composer_layout.rs
+index 949edcf..87fa3f6 100644
+--- a/codex-rs/tui/src/bottom_pane/chat_composer/composer_layout.rs
++++ b/codex-rs/tui/src/bottom_pane/chat_composer/composer_layout.rs
+@@ -142,6 +142,9 @@ impl ChatComposer {
+         area: Rect,
+         options: ComposerRenderOptions<'_>,
+     ) -> Option<(u16, u16)> {
++        if self.cm_review_pending() {
++            return None;
++        }
+         let layout = self.layout_with_options(area, options);
+         if let Some(footer) = options.footer.filter(|footer| footer.is_interactive) {
+             let area = inset_footer_hint_area(layout.footer);
+@@ -172,6 +175,9 @@ impl ChatComposer {
+         width: u16,
+         options: ComposerRenderOptions<'_>,
+     ) -> u16 {
++        if self.cm_review_pending() {
++            return 14;
++        }
+         let footer_hint_height = self.footer_hint_height(width, options);
+         const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
+         let inner_width =
+diff --git a/codex-rs/tui/src/bottom_pane/chat_composer/paste_input.rs b/codex-rs/tui/src/bottom_pane/chat_composer/paste_input.rs
+index 173678e..9494cca 100644
+--- a/codex-rs/tui/src/bottom_pane/chat_composer/paste_input.rs
++++ b/codex-rs/tui/src/bottom_pane/chat_composer/paste_input.rs
+@@ -68,6 +68,7 @@ impl ChatComposer {
+ 
+     /// Classify an explicit paste before integrating text shared with the buffered key path.
+     pub fn handle_paste(&mut self, pasted: String) -> bool {
++        self.cm_invalidate_review();
+         self.flush_pending_paste_burst();
+         self.note_sparkle_paste(&pasted);
+         self.apply_paste(pasted)
+@@ -150,6 +151,7 @@ impl ChatComposer {
+     ///
+     /// Composer edits clear paste-burst Enter suppression and sync popups.
+     pub(super) fn apply_paste(&mut self, pasted: String) -> bool {
++        self.cm_invalidate_review();
+         let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
+         let pasted = sanitize_user_text(pasted.into());
+         if self.history_search.is_some() {
+diff --git a/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs b/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs
+index 4ea7125..13f48b0 100644
+--- a/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs
++++ b/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs
+@@ -420,18 +420,26 @@ impl ChatComposer {
+         &mut self,
+         selected_cmd: &CommandItem,
+     ) -> bool {
+-        let CommandItem::Builtin(cmd) = selected_cmd else {
++        let Some((replace_end, replacement)) = self.slash_inline_replacement(selected_cmd) else {
+             return false;
+         };
++        self.apply_slash_inline_replacement(replace_end, replacement);
++        true
++    }
++
++    pub(super) fn slash_inline_replacement(&self, selected_cmd: &CommandItem) -> Option<(usize, String)> {
++        let CommandItem::Builtin(cmd) = selected_cmd else {
++            return None;
++        };
+         if !cmd.supports_inline_args() {
+-            return false;
++            return None;
+         }
+ 
+         let text = self.current_text();
+         let first_line_end = text.find('\n').unwrap_or(text.len());
+         let cursor = self.current_cursor();
+         if cursor > first_line_end || !text.starts_with('/') || !text.is_char_boundary(cursor) {
+-            return false;
++            return None;
+         }
+ 
+         let command_token_end = text[1..first_line_end]
+@@ -441,7 +449,7 @@ impl ChatComposer {
+         let typed_command_name = &text[1..command_token_end];
+         let rest_after_token_is_empty = text[command_token_end..].trim().is_empty();
+         if rest_after_token_is_empty && (cursor <= 1 || cursor >= command_token_end) {
+-            return false;
++            return None;
+         }
+         let replace_end =
+             if cursor <= 1 || (typed_command_name == cmd.command() && rest_after_token_is_empty) {
+@@ -458,6 +466,10 @@ impl ChatComposer {
+             format!("{selected_command_text} ")
+         };
+ 
++        Some((replace_end, replacement))
++    }
++
++    fn apply_slash_inline_replacement(&mut self, replace_end: usize, replacement: String) {
+         let prefix_len = self.draft.prompt_prefix.len();
+         let internal_replace_end = replace_end.saturating_sub(prefix_len);
+         let ranges_to_unmark = self
+@@ -481,7 +493,6 @@ impl ChatComposer {
+         self.draft
+             .textarea
+             .set_cursor(self.draft.textarea.text().len());
+-        true
+     }
+ 
+     /// Keep slash command elements aligned with the current first line.
+diff --git a/codex-rs/tui/src/bottom_pane/chat_composer.rs b/codex-rs/tui/src/bottom_pane/chat_composer.rs
+index 756c2d6..3fdc376 100644
+--- a/codex-rs/tui/src/bottom_pane/chat_composer.rs
++++ b/codex-rs/tui/src/bottom_pane/chat_composer.rs
+@@ -394,6 +394,7 @@ mod popup_state;
+ mod reconnect;
+ pub(crate) use reconnect::RestrictedInputMode;
+ mod slash_input;
++pub(crate) mod submit_review;
+ mod sparkle;
+ mod status_surface;
+ mod vim_history;
+@@ -610,6 +611,7 @@ impl ChatComposerConfig {
+ }
+ 
+ pub(crate) struct ChatComposer {
++    cm_review: submit_review::ReviewState,
+     draft: DraftState,
+     popups: PopupState,
+     app_event_tx: AppEventSender,
+@@ -741,6 +743,7 @@ impl ChatComposer {
+         let default_vim_normal_keymap = default_keymap.vim_normal.clone();
+ 
+         let mut this = Self {
++            cm_review: submit_review::ReviewState::default(),
+             draft: DraftState::new(),
+             popups: PopupState::default(),
+             app_event_tx,
+@@ -1057,6 +1060,8 @@ impl ChatComposer {
+     /// the same snapshot's editor bindings so a live remap cannot leave submit
+     /// keys updated while cursor/editing keys still use old defaults.
+     pub(crate) fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
++        self.cm_review.conflict = keymap.cm_review_key_conflict();
++        self.cm_invalidate_review();
+         self.submit_keys = keymap.composer.submit.clone();
+         self.queue_keys = keymap.composer.queue.clone();
+         self.toggle_shortcuts_keys = keymap.composer.toggle_shortcuts.clone();
+@@ -1503,6 +1508,7 @@ impl ChatComposer {
+     }
+ 
+     pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
++        self.cm_invalidate_review();
+         if !self.sparkle.history_preview && !urls.is_empty() {
+             self.dismiss_sparkle();
+         }
+@@ -1556,6 +1562,7 @@ impl ChatComposer {
+         local_image_paths: Vec<PathBuf>,
+         mention_bindings: Vec<MentionBinding>,
+     ) {
++        self.cm_invalidate_review();
+         if !self.sparkle.history_preview {
+             if local_image_paths.is_empty() {
+                 self.note_sparkle_replaced_text(&text);
+@@ -1739,6 +1746,7 @@ impl ChatComposer {
+ 
+     /// Flush buffered typing before clearing so cancellation preserves the complete draft in history.
+     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
++        self.cm_invalidate_review();
+         if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
+             self.apply_paste(pasted);
+         }
+@@ -1848,6 +1856,7 @@ impl ChatComposer {
+ 
+     /// Insert an attachment placeholder and track it for the next submission.
+     pub fn attach_image(&mut self, path: PathBuf) {
++        self.cm_invalidate_review();
+         self.dismiss_sparkle();
+         let started_vim_edit = self.begin_direct_vim_edit();
+         let elements_before = self.draft.textarea.element_payloads();
+@@ -1952,6 +1961,9 @@ impl ChatComposer {
+ 
+     /// Handle a key event coming from the main UI.
+     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
++        if self.cm_review_key(key_event) {
++            return (InputResult::None, true);
++        }
+         if !self.draft.input_enabled {
+             return (InputResult::None, false);
+         }
+@@ -3025,21 +3037,10 @@ impl ChatComposer {
+         self.draft.textarea.set_text_clearing_elements("");
+         self.draft.prompt_prefix = PromptPrefix::None;
+ 
+-        if pending_paste_handling == PendingPasteHandling::Expand
+-            && !self.draft.pending_pastes.is_empty()
+-        {
+-            // Expand placeholders so element byte ranges stay aligned.
+-            let (expanded, expanded_elements) =
+-                Self::expand_pending_pastes(&text, text_elements, &self.draft.pending_pastes);
+-            text = expanded;
+-            text_elements = expanded_elements;
+-        }
+-
+-        if self.config.trim_submission {
+-            let expanded_input = text.clone();
+-            text = text.trim().to_string();
+-            text_elements = Self::trim_text_elements(&expanded_input, &text, text_elements);
+-        }
++        (text, text_elements) = submit_review::project_text(
++            text, text_elements, &self.draft.pending_pastes, self.config.trim_submission,
++            pending_paste_handling == PendingPasteHandling::Expand,
++        );
+ 
+         if slash_validation == SlashValidation::Immediate
+             && let SubmissionValidation::UnknownCommand(name) = self
+@@ -4540,6 +4541,9 @@ impl ChatComposer {
+         mask_char: Option<char>,
+         options: ComposerRenderOptions<'_>,
+     ) {
++        if self.cm_render_review(area, buf) {
++            return;
++        }
+         let ComposerLayout {
+             status,
+             composer: composer_rect,
+diff --git a/codex-rs/tui/src/bottom_pane/mod.rs b/codex-rs/tui/src/bottom_pane/mod.rs
+index 90ed97e..2c99edf 100644
+--- a/codex-rs/tui/src/bottom_pane/mod.rs
++++ b/codex-rs/tui/src/bottom_pane/mod.rs
+@@ -71,6 +71,8 @@ use ratatui::text::Span;
+ use ratatui::widgets::Paragraph;
+ use std::time::Duration;
+ use std::time::Instant;
++pub(crate) use chat_composer::submit_review::{ReviewAdmission, ReviewCompletion, ReviewReceipt, ReviewWork};
++pub(crate) use chat_composer::submit_review::review_message_key;
+ 
+ mod action_required_title;
+ mod actionable_banner;
+@@ -4323,3 +4325,25 @@ mod tests {
+         assert_eq!(lower_view_handle_calls.get(), 0);
+     }
+ }
++
++impl BottomPane {
++    pub(crate) fn cm_review_context(&mut self, route: String, ready: bool) {
++        self.composer.cm_review_context(route, ready);
++    }
++
++    pub(crate) fn cm_review_completed(&mut self, completion: ReviewCompletion) -> Option<InputResult> {
++        self.composer.cm_review_completed(completion)
++    }
++
++    pub(crate) fn cm_take_receipt(&mut self) -> Option<ReviewReceipt> {
++        self.composer.cm_take_receipt()
++    }
++
++    pub(crate) fn cm_review_pending(&self) -> bool {
++        self.composer.cm_review_pending()
++    }
++
++    pub(crate) fn cm_startup_review(&mut self) -> bool {
++        self.composer.cm_startup_review()
++    }
++}
+diff --git a/codex-rs/tui/src/chatwidget/backend_banners.rs b/codex-rs/tui/src/chatwidget/backend_banners.rs
+index e769319..c210b0f 100644
+--- a/codex-rs/tui/src/chatwidget/backend_banners.rs
++++ b/codex-rs/tui/src/chatwidget/backend_banners.rs
+@@ -223,7 +223,7 @@ impl ChatWidget {
+             self.input_queue
+                 .queued_user_messages
+                 .push_front(QueuedUserMessage {
+-                    source: self.safety_buffering_source,
++                source: self.safety_buffering_source.clone(),
+                     ..QueuedUserMessage::from(prompt)
+                 });
+             self.input_queue
+diff --git a/codex-rs/tui/src/chatwidget/constructor.rs b/codex-rs/tui/src/chatwidget/constructor.rs
+index 8ef5040..c22beee 100644
+--- a/codex-rs/tui/src/chatwidget/constructor.rs
++++ b/codex-rs/tui/src/chatwidget/constructor.rs
+@@ -246,6 +246,7 @@ impl ChatWidget {
+             input_queue: InputQueueState::default(),
+             safety_buffering_prompt: None,
+             safety_buffering_source: UserMessageSource::Prompt,
++            cm_reviewed_command: None,
+             chat_keymap,
+             permission_shortcut_pending: false,
+             show_welcome_banner: is_first_run,
+diff --git a/codex-rs/tui/src/chatwidget/image_submission.rs b/codex-rs/tui/src/chatwidget/image_submission.rs
+index 832104c..89edccb 100644
+--- a/codex-rs/tui/src/chatwidget/image_submission.rs
++++ b/codex-rs/tui/src/chatwidget/image_submission.rs
+@@ -172,3 +172,58 @@ fn prepare_images(
+         })
+         .collect()
+ }
++
++pub(crate) async fn prepare_cm_review_images(
++    images: Vec<LocalImageAttachment>,
++    remote_urls: Vec<String>,
++) -> Result<crate::bottom_pane::ReviewWork, String> {
++    let _guard = IMAGE_PREPARATION.lock().await;
++    tokio::task::spawn_blocking(move || {
++        let remote_bytes = remote_urls.iter().try_fold(0_usize, |bytes, url| bytes.checked_add(url.len()))
++            .ok_or("image transport size overflow")?;
++        if remote_bytes > 32 * 1024 * 1024 {
++            return Err("image attachments exceed the 32 MiB transport limit".into());
++        }
++        let files = cm_image_identities(images.iter().map(|image| image.path.clone()))?;
++        let prepared = prepare_images(images, remote_bytes)?;
++        let after = cm_image_identities(files.iter().map(|(path, _)| path.clone()))?;
++        if files != after {
++            return Err("image changed during review preparation".into());
++        }
++        Ok(crate::bottom_pane::ReviewWork { images: prepared, files })
++    }).await.map_err(|error| format!("image review worker failed: {error}"))?
++}
++
++pub(crate) async fn revalidate_cm_review_images(files: &[(PathBuf, String)]) -> Result<(), String> {
++    let files = files.to_vec();
++    let _guard = IMAGE_PREPARATION.lock().await;
++    tokio::task::spawn_blocking(move || {
++        let current = cm_image_identities(files.iter().map(|(path, _)| path.clone()))?;
++        if current != files {
++            return Err("attachment contents changed; review again".into());
++        }
++        Ok(())
++    }).await.map_err(|error| format!("image validation worker failed: {error}"))?
++}
++
++fn cm_image_identities(paths: impl Iterator<Item = PathBuf>) -> Result<Vec<(PathBuf, String)>, String> {
++    use std::io::Read as _;
++    let mut budget = 32 * 1024 * 1024_usize;
++    paths.map(|path| {
++        let mut file = std::fs::File::open(&path).map_err(|error| error.to_string())?;
++        let before = file.metadata().map_err(|error| error.to_string())?;
++        if !before.is_file() || before.len() > budget as u64 {
++            return Err("review requires bounded regular image files".into());
++        }
++        let mut bytes = Vec::new();
++        file.by_ref().take(budget as u64 + 1).read_to_end(&mut bytes).map_err(|error| error.to_string())?;
++        let after = file.metadata().map_err(|error| error.to_string())?;
++        if bytes.len() > budget || bytes.len() as u64 != before.len()
++            || after.len() != before.len() || after.modified().ok() != before.modified().ok()
++        {
++            return Err("image changed while capturing review".into());
++        }
++        budget -= bytes.len();
++        Ok((path, cm_runtime::tui_review::digest(&bytes)))
++    }).collect()
++}
+diff --git a/codex-rs/tui/src/chatwidget/input_flow.rs b/codex-rs/tui/src/chatwidget/input_flow.rs
+index ce5da8c..e55e3a1 100644
+--- a/codex-rs/tui/src/chatwidget/input_flow.rs
++++ b/codex-rs/tui/src/chatwidget/input_flow.rs
+@@ -23,6 +23,13 @@ impl ChatWidget {
+         input_result: InputResult,
+         had_modal_or_popup: bool,
+     ) {
++        let cm_receipt = self.bottom_pane.cm_take_receipt();
++        if cm_runtime::tui_review::configured() && cm_receipt.is_none()
++            && !matches!(&input_result, InputResult::None | InputResult::ParentOwnedInputBlocked)
++        {
++            self.add_error_message("Input requires a fresh draft review.".into());
++            return;
++        }
+         let follow_transcript = match &input_result {
+             // Opening settings is not a request to leave the current reading anchor.
+             // Inline commands still follow so their output (including usage errors) is visible.
+@@ -53,6 +60,10 @@ impl ChatWidget {
+                 text_elements,
+             } => {
+                 let user_message = self.user_message_from_submission(text, text_elements);
++                let Some(source) = self.cm_admit_message(&user_message, &[], cm_receipt) else {
++                    self.restore_user_message_to_composer(user_message);
++                    return;
++                };
+                 if user_message.text.is_empty()
+                     && user_message.local_images.is_empty()
+                     && user_message.remote_image_urls.is_empty()
+@@ -70,7 +81,7 @@ impl ChatWidget {
+                     if self.only_user_shell_commands_running()
+                         && !user_message.text.starts_with('!')
+                     {
+-                        self.queue_user_message(user_message);
++                        self.queue_user_message_with_options_and_source(user_message, QueuedInputAction::Plain, Vec::new(), source);
+                         return;
+                     }
+                     // Submitted is emitted when user submits.
+@@ -79,9 +90,10 @@ impl ChatWidget {
+                     self.reasoning_header = None;
+                     self.reasoning_summary_parts.clear();
+                     self.set_status_header(String::from("Working"));
+-                    self.submit_user_message(user_message);
++                    self.submit_user_message_with_history_and_shell_escape_policy(user_message,
++                        UserMessageHistoryRecord::UserMessageText, ShellEscapePolicy::Allow, source);
+                 } else {
+-                    self.queue_user_message(user_message);
++                    self.queue_user_message_with_options_and_source(user_message, QueuedInputAction::Plain, Vec::new(), source);
+                 }
+             }
+             InputResult::Queued {
+@@ -91,22 +103,41 @@ impl ChatWidget {
+                 pending_pastes,
+             } => {
+                 let user_message = self.user_message_from_submission(text, text_elements);
+-                if self.queue_user_message_with_options(user_message, action, pending_pastes) {
++                let Some(source) = self.cm_admit_message(&user_message, &pending_pastes, cm_receipt) else {
++                    self.cm_restore_unreviewed(user_message, &pending_pastes);
++                    return;
++                };
++                if self.queue_user_message_with_options_and_source(user_message, action, pending_pastes, source) {
+                     self.app_event_tx.send(AppEvent::FollowTranscript);
+                 }
+             }
+             InputResult::Command(cmd) => {
++                let command = self.cm_admit_command(cm_receipt);
++                if !self.cm_claim_command(command) {
++                    return;
++                }
+                 self.handle_slash_command_dispatch(cmd);
++                self.cm_reviewed_command = None;
+                 // A settings command can instead report why it is unavailable.
+                 if !follow_transcript && self.bottom_pane.no_modal_or_popup_active() {
+                     self.app_event_tx.send(AppEvent::FollowTranscript);
+                 }
+             }
+             InputResult::ServiceTierCommand(command) => {
++                let admission = self.cm_admit_command(cm_receipt);
++                if !self.cm_claim_command(admission) {
++                    return;
++                }
+                 self.handle_service_tier_command_dispatch(command);
++                self.cm_reviewed_command = None;
+             }
+             InputResult::CommandWithArgs(cmd, args, text_elements) => {
++                let command = self.cm_admit_command(cm_receipt);
++                if !self.cm_claim_command(command) {
++                    return;
++                }
+                 self.handle_slash_command_with_args_dispatch(cmd, args, text_elements);
++                self.cm_reviewed_command = None;
+             }
+             InputResult::ParentOwnedInputBlocked => {
+                 self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
+@@ -173,6 +204,11 @@ impl ChatWidget {
+         pending_pastes: Vec<(String, String)>,
+         source: UserMessageSource,
+     ) -> bool {
++        if !self.cm_validate_message(&user_message, &pending_pastes, &source) {
++            self.add_error_message("Queued input requires a fresh composer review; draft retained.".into());
++            self.cm_restore_unreviewed(user_message, &pending_pastes);
++            return false;
++        }
+         if self.has_misalignment_policy_violation() {
+             return false;
+         }
+@@ -205,7 +241,7 @@ impl ChatWidget {
+                                 )
+                         })
+                 });
+-            let model_prompt = source == UserMessageSource::Prompt
++            let model_prompt = source.is_prompt()
+                 && (action == QueuedInputAction::Literal
+                     || action == QueuedInputAction::Plain && !user_message.text.starts_with('!')
+                     || queued_slash_prompt);
+@@ -260,12 +296,24 @@ impl ChatWidget {
+         }
+         let mut submitted_follow_up = false;
+         while !self.is_user_turn_pending_or_running() {
++            let unreviewed = if let Some(message) = self.input_queue.rejected_steers_queue.front() {
++                !self.cm_validate_message(message, &[], self.input_queue.rejected_steer_sources.front()
++                    .unwrap_or(&UserMessageSource::Prompt))
++            } else {
++                self.input_queue.queued_user_messages.front().is_some_and(|queued|
++                    !self.cm_validate_message(&queued.user_message, &queued.pending_pastes, &queued.source))
++            };
++            if unreviewed {
++                self.input_queue.recovered_queue = true;
++                self.add_error_message("Queued input changed or was recovered. Edit and review it before sending; queue and draft retained.".into());
++                break;
++            }
+             let Some((queued_message, history_record)) = self.pop_next_queued_user_message() else {
+                 break;
+             };
+             match queued_message.action {
+                 QueuedInputAction::Plain => {
+-                    let source = queued_message.source;
++                    let source = queued_message.source.clone();
+                     submitted_follow_up = self
+                         .submit_user_message_with_history_and_shell_escape_policy(
+                             queued_message.into_user_message(),
+@@ -329,6 +377,12 @@ impl ChatWidget {
+                     }
+                 }
+                 QueuedInputAction::RunShell => {
++                    if !self.cm_validate_message(&queued_message.user_message, &queued_message.pending_pastes, &queued_message.source)
++                        || !self.cm_deliver_message(&queued_message.source)
++                    {
++                        self.restore_user_message_to_composer(queued_message.into_user_message());
++                        break;
++                    }
+                     let drain = self.submit_queued_shell_prompt(queued_message.into_user_message());
+                     if drain == QueueDrain::Stop {
+                         submitted_follow_up = self.is_user_turn_pending_or_running();
+@@ -384,6 +438,9 @@ impl ChatWidget {
+         text: String,
+         mut collaboration_mode: CollaborationModeMask,
+     ) {
++        if self.cm_reject_programmatic_prompt() {
++            return;
++        }
+         if self.blocks_direct_input {
+             self.add_error_message(if self.external_writer_view {
+                 "This thread is open elsewhere. Close it there and retry resume to continue."
+diff --git a/codex-rs/tui/src/chatwidget/input_restore.rs b/codex-rs/tui/src/chatwidget/input_restore.rs
+index 1f21ca9..cf1a2d1 100644
+--- a/codex-rs/tui/src/chatwidget/input_restore.rs
++++ b/codex-rs/tui/src/chatwidget/input_restore.rs
+@@ -142,6 +142,18 @@ impl ChatWidget {
+     }
+ 
+     pub(crate) fn submit_initial_user_message_if_pending(&mut self) {
++        if cm_runtime::tui_review::configured() {
++            if self.bottom_pane.composer_is_empty()
++                && self.bottom_pane.composer_pending_pastes().is_empty()
++                && let Some(message) = self.initial_user_message.take()
++            {
++                self.restore_user_message_to_composer(message);
++                self.cm_refresh_review_context();
++                self.bottom_pane.cm_startup_review();
++                self.request_redraw();
++            }
++            return;
++        }
+         if self.suppress_initial_user_message_submit || self.input_queue.rate_limit_recovery_pending
+         {
+             return;
+@@ -297,7 +309,12 @@ impl ChatWidget {
+             .push_back(pending_steer.user_message);
+         self.input_queue
+             .rejected_steer_sources
+-            .push_back(pending_steer.source);
++            .push_back(match pending_steer.source {
++                UserMessageSource::ReviewedPrompt(admission) => admission.retry_after_rejection()
++                    .map(|retry| UserMessageSource::ReviewedPrompt(std::sync::Arc::new(retry)))
++                    .unwrap_or(UserMessageSource::Prompt),
++                source => source,
++            });
+         self.input_queue
+             .rejected_steer_history_records
+             .push_back(pending_steer.history_record);
+@@ -368,7 +385,7 @@ impl ChatWidget {
+                         .push_back(pending.history_record);
+                 }
+                 if let Some((message, history_record)) = self.pop_next_queued_user_message() {
+-                    let source = message.source;
++                    let source = message.source.clone();
+                     self.submit_user_message_with_history_and_shell_escape_policy(
+                         message.into_user_message(),
+                         history_record,
+@@ -383,12 +400,13 @@ impl ChatWidget {
+                         .map(|pending| (pending.user_message, pending.history_record))
+                         .collect(),
+                 );
+-                self.submit_user_message_with_history_and_shell_escape_policy(
+-                    user_message,
+-                    history_record,
+-                    ShellEscapePolicy::Allow,
+-                    UserMessageSource::Prompt,
+-                );
++                if cm_runtime::tui_review::configured() {
++                    self.restore_user_message_to_composer(user_message_for_restore(user_message, &history_record));
++                } else {
++                    self.submit_user_message_with_history_and_shell_escape_policy(
++                        user_message, history_record, ShellEscapePolicy::Allow, UserMessageSource::Prompt,
++                    );
++                }
+             } else if let Some(combined) = self.drain_pending_messages_for_restore() {
+                 self.restore_composer_state(combined);
+             }
+@@ -578,7 +596,7 @@ impl ChatWidget {
+             pending_thread_settings: None,
+             composer: composer.has_content().then_some(composer),
+             safety_buffering_prompt: self.safety_buffering_prompt.clone(),
+-            safety_buffering_source: self.safety_buffering_source,
++            safety_buffering_source: self.safety_buffering_source.clone(),
+             pending_steers: self.input_queue.pending_steers.clone(),
+             rejected_steers_queue: self.input_queue.rejected_steers_queue.clone(),
+             rejected_steer_sources: self.input_queue.rejected_steer_sources.clone(),
+diff --git a/codex-rs/tui/src/chatwidget/input_submission.rs b/codex-rs/tui/src/chatwidget/input_submission.rs
+index 9998e77..21017af 100644
+--- a/codex-rs/tui/src/chatwidget/input_submission.rs
++++ b/codex-rs/tui/src/chatwidget/input_submission.rs
+@@ -135,13 +135,22 @@ impl ChatWidget {
+         source: UserMessageSource,
+         prepared_images: Option<Vec<UserInput>>,
+     ) -> (bool, Option<AppCommand>) {
++        if !self.cm_validate_message(&user_message, &[], &source) {
++            self.add_error_message("Input has no current review; restore it in the composer and review before sending.".into());
++            self.restore_user_message_to_composer(user_message);
++            return (false, None);
++        }
++        let prepared_images = match &source {
++            UserMessageSource::ReviewedPrompt(admission) => Some(admission.images.clone()),
++            _ => prepared_images,
++        };
+         self.bottom_pane.dismiss_composer_sparkle();
+         if self.has_misalignment_policy_violation() {
+             return (false, None);
+         }
+         self.empty_state_animation.borrow_mut().dismiss();
+         if self.input_queue.rate_limit_recovery_pending || self.pending_image_submission.is_some() {
+-            let model_prompt = source == UserMessageSource::Prompt
++            let model_prompt = source.is_prompt()
+                 && (shell_escape_policy == ShellEscapePolicy::Disallow
+                     || !user_message.text.starts_with('!'));
+             // A prepared submission was accepted before any messages queued behind it.
+@@ -173,7 +182,7 @@ impl ChatWidget {
+             return (true, None);
+         }
+         if !self.is_session_configured() {
+-            let model_prompt = source == UserMessageSource::Prompt
++            let model_prompt = source.is_prompt()
+                 && (shell_escape_policy == ShellEscapePolicy::Disallow
+                     || !user_message.text.starts_with('!'));
+             tracing::warn!("cannot submit user message before session is configured; queueing");
+@@ -232,6 +241,12 @@ impl ChatWidget {
+         if shell_escape_policy == ShellEscapePolicy::Allow
+             && let Some(stripped) = text.strip_prefix('!')
+         {
++            if !self.cm_deliver_message(&source) {
++                self.restore_user_message_to_composer(UserMessage {
++                    text, local_images, remote_image_urls, text_elements, mention_bindings,
++                });
++                return (false, None);
++            }
+             let app_command = match self.submit_shell_command_with_history(stripped, &text) {
+                 QueueDrain::Continue => None,
+                 QueueDrain::Stop => Some(AppCommand::run_user_shell_command(
+@@ -433,6 +448,12 @@ impl ChatWidget {
+         };
+         let submitted_image_display = (render_in_history && !local_images.is_empty())
+             .then(|| Self::user_message_display_from_inputs(&items));
++        if !self.cm_deliver_message(&source) {
++            self.restore_user_message_to_composer(UserMessage {
++                text, local_images, remote_image_urls, text_elements, mention_bindings,
++            });
++            return (false, None);
++        }
+         let client_user_message_id = uuid::Uuid::new_v4().to_string();
+         crate::startup_recovery::bind_submission(&text, &client_user_message_id);
+         let pending_steer = (!render_in_history).then(|| PendingSteer {
+@@ -445,7 +466,7 @@ impl ChatWidget {
+                 mention_bindings: mention_bindings.clone(),
+             },
+             history_record: history_record.clone(),
+-            source,
++            source: source.clone(),
+             compare_key: Self::pending_steer_compare_key_from_items(&items),
+         });
+         let service_tier = self.service_tier_update_for_core();
+@@ -491,7 +512,7 @@ impl ChatWidget {
+         if !self.submit_op(op.clone()) {
+             return (false, None);
+         }
+-        if source == UserMessageSource::Prompt {
++        if source.is_prompt() {
+             self.bottom_pane.clear_pending_questions();
+         }
+         self.dismiss_backend_banner_for_new_turn();
+diff --git a/codex-rs/tui/src/chatwidget/interaction.rs b/codex-rs/tui/src/chatwidget/interaction.rs
+index 8a0d75a..51cac9c 100644
+--- a/codex-rs/tui/src/chatwidget/interaction.rs
++++ b/codex-rs/tui/src/chatwidget/interaction.rs
+@@ -96,6 +96,7 @@ impl ChatWidget {
+         key_event: KeyEvent,
+         activation_key: Option<crate::key_hint::KeyBinding>,
+     ) -> KeyEventAction {
++        self.cm_refresh_review_context();
+         if self.handle_quick_dial_menu(key_event) {
+             return KeyEventAction::None;
+         }
+diff --git a/codex-rs/tui/src/chatwidget/reconnect.rs b/codex-rs/tui/src/chatwidget/reconnect.rs
+index d50d9d5..2a34803 100644
+--- a/codex-rs/tui/src/chatwidget/reconnect.rs
++++ b/codex-rs/tui/src/chatwidget/reconnect.rs
+@@ -63,7 +63,7 @@ impl ChatWidget {
+                 && let Some(prompt) = input.safety_buffering_prompt.take()
+             {
+                 input.queued_user_messages.push_front(QueuedUserMessage {
+-                    source: input.safety_buffering_source,
++                    source: input.safety_buffering_source.clone(),
+                     delivery: if input.reconnect_pending {
+                         MessageDelivery::Unconfirmed(input.pending_user_message_client_id.take())
+                     } else {
+@@ -145,7 +145,7 @@ impl ChatWidget {
+             self.input_queue
+                 .queued_user_messages
+                 .push_front(QueuedUserMessage {
+-                    source: self.safety_buffering_source,
++                    source: self.safety_buffering_source.clone(),
+                     delivery: MessageDelivery::Unconfirmed(
+                         self.input_queue.pending_user_message_client_id.clone(),
+                     ),
+diff --git a/codex-rs/tui/src/chatwidget/slash_dispatch.rs b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
+index fd56394..d94e99c 100644
+--- a/codex-rs/tui/src/chatwidget/slash_dispatch.rs
++++ b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
+@@ -327,7 +327,7 @@ impl ChatWidget {
+             }
+             SlashCommand::Init => {
+                 const INIT_PROMPT: &str = include_str!("../../assets/prompt_for_init_command.md");
+-                self.submit_user_message(INIT_PROMPT.to_string().into());
++                self.cm_submit_init_prompt(INIT_PROMPT.to_string().into());
+             }
+             SlashCommand::Compact => {
+                 if self.blocks_direct_input {
+@@ -1149,9 +1149,14 @@ impl ChatWidget {
+         &mut self,
+         queued_message: QueuedUserMessage,
+     ) -> QueueDrain {
++        if !self.cm_validate_message(&queued_message.user_message, &queued_message.pending_pastes, &queued_message.source) {
++            self.cm_restore_unreviewed(queued_message.user_message, &queued_message.pending_pastes);
++            return QueueDrain::Stop;
++        }
+         let QueuedUserMessage {
+             user_message,
+             pending_pastes,
++            source,
+             ..
+         } = queued_message;
+         let UserMessage {
+@@ -1162,24 +1167,24 @@ impl ChatWidget {
+             mention_bindings,
+         } = user_message;
+         let Some((name, rest, rest_offset)) = parse_slash_name(&text) else {
+-            self.submit_user_message(UserMessage {
++            self.cm_submit_queued_message(UserMessage {
+                 text,
+                 local_images,
+                 remote_image_urls,
+                 text_elements,
+                 mention_bindings,
+-            });
++            }, source);
+             return QueueDrain::Stop;
+         };
+ 
+         if name.contains('/') {
+-            self.submit_user_message(UserMessage {
++            self.cm_submit_queued_message(UserMessage {
+                 text,
+                 local_images,
+                 remote_image_urls,
+                 text_elements,
+                 mention_bindings,
+-            });
++            }, source);
+             return QueueDrain::Stop;
+         }
+ 
+@@ -1197,7 +1202,11 @@ impl ChatWidget {
+         };
+ 
+         if rest.is_empty() {
+-            return match command {
++            let admission = match source { UserMessageSource::ReviewedPrompt(admission) => Some(admission), _ => None };
++            if !self.cm_claim_command(admission) {
++                return QueueDrain::Stop;
++            }
++            let result = match command {
+                 SlashCommandItem::Builtin(cmd) => {
+                     self.dispatch_command_from_source(cmd, SlashCommandDispatchSource::Queued);
+                     self.queued_command_drain_result(cmd)
+@@ -1207,30 +1216,36 @@ impl ChatWidget {
+                     QueueDrain::Continue
+                 }
+             };
++            self.cm_reviewed_command = None;
++            return result;
+         }
+ 
+         if !command.supports_inline_args() {
+-            self.submit_user_message(UserMessage {
++            self.cm_submit_queued_message(UserMessage {
+                 text,
+                 local_images,
+                 remote_image_urls,
+                 text_elements,
+                 mention_bindings,
+-            });
++            }, source);
+             return QueueDrain::Stop;
+         }
+         let SlashCommandItem::Builtin(cmd) = command else {
+-            self.submit_user_message(UserMessage {
++            self.cm_submit_queued_message(UserMessage {
+                 text,
+                 local_images,
+                 remote_image_urls,
+                 text_elements,
+                 mention_bindings,
+-            });
++            }, source);
+             return QueueDrain::Stop;
+         };
+ 
+         let trimmed_start = rest.trim_start();
++        let admission = match source { UserMessageSource::ReviewedPrompt(admission) => Some(admission), _ => None };
++        if !self.cm_claim_command(admission) {
++            return QueueDrain::Stop;
++        }
+         let leading_trimmed = rest.len().saturating_sub(trimmed_start.len());
+         let trimmed_rest = trimmed_start.trim_end();
+         let args_elements = Self::slash_command_args_elements(
+@@ -1250,6 +1265,7 @@ impl ChatWidget {
+                 source: SlashCommandDispatchSource::Queued,
+             },
+         );
++        self.cm_reviewed_command = None;
+         self.queued_command_drain_result(cmd)
+     }
+ 
+diff --git a/codex-rs/tui/src/chatwidget/startup_submission.rs b/codex-rs/tui/src/chatwidget/startup_submission.rs
+index 7c2f0ca..9669e92 100644
+--- a/codex-rs/tui/src/chatwidget/startup_submission.rs
++++ b/codex-rs/tui/src/chatwidget/startup_submission.rs
+@@ -65,6 +65,9 @@ impl ChatWidget {
+             return;
+         }
+         let Some(confirmed) = self.input_queue.startup_submission.take() else {
++            if self.bottom_pane.cm_review_pending() {
++                return;
++            }
+             crate::startup_recovery::clear();
+             return;
+         };
+@@ -79,6 +82,12 @@ impl ChatWidget {
+         {
+             return;
+         }
++        if cm_runtime::tui_review::configured() {
++            self.cm_refresh_review_context();
++            self.bottom_pane.cm_startup_review();
++            self.request_redraw();
++            return;
++        }
+         let result = self.bottom_pane.prepare_startup_submission();
+         crate::startup_recovery::submitted(&result);
+         self.handle_composer_input_result(result, /*had_modal_or_popup*/ false);
+diff --git a/codex-rs/tui/src/chatwidget/user_messages.rs b/codex-rs/tui/src/chatwidget/user_messages.rs
+index a05f041..03522cf 100644
+--- a/codex-rs/tui/src/chatwidget/user_messages.rs
++++ b/codex-rs/tui/src/chatwidget/user_messages.rs
+@@ -61,12 +61,19 @@ pub(super) enum ShellEscapePolicy {
+     Disallow,
+ }
+ 
+-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++#[derive(Clone, Debug, Eq, PartialEq)]
+ pub(super) enum UserMessageSource {
+     Prompt,
++    ReviewedPrompt(std::sync::Arc<crate::bottom_pane::ReviewAdmission>),
+     QuestionAnswer,
+ }
+ 
++impl UserMessageSource {
++    pub(super) fn is_prompt(&self) -> bool {
++        !matches!(self, Self::QuestionAnswer)
++    }
++}
++
+ /// Whether a recovered message can be submitted without risking a duplicate.
+ #[derive(Debug, Clone, PartialEq)]
+ pub(super) enum MessageDelivery {
+diff --git a/codex-rs/tui/src/chatwidget.rs b/codex-rs/tui/src/chatwidget.rs
+index da3d310..3b0b3cc 100644
+--- a/codex-rs/tui/src/chatwidget.rs
++++ b/codex-rs/tui/src/chatwidget.rs
+@@ -284,6 +284,8 @@ mod input_queue;
+ mod reconnect;
+ use self::input_queue::InputQueueState;
+ mod image_submission;
++pub(crate) use image_submission::{prepare_cm_review_images, revalidate_cm_review_images};
++mod cm_review;
+ mod input_flow;
+ mod input_restore;
+ mod input_submission;
+@@ -704,6 +706,7 @@ pub(crate) struct ChatWidget {
+     input_queue: InputQueueState,
+     safety_buffering_prompt: Option<UserMessage>,
+     safety_buffering_source: UserMessageSource,
++    cm_reviewed_command: Option<std::sync::Arc<crate::bottom_pane::ReviewAdmission>>,
+     /// Main chat-surface bindings resolved from `tui.keymap.chat`.
+     chat_keymap: ChatKeymap,
+     /// Whether the preset submenu owns the next key.
+diff --git a/codex-rs/tui/src/keymap.rs b/codex-rs/tui/src/keymap.rs
+index c185f40..c3538be 100644
+--- a/codex-rs/tui/src/keymap.rs
++++ b/codex-rs/tui/src/keymap.rs
+@@ -182,6 +182,33 @@ pub(crate) struct ComposerKeymap {
+     pub(crate) history_search_next: Vec<KeyBinding>,
+ }
+ 
++impl RuntimeKeymap {
++    pub(crate) fn cm_review_key_conflict(&self) -> bool {
++        let bindings = [
++            &self.composer.submit, &self.composer.queue,
++            &self.app.open_agents, &self.app.open_transcript, &self.app.find_transcript,
++            &self.app.focus_activity, &self.app.open_warnings, &self.app.open_external_editor,
++            &self.app.copy, &self.app.clear_terminal, &self.app.toggle_vim_mode,
++            &self.app.toggle_fast_mode, &self.app.toggle_raw_output, &self.app.toggle_side_conversation,
++            &self.chat.open_presets, &self.chat.toggle_voice, &self.chat.toggle_voice_mute,
++            &self.chat.interrupt_turn, &self.chat.decrease_reasoning_effort,
++            &self.chat.increase_reasoning_effort, &self.chat.previous_permission_mode,
++            &self.chat.next_permission_mode, &self.chat.edit_queued_message,
++            &self.chat.prompt_stack_back, &self.chat.skip_question,
++        ];
++        [KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
++         KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::NONE),
++         KeyEvent::new(KeyCode::Char('y'), KeyModifiers::SHIFT),
++         KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT)].into_iter().any(|key| {
++            bindings.iter().any(|bindings| bindings.is_pressed(key))
++                || self.chords.bindings.iter().any(|binding| {
++                    binding.action.context.overlaps(KeymapContext::Global)
++                        && binding.chord.prefix.is_press(key)
++                })
++        })
++    }
++}
++
+ /// Editor-specific keybindings used by the composer textarea.
+ ///
+ /// These bindings are interpreted only by text-editing widgets and do not

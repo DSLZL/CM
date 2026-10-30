@@ -508,7 +508,9 @@ impl CompositionMod {
                 let resource = unsafe { native::text(descriptor.resource, 128)? };
                 if !(crate::runtime::valid_name(&manifest.id, &resource)
                     || descriptor.kind == cm_abi::v22::KIND_SAMPLING_BUDGET
-                        && resource == cm_abi::v22::SAMPLING_BUDGET_CAPABILITY)
+                        && resource == cm_abi::v22::SAMPLING_BUDGET_CAPABILITY
+                    || descriptor.kind == cm_abi::v22::KIND_SUBMIT_REVIEW
+                        && resource == cm_abi::v22::SUBMIT_REVIEW_CAPABILITY)
                 {
                     return Err(LoadError::native(
                         "negotiate",
@@ -557,6 +559,7 @@ impl CompositionMod {
                     Kind::Tool => crate::runtime::Kind::Tool,
                     Kind::ContextSection => crate::runtime::Kind::ContextSection,
                     Kind::SamplingBudget => crate::runtime::Kind::SamplingBudget,
+                    Kind::SubmitReview => crate::runtime::Kind::SubmitReview,
                     _ => {
                         return Err(LoadError::native(
                             "negotiate",

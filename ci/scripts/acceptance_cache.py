@@ -28,12 +28,18 @@ def recipes(root):
         "mod-pinned-snapshot-build": (root, cargo_args(runtime, "test", cfg, cfg["test_profile"]) +
             ["--lib", "--no-run", "--message-format=json"], target / "host", "cm_runtime"),
     }
-    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A"):
+    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B"):
         probe = Path(os.environ["RUNNER_TEMP"]) / "cm-m02-native-probe-source"
         specs["m02-native-probe-build"] = (probe, ["cargo", "test", "--locked", "--manifest-path",
             "codex-rs/Cargo.toml", "--target", TARGET, "--profile", cfg["test_profile"],
             "--package", "codex-core", "--lib", "--no-run", "--message-format=json"],
             target / "m02-native-probe", "codex_core")
+    if cfg["task_id"] == "CM-G02B":
+        probe = Path(os.environ["RUNNER_TEMP"]) / "cm-review-tui-probe-source"
+        specs["review-tui-probe-build"] = (probe, ["cargo", "test", "--locked", "--manifest-path",
+            "codex-rs/Cargo.toml", "--target", TARGET, "--profile", cfg["test_profile"],
+            "-p", "codex-tui", "--lib", "--no-run", "--message-format=json"],
+            target / "review-tui-probe", "codex_tui")
     return {label: {"cwd": str(cwd), "command": command, "target_directory": str(target), "binary": binary}
             for label, (cwd, command, target, binary) in specs.items()}
 
@@ -46,6 +52,9 @@ def identify(root, logs):
         from runtime_sdk import native_probe_source
         probe = native_probe_source(root)
         inputs["instrumented_source_sha256"] = host.manifest_digest(host.manifest(probe))
+    if "review-tui-probe-build" in specs:
+        from review_before_send import native_probe_source
+        inputs["review_instrumented_source_sha256"] = host.manifest_digest(host.manifest(native_probe_source(root)))
     host.write(logs / "acceptance-build-inputs.json", inputs)
     key = "cm-acceptance-build-v1-" + TARGET + "-" + host.digest(inputs)
     with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
@@ -95,6 +104,8 @@ def run(root, logs, label, destination=None):
     assert recipe == inputs["recipes"][label], "Acceptance build command changed after sealing"
     if label == "m02-native-probe-build":
         assert host.manifest_digest(host.manifest(Path(recipe["cwd"]))) == inputs["instrumented_source_sha256"]
+    if label == "review-tui-probe-build":
+        assert host.manifest_digest(host.manifest(Path(recipe["cwd"]))) == inputs["review_instrumented_source_sha256"]
     state = host.read(logs / "acceptance-build-cache.json")
     cache = Path(os.environ["CM_ACCEPTANCE_BUILD_CACHE_DIR"])
     binary = cache / (label + ".bin")

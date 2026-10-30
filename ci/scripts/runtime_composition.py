@@ -361,7 +361,7 @@ def bound_bwrap_executions(calls, helper):
     return executions
 
 
-def audit_executions(executions, python_scripts=("fixtures/native-loader/tool_barrier.py",), sandbox_aliases=(), bwrap_executions=()):
+def audit_executions(executions, python_scripts=("fixtures/native-loader/tool_barrier.py",), sandbox_aliases=(), bwrap_executions=(), native_probes=()):
     assert executions, "Observer missed the initial exec"
     forbidden = re.compile(r'/(?:cargo|rustc|rustdoc|cc|gcc(?:-[0-9]+)?|g\+\+(?:-[0-9]+)?|c\+\+|clang(?:\+\+)?|ld(?:\.[a-z]+)?|lld|collect2|as|ar|make|cmake|ninja|sccache|node|bun|deno|java)(?=[" ])')
     assert not any(forbidden.search(line) for line in executions), executions
@@ -377,7 +377,7 @@ def audit_executions(executions, python_scripts=("fixtures/native-loader/tool_ba
             sandbox_path(match[1], "true")))
         helper = (match[1] == "/proc/self/exe" and '"--codex-run-as-process-setup"' in line) or (
             match[1] in sandbox_aliases and '"--sandbox-policy-cwd"' in line and '"--permission-profile"' in line) or line in bwrap_executions
-        assert Path(match[1]).name in allowed or helper or missing_probe, "Unclassified executable: " + line
+        assert Path(match[1]).name in allowed or match[1] in native_probes or helper or missing_probe, "Unclassified executable: " + line
         if Path(match[1]).name.startswith("python"):
             assert any(script in line for script in python_scripts), line
 

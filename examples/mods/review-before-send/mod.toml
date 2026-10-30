@@ -1,0 +1,35 @@
+format_version = 3
+id = "org.example.review-before-send"
+version = "0.1.0"
+kind = "sdk"
+dependencies = []
+conflicts = []
+resources = []
+
+# The author step seals these fields from the built ELF before packaging.
+[binary]
+path = "payload.so"
+size = 0
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+target = "x86_64-unknown-linux-gnu"
+entry = "cm_mod_entry_v2"
+glibc_min = "2.17"
+cpu = "x86-64"
+
+[compat]
+abi_major = 2
+abi_minor_min = 2
+abi_minor_max = 2
+host_api_min = "0.8.0"
+required_capabilities = ["tui.submit_review.v1"]
+
+[[contributions]]
+id = "draft-review"
+kind = "submit_review"
+capability = "tui.submit_review.v1"
+resource = "tui.submit_review.v1"
+
+[provenance]
+repository = "https://github.com/DSLZL/CM"
+revision = "0000000000000000000000000000000000000000"
+release_notes = "Require an independent Y confirmation in the local Embedded TUI."

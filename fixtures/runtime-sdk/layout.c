@@ -5,6 +5,8 @@
 #define OFFSET(T, F, N) _Static_assert(offsetof(T, F) == N, #T "." #F)
 _Static_assert(CM_RUNTIME_KIND_SAMPLING_BUDGET == 9u, "sampling budget kind");
 _Static_assert(CM_SAMPLING_BUDGET == 12u, "sampling budget event");
+_Static_assert(CM_RUNTIME_KIND_SUBMIT_REVIEW == 10u, "submit review kind");
+_Static_assert(CM_SUBMIT_REVIEW == 13u, "submit review event");
 SIZE(CmHandleV22, 16);
 OFFSET(CmHandleV22, epoch, 0);
 OFFSET(CmHandleV22, slot, 8);
