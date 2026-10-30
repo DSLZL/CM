@@ -272,7 +272,7 @@ def nondestructive():
         input_review_count = len(tui.reviews())
     assert input_review_count == 1, "One submitted input must have exactly one review"
     shutdown_review_count = len(tui.reviews()) - input_review_count
-    assert shutdown_review_count == 0, "V16 intentional Python-only failure: expected zero shutdown reviews"
+    assert shutdown_review_count == 1, "One graceful shutdown must have exactly one review"
     report("nondestructive", {"first_submit_no_business": True, "full_private_draft_probe": native,
         "input_review_count": input_review_count, "shutdown_review_count": shutdown_review_count})
 
