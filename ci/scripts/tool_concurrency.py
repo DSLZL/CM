@@ -139,7 +139,7 @@ def self_check():
     text = (root / "fixtures/tool-concurrency/driver.py").read_text()
     names = tuple(case.replace("-", "_") for case in CASES)
     original = {name: projection(text, (name,)) for name in names}
-    changed = text.replace('report("steer",', 'report("steer", changed=True,', 1)
+    changed = text.replace('report("steer",', 'report("steer-changed",', 1)
     assert projection(changed, ("steer",)) != original["steer"]
     assert all(projection(changed, (name,)) == original[name] for name in names if name != "steer")
     manifest = tomllib.loads((root / "examples/mods/tool-concurrency/mod.toml").read_text())
