@@ -661,14 +661,14 @@ index e1b08bf..b0dfc50 100644
      pub model: Option<String>,
      /// Default Daybreak preference for new threads and non-interactive turns.
 diff --git a/codex-rs/core/src/code_mode_host.rs b/codex-rs/core/src/code_mode_host.rs
-index de32887..1553762 100644
+index de32887..8401f07 100644
 --- a/codex-rs/core/src/code_mode_host.rs
 +++ b/codex-rs/core/src/code_mode_host.rs
 @@ -100,6 +100,13 @@ impl HostConnection {
              .kill_on_drop(/*kill_on_drop*/ true);
          scrub_non_inheritable_env_vars(command.as_std_mut());
          let mut child = command.spawn()?;
-+        cm_runtime::tool_policy::core_event(
++        cm_runtime::event(
 +            "code-mode-transport",
 +            serde_json::json!({
 +                "host_pid":std::process::id(),"helper_pid":child.id(),
@@ -706,7 +706,7 @@ index 2f13f03..f50f582 100644
              prefer_mxc,
              model,
 diff --git a/codex-rs/core/src/session/turn_context.rs b/codex-rs/core/src/session/turn_context.rs
-index 1c2f977..1ec53eb 100644
+index 1c2f977..d30997f 100644
 --- a/codex-rs/core/src/session/turn_context.rs
 +++ b/codex-rs/core/src/session/turn_context.rs
 @@ -314,6 +314,7 @@ impl std::fmt::Debug for TurnEnvironment {
@@ -785,7 +785,7 @@ index 1c2f977..1ec53eb 100644
 +            .insert(cm_runtime::tool_concurrency::RequestedLimit(
 +                turn_context.cm_tool_concurrency,
 +            ));
-+        cm_runtime::tool_policy::core_event(
++        cm_runtime::event(
 +            "tool-concurrency-turn",
 +            serde_json::json!({
 +                "turn":turn_context.sub_id,"level":turn_context.extension_data.level_id(),
@@ -797,7 +797,7 @@ index 1c2f977..1ec53eb 100644
              &turn_context.config.model_provider_id,
              options.cyber_access_program,
 diff --git a/codex-rs/core/src/session/turn_input.rs b/codex-rs/core/src/session/turn_input.rs
-index 4c1c6ba..503296e 100644
+index 4c1c6ba..ac227da 100644
 --- a/codex-rs/core/src/session/turn_input.rs
 +++ b/codex-rs/core/src/session/turn_input.rs
 @@ -106,6 +106,8 @@ impl PreparedTurnInputSettings {
@@ -856,7 +856,7 @@ index 4c1c6ba..503296e 100644
 +        if let Some(requested) = requested_tool_concurrency
 +            && active_task.turn_context.cm_tool_concurrency != Some(requested)
 +        {
-+            cm_runtime::tool_policy::core_event(
++            cm_runtime::event(
 +                "tool-concurrency-steer-rejected",
 +                serde_json::json!({
 +                    "turn":active_turn_id,"requested":requested,
@@ -884,14 +884,14 @@ index 0db73d9..d93d797 100644
                      cyber_access_program: start_options.cyber_access_program,
                  },
 diff --git a/codex-rs/core/src/tools/code_mode/execute_handler.rs b/codex-rs/core/src/tools/code_mode/execute_handler.rs
-index 25661c6..bbe19cc 100644
+index 25661c6..97cf9fc 100644
 --- a/codex-rs/core/src/tools/code_mode/execute_handler.rs
 +++ b/codex-rs/core/src/tools/code_mode/execute_handler.rs
 @@ -101,6 +101,13 @@ impl CodeModeExecuteHandler {
              .await
              .map_err(FunctionCallError::RespondToModel)?;
          let cell_id = started_cell.cell_id.clone();
-+        cm_runtime::tool_policy::core_event(
++        cm_runtime::event(
 +            "code-mode-cell",
 +            serde_json::json!({
 +                "turn":exec.turn.sub_id,"call_id":call_id,"cell_id":cell_id.to_string(),
@@ -928,7 +928,7 @@ index b0e4479..94ef2bb 100644
          // Code-mode `wait` is runtime control for an existing code cell, not a
          // standalone user action. Tool calls made from code mode still flow
 diff --git a/codex-rs/core/src/tools/parallel.rs b/codex-rs/core/src/tools/parallel.rs
-index 02ad679..67b4faa 100644
+index 02ad679..7349b36 100644
 --- a/codex-rs/core/src/tools/parallel.rs
 +++ b/codex-rs/core/src/tools/parallel.rs
 @@ -145,6 +145,11 @@ impl ToolCallRuntime {
@@ -965,7 +965,7 @@ index 02ad679..67b4faa 100644
 +                .or_cancel_tool(&invocation_cancellation_token)
 +                .await?
 +                .map_err(|error| FunctionCallError::Fatal(error.to_string()))?;
-+                cm_runtime::tool_policy::core_event("tool-concurrency-role", serde_json::json!({
++                cm_runtime::event("tool-concurrency-role", serde_json::json!({
 +                    "call_id":dispatch_call.call_id,"turn":turn.sub_id,"runtime":cm_runtime_id,
 +                    "tool":dispatch_tool_name.to_string(),
 +                    "parent":match &source { ToolCallSource::CodeMode { cell_id, runtime_tool_call_id } =>

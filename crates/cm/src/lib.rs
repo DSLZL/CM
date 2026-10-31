@@ -189,7 +189,8 @@ impl Drop for NativeCall {
     }
 }
 
-pub(crate) fn event(kind: &str, detail: Value) {
+/// Record an embedded Core event in the active Host trace.
+pub fn event(kind: &str, detail: Value) {
     if let Some(Some(trace)) = TRACE.get() {
         match trace.lock() {
             Ok(mut trace) => {
