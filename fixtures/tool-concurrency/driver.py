@@ -303,6 +303,10 @@ def bound_run(case, name, limit, *, code_mode, cells):
         sdk.core.await_barrier(lambda: len(list((directory / "leaves").glob("*.entered"))) == limit
             and sum(row["event"] == "tool-concurrency-wait" for row in rows(trace_dir)) > limit,
             client.process, "N admitted leaves and another actual waiter")
+        if code_mode:
+            sdk.core.await_barrier(lambda: any(row["event"] == "tool-concurrency-role"
+                and row["detail"]["role"] == "orchestration" and row["detail"]["tool"].endswith("wait")
+                for row in rows(trace_dir)), client.process, "actual Code Mode wait before leaf release")
         (directory / "leaves/release").touch()
         complete(client, turn)
     trace = rows(trace_dir)
