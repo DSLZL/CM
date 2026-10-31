@@ -1314,9 +1314,8 @@ def consume():
                  "evidence": ["evidence/review-" + case + ".json"]} for index, case in enumerate(review_steps, 1)]}
     concurrency_acceptance = None
     if producer["task_id"] == "CM-G03":
-        import tool_concurrency
-        concurrency_steps = tool_concurrency.CASES
-        assert producer["concurrency"]["cases"] == list(concurrency_steps)
+        concurrency_steps = [label.removeprefix("concurrency-") for label in retry.PHASES if label.startswith("concurrency-")]
+        assert len(concurrency_steps) == 7 and producer["concurrency"]["cases"] == concurrency_steps
         concurrency_acceptance = {"schema_version": 1, "task_id": "CM-G03", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [
                 {"id": "CM-G03-AC0" + str(index), "status": "not_run", "phase": "concurrency-" + case,
