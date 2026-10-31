@@ -1126,7 +1126,12 @@ def classify_code_mode(calls, executable_memory, helper, hosts, events):
     for pid, entries in executed.items():
         if not any(path == helper for path, _line in entries):
             continue
-        assert len(entries) == 1 and '"--listen"' in entries[0][1] and '"grpc+stdio://"' in entries[0][1], entries
+        assert len(entries) == 1, entries
+        arguments = re.search(r'execve\("[^"]+", (\[.*?\]), ', entries[0][1])
+        assert arguments, entries
+        arguments = json.loads(arguments[1])
+        assert arguments in ([helper], [helper, "--listen", "grpc+stdio://"]), arguments
+        transport = "stdio://" if arguments == [helper] else "grpc+stdio://"
         parent, helper_inner, is_thread = edges[pid]
         assert not is_thread
         host = process(parent)
@@ -1136,7 +1141,8 @@ def classify_code_mode(calls, executable_memory, helper, hosts, events):
         transports = [row["detail"] for row in events if row["event"] == "code-mode-transport"
             and str(row["detail"]["host_pid"]) == host_inner and str(row["detail"]["helper_pid"]) == helper_inner
             and row["detail"]["program"] == helper and row["detail"]["transport"] == "grpc+stdio://"]
-        assert transports, "Helper lacks the actual Host transport event"
+        if transport == "grpc+stdio://":
+            assert transports, "Helper lacks the actual Host transport event"
         cells = [row["detail"] for row in events if row["event"] == "code-mode-cell"
             and str(row["detail"]["host_pid"]) == host_inner]
         assert cells, "Interpreter did not execute an observed business cell"
@@ -1148,7 +1154,8 @@ def classify_code_mode(calls, executable_memory, helper, hosts, events):
         assert not any(value != pid and value in executed for value in family), "Interpreter thread executed another program"
         allowed.update(family)
         bindings.append({"outer_pid": pid, "outer_host_pid": host, "inner_host_pid": host_inner,
-            "inner_helper_pid": helper_inner, "thread_ids": sorted(family), "cell_ids": sorted({cell["cell_id"] for cell in cells})})
+            "inner_helper_pid": helper_inner, "transport": transport, "thread_ids": sorted(family),
+            "cell_ids": sorted({cell["cell_id"] for cell in cells})})
     classified = [line for line in executable_memory if line.split()[0] in allowed]
     return {"executables": [helper] if bindings else [], "bindings": bindings,
         "executable_memory_records": classified,
@@ -1187,8 +1194,13 @@ def check_code_mode_classification():
         {"event":"tool-concurrency-role","detail":{"role":"leaf","parent":{"cell_id":"c1"},"turn":"t1"}}]
     memory = ['21 mmap(NULL, 4096, PROT_READ|PROT_EXEC, MAP_ANONYMOUS, -1, 0) = 0x1']
     assert not classify_code_mode(calls, memory, helper, {host: "sealed"}, events)["unclassified"]
+    stdio = [line.replace(', "--listen", "grpc+stdio://"', "") for line in calls]
+    result = classify_code_mode(stdio, memory, helper, {host: "sealed"}, events[1:])
+    assert not result["unclassified"] and result["bindings"][0]["transport"] == "stdio://"
     assert classify_code_mode(calls, [memory[0].replace("21 mmap", "10 mmap")], helper, {host: "sealed"}, events)["unclassified"]
-    for bad_calls, bad_events in ((calls, events[:1]), (calls, events[:2]),
+    for bad_calls, bad_events in ((calls, events[:1]), (calls, events[:2]), (calls, events[1:]),
+        (stdio, events[1:2]), (stdio, events[2:]),
+        ([line.replace('["' + helper + '"]', '["' + helper + '", "--unknown"]') for line in stdio], events),
         ([line.replace(host, "/work/unbound") if line.startswith("10 execve") else line for line in calls], events)):
         try:
             classify_code_mode(bad_calls, memory, helper, {host:"sealed"}, bad_events)
