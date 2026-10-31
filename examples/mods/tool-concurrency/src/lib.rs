@@ -1,4 +1,4 @@
-use cm_sdk::{Bytes, Host, Init, Mod, Request, v22};
+use cm_sdk::{Host, Init, Mod, Request, abi::Bytes, v22};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
