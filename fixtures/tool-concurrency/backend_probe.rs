@@ -21,7 +21,11 @@ mod cm_concurrency_backend_probe {
             .await
             .err()
             .expect("old or mismatched initialize response must fail before account/business requests");
-        assert!(error.to_string().contains("capability") || error.to_string().contains("identity"));
+        assert!(
+            error.to_string().contains("capability")
+                || error.to_string().contains("[tool_concurrency]"),
+            "{error}"
+        );
         server.shutdown().await?;
         guard.finish().expect("native quiet");
         std::fs::write(

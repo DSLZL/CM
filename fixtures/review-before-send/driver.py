@@ -190,7 +190,12 @@ class Terminal:
                 if row["event"] == "runtime-scope-open" and row["detail"]["turn"]}
             closed = {(row["detail"]["thread"], row["detail"]["turn"]) for row in native
                 if row["event"] == "runtime-scope-closed" and row["detail"]["turn"]}
-            return bool(opened) and opened <= closed
+            # Auxiliary title threads still have stop callbacks after their turn closes.
+            threads = [row["detail"]["thread"] for row in native
+                if row["event"] == "runtime-scope-open" and not row["detail"]["turn"]]
+            stopped = {row["detail"]["thread"] for row in native
+                if row["event"] == "runtime-scope-closed" and not row["detail"]["turn"]}
+            return bool(opened) and opened <= closed and set(threads[1:]) <= stopped
         self.wait(turns_settled, "native turns settled before next input")
 
     def complete(self, token):

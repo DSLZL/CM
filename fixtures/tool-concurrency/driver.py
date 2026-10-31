@@ -177,9 +177,11 @@ class Provider:
                                 items.append({"type": "custom_tool_call", "name": "exec",
                                     "call_id": "g03-exec-" + token + "-" + str(cell), "input": code})
                         else:
-                            names = re.findall(r'"name":\s*"([^"]*g03[^\"]*echo)"', json.dumps(body.get("tools")))
-                            assert names, "MCP leaf not advertised"
-                            items = [{"type": "function_call", "name": names[0], "call_id": "g03-leaf-" + str(i),
+                            namespaces = [tool for tool in body.get("tools", [])
+                                if tool.get("type") == "namespace" and tool.get("name") == "mcp__g03"]
+                            assert len(namespaces) == 1 and any(tool.get("name") == "echo"
+                                for tool in namespaces[0]["tools"]), "MCP leaf not advertised"
+                            items = [{"type": "function_call", "namespace": "mcp__g03", "name": "echo", "call_id": "g03-leaf-" + str(i),
                                 "arguments": json.dumps({"id": token + "-" + str(i)})} for i in range(cells)]
                     elif not title and code_mode and outputs:
                         # Wait only on each cell's latest output, never resubmit an already completed cell.
@@ -327,7 +329,8 @@ def bound_run(case, name, limit, *, code_mode, cells):
         assert all(row["source"] == "code-mode" for row in acquired)
         assert all(row["parent"] is not None for row in roles if row["role"] == "leaf")
         assert len({row["detail"]["cell_id"] for row in trace if row["event"] == "code-mode-cell"}) == cells
-        assert any(row["event"] == "code-mode-transport" for row in trace)
+        assert any(output["call_id"].startswith("g03-wait-")
+            for request in provider.requests for output in request["outputs"])
     return {"turn": turn, "limit": limit, "peak": peak, "leaf_count": len(acquired),
         "orchestration_calls": sorted(orchestrators), "code_mode": code_mode, "trace": str(trace_dir / "native.jsonl")}
 
@@ -485,10 +488,35 @@ def plug_and_play():
     home = Path("/profile/concurrency/plug-and-play/managed")
     budget.cm(home, directory, "install", INPUTS / "mods/g03/tool-concurrency.cmod")
     budget.cm(home, directory, "install", INPUTS / "mods/g02a/turn-budget.cmod")
-    with session("plug-and-play", "original-a-c", home=home) as (client, provider, _, run):
-        turn = begin(client, client.start(), "original-a-c", 1)
-        complete(client, turn)
-    plan = next(row["detail"]["plan"] for row in rows(run / "host") if row["event"] == "ready")
+
+    def business(name, *, explicit=False):
+        run = directory / name
+        run.mkdir(parents=True)
+        provider = Provider()
+        arguments = sdk.command(run, provider.endpoint, "embedded", token=name)[1:]
+        command = [str(BINARY), "cm", "--home", str(home), "launch", "--",
+            *(["--tool-concurrency", "1"] if explicit else []), *arguments]
+        try:
+            with (run / "stdout.jsonl").open("w") as out, (run / "stderr.log").open("w") as err:
+                result = subprocess.run(command, env=sdk.environment(home, run), cwd=run,
+                    stdout=out, stderr=err, timeout=90)
+            write(run / "result.json", {"command": command, "return_code": result.returncode,
+                "provider_requests": provider.requests, "provider_errors": provider.errors})
+            assert result.returncode == 0 and not provider.errors, (run / "stderr.log").read_text()
+            assert any(request["purpose"] == "business" and request["token"] == name
+                for request in provider.requests)
+            trace = rows(run)
+            assert any(row["event"] == "stopped" for row in trace)
+            assert not any(row["event"] == "runtime-scope-failed" for row in trace)
+            if explicit:
+                assert any(row["event"] == "tool-concurrency-turn" and row["detail"]["effective"] == 1 for row in trace)
+            plan = next(row["detail"]["plan"] for row in trace if row["event"] == "ready")
+            assert plan["host"]["executable_sha256"] == frozen
+            return run, plan
+        finally:
+            provider.close()
+
+    run, plan = business("original-a-c", explicit=True)
     assert "sampling_budget" in plan["phases"] and "tool_concurrency" in plan["phases"]
     stable = (home / "cm-profile.json").read_bytes()
     conflict = Path("/work/concurrency-conflict")
@@ -499,15 +527,11 @@ def plug_and_play():
     rejected = budget.cm(home, directory, "install", conflict, success=False)
     assert rejected["code"] == "exclusive_conflict" and (home / "cm-profile.json").read_bytes() == stable
     budget.cm(home, directory, "disable", OWNER)
-    with session("plug-and-play", "disabled", home=home) as (client, provider, _, run):
-        turn = begin(client, client.start(), "disabled")
-        complete(client, turn)
+    business("disabled")
     budget.cm(home, directory, "enable", OWNER)
     budget.cm(home, directory, "remove", OWNER)
-    with session("plug-and-play", "removed", home=home) as (client, provider, _, run):
-        turn = begin(client, client.start(), "removed")
-        complete(client, turn)
-        assert not any(row["event"] == "tool-concurrency-acquired" for row in rows(run / "host"))
+    run, plan = business("removed")
+    assert not any(row["event"] == "tool-concurrency-acquired" for row in rows(run))
     assert sha(BINARY) == frozen
     producer = read(Path("/fixture/concurrency-producer.json"))
     assert producer["author"]["payload_sha256"] == sha(INPUTS / "mods/g03/tool-concurrency/payload.so")
