@@ -264,6 +264,21 @@ def self_check():
     from retry import PHASES, projection
     from unittest.mock import patch
     import runtime_consumer
+    settled = driver().turns_settled
+    def event(kind, seq, thread="main", turn="", **detail):
+        return {"event": kind, "seq": seq, "detail": {"thread": thread, "turn": turn, **detail}}
+    turn = [event("runtime-scope-open", 1, turn="t1"), event("runtime-scope-closed", 2, turn="t1")]
+    assert not settled([]) and not settled(turn[:1]) and settled(turn)
+    lifecycle = [event("runtime-request", 0, event_kind=1, request={"slot": 1}),
+        event("runtime-request-released", 0, request={"slot": 1}, ok=True), *turn]
+    assert not settled(lifecycle)
+    idle = [*lifecycle, event("runtime-request", 3, event_kind=4, request={"slot": 2})]
+    assert not settled(idle)
+    idle.append(event("runtime-request-released", 4, request={"slot": 2}, ok=True))
+    assert settled(idle)
+    assert not settled([*idle, event("runtime-scope-open", 5, turn="t2"),
+        event("runtime-scope-closed", 6, turn="t2")])
+    assert settled([*idle, event("runtime-scope-open", 7, thread="title")])
     assert list(CASES) == [label.removeprefix("review-") for label in PHASES if label.startswith("review-")]
     text = (Path(__file__).resolve().parents[2] / "fixtures/review-before-send/driver.py").read_text()
     names = ("nondestructive", "invalidation", "key_events", "entry_coverage", "queue_lifecycle", "plug_and_play")

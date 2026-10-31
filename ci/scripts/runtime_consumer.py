@@ -1068,7 +1068,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
         normalized.append(line)
     routes = observer.kernel_route_sockets(sockets)
     tcp_connections = observer.provider_tcp_connections(tcp_metadata, ports)
-    observer.audit_network(normalized, Path("/evidence"), ports, routes, tcp_connections)
+    audit_runtime_network(observer, normalized, Path("/evidence"), ports, routes, tcp_connections)
     # Writable executable mappings are unsupported, even if no compiler was exec'd.
     assert not code_mode["unclassified"], "Unclassified runtime code generation: " + repr(code_mode["unclassified"])
     assert file_count, "File-load observer produced no records"
@@ -1095,6 +1095,32 @@ def budget_cases(producer):
     cases = [label.removeprefix("g02a-") for label in retry.PHASES if label.startswith("g02a-")]
     assert len(cases) == 6 and producer["g02a"]["cases"] == cases, "Frozen budget cases differ from the consumer checkpoints"
     return cases
+
+
+def audit_runtime_network(observer, lines, directory, ports, routes=(), tcp_connections=()):
+    # Both local pair types use the same observed endpoint-inode checks; retain raw records in the report.
+    normalized = [re.sub(r'(socketpair\(AF_UNIX, )SOCK_SEQPACKET(?=[|,])', r'\1SOCK_STREAM', line)
+        .replace("UNIX-SEQPACKET:", "UNIX-STREAM:") for line in lines]
+    observer.audit_network(normalized, directory, ports, routes, tcp_connections)
+
+
+def check_runtime_network():
+    import runtime_composition as observer
+    pair = '3 socketpair(AF_UNIX, SOCK_SEQPACKET|SOCK_CLOEXEC, 0, [48<UNIX:[51]>, 49<UNIX:[52]>]) = 0'
+    send = '4 sendto(48<UNIX:[51]>, "<payload redacted>", 4, 0, NULL, 0) = 4'
+    for lines in ([pair, send], [send, pair],
+            [pair.replace("UNIX:", "UNIX-SEQPACKET:"), send.replace("UNIX:", "UNIX-SEQPACKET:")]):
+        audit_runtime_network(observer, lines, Path("/evidence"), set())
+    for lines in ([send], [pair, send.replace("[51]", "[53]")],
+            [pair.replace("SOCK_SEQPACKET", "SOCK_DGRAM"), send],
+            [pair.replace("AF_UNIX", "AF_INET"), send],
+            [pair.replace("[52]", "[51]"), send],
+            [pair, '3 connect(48<UNIX:[51]>, {sa_family=AF_UNIX, sun_path="/outside/socket"}, 32) = 0']):
+        try:
+            audit_runtime_network(observer, lines, Path("/evidence"), set())
+        except AssertionError:
+            continue
+        raise AssertionError("Runtime audit accepted an unbound socket pair or peer")
 
 
 def classify_code_mode(calls, executable_memory, helper, hosts, events):
@@ -1136,7 +1162,7 @@ def classify_code_mode(calls, executable_memory, helper, hosts, events):
         assert not is_thread
         host = process(parent)
         assert any(path in hosts for path, _line in executed.get(host, ())), "Helper parent is not the sealed Host"
-        host_inner = inner.get(parent) or inner.get(host)
+        host_inner = inner.get(parent) or inner.get(host) or (edges[host][1] if host in edges else None)
         assert host_inner is not None, "Host PID namespace identity missing"
         transports = [row["detail"] for row in events if row["event"] == "code-mode-transport"
             and str(row["detail"]["host_pid"]) == host_inner and str(row["detail"]["helper_pid"]) == helper_inner
@@ -1197,9 +1223,14 @@ def check_code_mode_classification():
     stdio = [line.replace(', "--listen", "grpc+stdio://"', "") for line in calls]
     result = classify_code_mode(stdio, memory, helper, {host: "sealed"}, events[1:])
     assert not result["unclassified"] and result["bindings"][0]["transport"] == "stdio://"
+    spawned_host = ['1 clone(child_stack=NULL, flags=SIGCHLD) = 2 /* 10 in strace\x27s PID NS */',
+        *(line for line in stdio if not line.startswith("10 getpid"))]
+    assert classify_code_mode(spawned_host, memory, helper, {host: "sealed"}, events[1:])["bindings"][0]["inner_host_pid"] == "2"
     assert classify_code_mode(calls, [memory[0].replace("21 mmap", "10 mmap")], helper, {host: "sealed"}, events)["unclassified"]
     for bad_calls, bad_events in ((calls, events[:1]), (calls, events[:2]), (calls, events[1:]),
         (stdio, events[1:2]), (stdio, events[2:]),
+        ([line for line in stdio if not line.startswith("10 getpid")], events[1:]),
+        ([line.replace(' = 2 /* 10', ' = 9 /* 10') for line in spawned_host], events[1:]),
         ([line.replace('["' + helper + '"]', '["' + helper + '", "--unknown"]') for line in stdio], events),
         ([line.replace(host, "/work/unbound") if line.startswith("10 execve") else line for line in calls], events)):
         try:

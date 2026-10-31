@@ -381,14 +381,13 @@ def value_flow():
     # The existing PTY helper requires a managed profile.
     management = module("turn-budget/driver.py")
     management.cm(home, Path("/evidence/concurrency/value-flow/tui-install"), "install", INPUTS / "mods/g03/tool-concurrency.cmod")
-    tui = review.Terminal("concurrency-value-flow", "tui", home, reviewed=False,
-        launch_args=("--tool-concurrency", "2"))
-    try:
-        tui.send("CM_M02_g03tui\r")
+    with review.terminal("concurrency-value-flow", "tui", home=home, enabled=False,
+            launch_args=("--tool-concurrency", "2")) as tui:
+        tui.send("\x1b[200~CM_M02_g03tui\x1b[201~")
+        tui.wait(lambda: b"CM_M02_g03tui" in tui.output, "TUI draft rendered before Enter")
+        tui.send(b"\r")
         tui.wait(lambda: any(row["event"] == "tool-concurrency-turn" and row["detail"]["effective"] == 2
             for row in tui.native()), "TUI typed concurrency reaches Core")
-    finally:
-        tui.close(True)
     shutil.move(str(tui.directory), "/evidence/concurrency/value-flow/tui")
     report("value-flow", {"stdio_core_values": values, "invalid_before_business": True,
         "exec_cli_limits": [1, 2, 1024], "embedded_tui_limit": 2})

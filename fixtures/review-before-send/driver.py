@@ -92,6 +92,24 @@ def probe(case, *, changed=False):
     return names
 
 
+def turns_settled(native):
+    opened = {(row["detail"]["thread"], row["detail"]["turn"]) for row in native
+        if row["event"] == "runtime-scope-open" and row["detail"]["turn"]}
+    closed = {(row["detail"]["thread"], row["detail"]["turn"]) for row in native
+        if row["event"] == "runtime-scope-closed" and row["detail"]["turn"]}
+    requests = [row for row in native if row["event"] == "runtime-request"]
+    released = {json.dumps(row["detail"]["request"], sort_keys=True) for row in native
+        if row["event"] == "runtime-request-released" and row["detail"]["ok"]}
+    pending = any(json.dumps(row["detail"]["request"], sort_keys=True) not in released for row in requests)
+    lifecycle = {row["detail"]["thread"] for row in requests if row["detail"]["event_kind"] == 1}
+    idle = {row["detail"]["thread"]: row["seq"] for row in requests if row["detail"]["event_kind"] == 4}
+    # THREAD_IDLE callbacks must finish before shutdown; idle threads close during shutdown.
+    return bool(opened) and opened <= closed and not pending and all(
+        idle.get(row["detail"]["thread"], 0) > row["seq"] for row in native
+        if row["event"] == "runtime-scope-closed" and row["detail"]["turn"]
+        and row["detail"]["thread"] in lifecycle)
+
+
 class Terminal:
     def __init__(self, case, name, home, *, reviewed=True, launch_args=()):
         self.sdk = module("runtime-sdk/driver.py")
@@ -184,19 +202,7 @@ class Terminal:
         assert len(self.provider.requests) == before == 0, "Business started before explicit Y"
 
     def wait_turns(self):
-        def turns_settled():
-            native = self.native()
-            opened = {(row["detail"]["thread"], row["detail"]["turn"]) for row in native
-                if row["event"] == "runtime-scope-open" and row["detail"]["turn"]}
-            closed = {(row["detail"]["thread"], row["detail"]["turn"]) for row in native
-                if row["event"] == "runtime-scope-closed" and row["detail"]["turn"]}
-            # Auxiliary title threads still have stop callbacks after their turn closes.
-            threads = [row["detail"]["thread"] for row in native
-                if row["event"] == "runtime-scope-open" and not row["detail"]["turn"]]
-            stopped = {row["detail"]["thread"] for row in native
-                if row["event"] == "runtime-scope-closed" and not row["detail"]["turn"]}
-            return bool(opened) and opened <= closed and set(threads[1:]) <= stopped
-        self.wait(turns_settled, "native turns settled before next input")
+        self.wait(lambda: turns_settled(self.native()), "native turns and idle callbacks settled before next input")
 
     def complete(self, token):
         self.send("y")

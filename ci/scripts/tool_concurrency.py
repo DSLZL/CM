@@ -150,6 +150,7 @@ def self_check():
     manifest = tomllib.loads((root / "examples/mods/tool-concurrency/mod.toml").read_text())
     assert manifest["id"] == OWNER and manifest["compat"]["required_capabilities"] == [CAPABILITY]
     runtime_consumer.check_code_mode_classification()
+    runtime_consumer.check_runtime_network()
     checkpoint = object.__new__(Checkpoints)
     checkpoint.reports = {"concurrency-" + case: ["concurrency-" + case + ".json"] for case in CASES}
     for case in CASES:
