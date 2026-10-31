@@ -74,6 +74,11 @@ def prepare(inputs, package, frozen, logs, authors, sdk):
     mod_manifest.zip_package(destination, archive)
     exports = subprocess.check_output(["nm", "-D", "--defined-only", str(payload)], text=True)
     assert re.search(r"\bT cm_mod_entry_v2$", exports, re.MULTILINE)
+    preflight = Path(os.environ["RUNNER_TEMP"]) / "concurrency-author-plan"
+    shutil.copytree(destination, preflight / "mods" / OWNER)
+    mod_manifest.write_toml(preflight / "cm-runtime.toml", {"format_version": 2, "enabled": [OWNER]})
+    mod_manifest.metadata(package / "bin/codex", preflight, ["plan"],
+        evidence=logs / "concurrency-author-manifest.json")
     identity = {"sources": host.manifest(root, [*source.rglob("*"),
         *(root / "crates/cm-sdk").rglob("*"), *(root / "crates/cm-abi").rglob("*")]),
         "lock_sha256": before, "dependencies": dependencies, "toolchain": cfg["rust_toolchain"],

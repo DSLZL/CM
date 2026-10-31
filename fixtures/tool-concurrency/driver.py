@@ -484,7 +484,6 @@ def plug_and_play():
     frozen = sha(BINARY)
     directory = Path("/evidence/concurrency/plug-and-play")
     home = Path("/profile/concurrency/plug-and-play/managed")
-    budget.cm(home, directory, "init")
     budget.cm(home, directory, "install", INPUTS / "mods/g03/tool-concurrency.cmod")
     budget.cm(home, directory, "install", INPUTS / "mods/g02a/turn-budget.cmod")
     with session("plug-and-play", "original-a-c", home=home) as (client, provider, _, run):
