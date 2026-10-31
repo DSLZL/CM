@@ -168,6 +168,8 @@ def schemas(root, logs):
         return
     verify_sources(root, logs)
     cfg = load_config(root)
+    for unit in cfg["units"]:
+        execute(root, logs, "g03-" + unit["id"] + "-early-fmt", build_commands(unit, cfg)["fmt"])
     tree = root / HOST
     before = {row["path"]: row for row in manifest(tree)}
     env = {**os.environ, "CARGO_TARGET_DIR": str(Path(os.environ["CARGO_TARGET_DIR"]) / "g03-schema"),
