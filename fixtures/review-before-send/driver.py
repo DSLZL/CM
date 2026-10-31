@@ -211,6 +211,8 @@ class Terminal:
             listener = None
             if success:
                 # A visible reply can precede completion of the auxiliary title turn.
+                self.wait(lambda: any(row["purpose"] == "title" for row in self.provider.requests),
+                    "auxiliary title request before shutdown")
                 self.wait_turns()
                 listener = self.managed.tui_mcp_listener(self.process.pid)
                 assert any(item.get("name") == "mcp__codex_worktrees"
