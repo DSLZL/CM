@@ -534,6 +534,7 @@ def plug_and_play():
     budget.cm(home, directory, "enable", OWNER)
     budget.cm(home, directory, "remove", OWNER)
     run, plan = business("removed")
+    assert "tool_concurrency" in plan["phases"], ("intentional R12 checkpoint fault", sorted(plan["phases"]))
     assert not any(row["event"] == "tool-concurrency-acquired" for row in rows(run))
     assert sha(BINARY) == frozen
     producer = read(Path("/fixture/concurrency-producer.json"))
