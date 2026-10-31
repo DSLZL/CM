@@ -373,7 +373,6 @@ def value_flow():
     home = Path("/profile/concurrency/value-flow/tui")
     # The existing PTY helper requires a managed profile.
     management = module("turn-budget/driver.py")
-    management.cm(home, Path("/evidence/concurrency/value-flow/tui-install"), "init")
     management.cm(home, Path("/evidence/concurrency/value-flow/tui-install"), "install", INPUTS / "mods/g03/tool-concurrency.cmod")
     tui = review.Terminal("concurrency-value-flow", "tui", home, reviewed=False,
         launch_args=("--tool-concurrency", "2"))
