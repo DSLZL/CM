@@ -264,7 +264,8 @@
             "tool",
             "context_section",
             "sampling_budget",
-            "submit_review"
+            "submit_review",
+            "tool_concurrency"
           ]
         },
         "capability": {

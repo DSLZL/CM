@@ -42,7 +42,7 @@ def restore_reference():
     import host
     import worker_policy as policy
     from linux_ci import load_config
-    if load_config(Path(os.environ["CM_SOURCE_DIR"]))["task_id"] != "CM-G02B":
+    if load_config(Path(os.environ["CM_SOURCE_DIR"]))["task_id"] not in ("CM-G02B", "CM-G03"):
         return
     source, worker, _, workflow, _ = policy.identities()
     remote = policy.verify_origin(REFERENCE_ORIGIN, source, worker, workflow)
@@ -144,6 +144,25 @@ def native_probe_source(root):
     shutil.copyfile(root / "fixtures/review-before-send/app_probe.rs", tui / "app/tests/cm_review_probe.rs")
     with (tui / "app/tests.rs").open("a") as stream:
         stream.write('\n#[path = "tests/cm_review_probe.rs"]\nmod cm_review_probe;\n')
+    from linux_ci import load_config
+    if load_config(root)["task_id"] == "CM-G03":
+        shutil.copyfile(root / "fixtures/tool-concurrency/backend_probe.rs", tui / "app_server_session/cm_concurrency_backend.rs")
+        with (tui / "app_server_session.rs").open("a") as stream:
+            stream.write('\n#[cfg(test)]\ninclude!("app_server_session/cm_concurrency_backend.rs");\n')
+        responder = probe / "codex-rs/app-server/src/request_processors/initialize_processor.rs"
+        text = responder.read_text()
+        anchor = "        self.outgoing\n            .send_response(connection_request_id, response)"
+        assert text.count(anchor) == 1
+        text = text.replace(anchor, '''        let mut response = response;
+        match std::env::var("CM_CONCURRENCY_BACKEND_FAULT").as_deref() {
+            Ok("missing") => response.cm_tool_concurrency = None,
+            Ok("wrong-build") => response.cm_tool_concurrency.as_mut().expect("CM backend").host_build_id = "wrong-build".into(),
+            Ok("wrong-capability") => response.cm_tool_concurrency.as_mut().expect("CM backend").capability = "wrong-capability".into(),
+            Ok("disabled") => response.cm_tool_concurrency.as_mut().expect("CM backend").provider_enabled = false,
+            _ => {},
+        }
+''' + anchor)
+        responder.write_text(text)
     return probe
 
 

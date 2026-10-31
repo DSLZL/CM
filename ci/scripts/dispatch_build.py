@@ -134,7 +134,7 @@ def main():
         return found[0]
     receipt_record = exact(receipt_name)
     source_config = api("repos/" + source + "/contents/.github/cm-ci.json?ref=" + source_sha)
-    consumer_required = json.loads(base64.b64decode(source_config["content"]))["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B")
+    consumer_required = json.loads(base64.b64decode(source_config["content"]))["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03")
     consumer_artifact = exact("cm-linux-x64-consumer-artifacts-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
     jobs = get_run(run_path + "/attempts/" + str(run["run_attempt"]) + "/jobs?per_page=100")["jobs"]
     producer_jobs = [job for job in jobs if job["name"] in ("build-read / linux-x64", "build-write / linux-x64") and job["conclusion"] == "success"]

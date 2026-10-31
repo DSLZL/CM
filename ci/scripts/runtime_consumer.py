@@ -160,7 +160,7 @@ def produce():
     lock = sha(root / unit["lockfile"])
     authors = {"a": read(logs / "mod-build.json")}
     for variant in ("normal", "two-limiters", "init-fail", *ENTRY_INVALID, *CALL_INVALID,
-                    *(("config",) if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B") else ())):
+                    *(("config",) if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03") else ())):
         target = Path(os.environ["CARGO_TARGET_DIR"]) / ("output-limit-" + variant)
         assert not target.exists(), "Independent author target must start empty"
         env = {**os.environ, "CARGO_TARGET_DIR": str(target), "CM_LIMIT_VARIANT": variant}
@@ -205,7 +205,7 @@ def produce():
         shutil.copyfile(root / relative, destination)
     metadata_audit = None
     binary_packages = None
-    if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B"):
+    if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03"):
         import mod_manifest
         legacy = read(artifact / "evidence/runtime-plan-determinism.json")["mods"]["a/normal"]
         composition.install(inputs, legacy, directory="m01-legacy-v2")
@@ -236,27 +236,31 @@ def produce():
                       "prepared_profile": inventory(inputs / "official/profile")}
     write(logs / "official-profile-setup.json", official_setup)
     runtime_sdk = None
-    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B"):
+    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03"):
         from runtime_sdk import prepare
         runtime_sdk = prepare(inputs, package, authors)
-    if cfg["task_id"] in ("CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B"):
+    if cfg["task_id"] in ("CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03"):
         import managed_package
         managed_package.prepare(inputs, package, frozen, logs)
-    if cfg["task_id"] in ("CM-M04", "CM-M05", "CM-G02A", "CM-G02B"):
+    if cfg["task_id"] in ("CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03"):
         import runtime_state
         runtime_state.prepare(inputs, package, frozen, logs, authors)
     m05 = None
-    if cfg["task_id"] in ("CM-M05", "CM-G02A", "CM-G02B"):
+    if cfg["task_id"] in ("CM-M05", "CM-G02A", "CM-G02B", "CM-G03"):
         import mod_author
         m05 = mod_author.prepare(inputs, package, frozen, logs)
     g02a = None
-    if cfg["task_id"] in ("CM-G02A", "CM-G02B"):
+    if cfg["task_id"] in ("CM-G02A", "CM-G02B", "CM-G03"):
         import turn_budget
         g02a = turn_budget.prepare(inputs, package, frozen, logs, authors, runtime_sdk)
     review = None
-    if cfg["task_id"] == "CM-G02B":
+    if cfg["task_id"] in ("CM-G02B", "CM-G03"):
         import review_before_send
         review = review_before_send.prepare(inputs, package, frozen, logs, authors, runtime_sdk)
+    concurrency = None
+    if cfg["task_id"] == "CM-G03":
+        import tool_concurrency
+        concurrency = tool_concurrency.prepare(inputs, package, frozen, logs, authors, runtime_sdk)
     write(inputs / "producer.json", {"schema_version": 1, "task_id": cfg["task_id"], "target": TARGET,
         "provenance": provenance(), "producer_job": os.environ["GITHUB_JOB"], "host": frozen, "authors": authors,
         "entry_invalid": ENTRY_INVALID, "call_invalid": CALL_INVALID,
@@ -264,7 +268,7 @@ def produce():
         "maintained_source": read(logs / "host-source-provenance.json"), "official": host.manifest(inputs / "official"),
         "official_profile_setup": official_setup, "c_layout": read(logs / "output-limit-c-layout.log"),
         "metadata_source_attachment_audit": metadata_audit, "binary_packages": binary_packages,
-        "runtime_sdk": runtime_sdk, "m05": m05, "g02a": g02a, "review": review})
+        "runtime_sdk": runtime_sdk, "m05": m05, "g02a": g02a, "review": review, "concurrency": concurrency})
     entries = inventory(inputs)
     write(inputs / "input-manifest.json", {"files": entries, "sha256": digest(entries)})
     write(logs / "consumer-input-links.json", [entry for entry in entries if "link" in entry])
@@ -962,11 +966,14 @@ def bind_tui_mcp_listener(record, metadata, bound_hosts, observer):
     command = record["command"]
     assert len(command) >= 6 and command[:3] == ["/inputs/host/bin/codex", "cm", "--home"]
     initial_image = command[3] == "/profile/review/entry-coverage/cli-image"
-    expected = ["launch", "--", "--image", "/profile/review/entry-coverage/probe-0/review.png", "--", "CM_M02_cli-image"] if initial_image else ["launch", "--"]
+    concurrency = command[3] == "/profile/concurrency/value-flow/tui"
+    expected = (["launch", "--", "--tool-concurrency", "2"] if concurrency else
+        ["launch", "--", "--image", "/profile/review/entry-coverage/probe-0/review.png", "--", "CM_M02_cli-image"]
+        if initial_image else ["launch", "--"])
     assert command[4:] == expected
-    assert command[3] in ("/profile/m03/tui", "/profile/m04/tui") or re.fullmatch(
+    assert concurrency or command[3] in ("/profile/m03/tui", "/profile/m04/tui") or re.fullmatch(
         r"/profile/review/(?:nondestructive|invalidation|key-events|entry-coverage|queue-lifecycle|plug-and-play)/[a-z0-9-]+", command[3])
-    assert record["tui"] and record["empty_launch_argv"] is (not initial_image)
+    assert record["tui"] and record["empty_launch_argv"] is (not (initial_image or concurrency))
     assert record["identity"]["proc_exe"] == command[0]
     assert record["identity"]["executable_sha256"] == bound_hosts[command[0]]
     assert any(item.get("name") == "mcp__codex_worktrees" for request in record["provider_requests"] for item in request["tools"])
@@ -990,7 +997,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
     scripts = ("fixtures/native-loader/tool_barrier.py", "fixtures/runtime-consumer/driver.py",
                "ci/scripts/mod_manifest.py", "ci/scripts/runtime_sdk.py", "ci/scripts/managed_package.py",
                "ci/scripts/runtime_state.py", "ci/scripts/mod_author.py", "fixtures/turn-budget/driver.py",
-               "fixtures/review-before-send/driver.py")
+               "fixtures/review-before-send/driver.py", "fixtures/tool-concurrency/driver.py")
     network = []
     sockets = []
     tcp_metadata = []
@@ -999,6 +1006,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
     executions = []
     file_count = 0
     executable_memory = []
+    process_calls = []
     trace_files = sorted(directory.glob("syscalls.*"))
     started = time.monotonic()
     for index, path in enumerate(trace_files, 1):
@@ -1008,6 +1016,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
         path.write_text(text, encoding="utf-8")
         assert not re.search(r'\b(?:sendto|recvfrom)\([^\n]*?, "(?!<payload redacted>)', text)
         calls = observer.complete_syscalls(text.splitlines())
+        process_calls.extend(line for line in calls if re.match(r'\d+\s+(?:execve|clone|clone3|fork|vfork|getpid|gettid)\(', line))
         bwrap_executions.update(observer.bound_bwrap_executions(calls,
             ("/inputs/host/codex-resources/bwrap", "/work/m03/独立 Host/codex-resources/bwrap")))
         sockets.extend(line for line in calls if re.match(r'\d+\s+socket\(', line))
@@ -1016,7 +1025,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
         executions.extend(line for line in calls if re.match(r'\d+\s+execve(?:at)?\(', line))
         network.extend(line for line in calls if re.match(r'\d+\s+(?:connect|sendto|socketpair)\(', line))
         file_count += sum(bool(re.match(r'\d+\s+(?:openat|readlink)\(', line)) for line in calls)
-        # This fixed native fixture has no supported in-process code generator.
+        # Executable mappings must be attributed to a sealed business interpreter below.
         executable_memory.extend(line for line in calls if "PROT_EXEC" in line and
             ("MAP_ANONYMOUS" in line or re.match(r'\d+\s+mprotect\(', line)))
         if index % 500 == 0 or index == len(trace_files):
@@ -1032,8 +1041,10 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
     assert set(alias_targets) == aliases
     bound_hosts = bind_host_executables(executions, consumer_root or directory.parent)
     native_probes = bind_review_probes(executions, consumer_root or directory.parent)
+    concurrency_probes = bind_concurrency_probes(executions, consumer_root or directory.parent)
+    code_mode = bind_code_mode(process_calls, executable_memory, evidence, consumer_root or directory.parent, result_paths)
     observer.audit_executions(executions, python_scripts=scripts, sandbox_aliases=aliases,
-        bwrap_executions=bwrap_executions, native_probes=native_probes)
+        bwrap_executions=bwrap_executions, native_probes=[*native_probes, *concurrency_probes, *code_mode["executables"]])
     ports = set()
     tui_listeners = []
     for path in sorted(evidence.rglob("result.json") if result_paths is None else result_paths):
@@ -1059,10 +1070,12 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
     tcp_connections = observer.provider_tcp_connections(tcp_metadata, ports)
     observer.audit_network(normalized, Path("/evidence"), ports, routes, tcp_connections)
     # Writable executable mappings are unsupported, even if no compiler was exec'd.
-    assert not executable_memory, "Unclassified runtime code generation: " + repr(executable_memory)
+    assert not code_mode["unclassified"], "Unclassified runtime code generation: " + repr(code_mode["unclassified"])
     assert file_count, "File-load observer produced no records"
     return {"status": "pass", "executions": executions, "network": network, "kernel_route_sockets": sorted(routes),
         "native_review_probes": native_probes,
+        "native_concurrency_probes": concurrency_probes,
+        "normal_business_interpreter": code_mode,
         "provider_tcp_connections": sorted(tcp_connections), "provider_tcp_metadata": tcp_metadata,
         "tui_mcp_listener": next((row for row in tui_listeners if row["evidence"] == "m03/actual-tui/result.json"), None),
         "tui_mcp_listeners": tui_listeners,
@@ -1070,7 +1083,9 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
         "packaged_bwrap_fd_executions": sorted(bwrap_executions),
         "bound_host_executables": bound_hosts,
         "file_load_count": file_count, "trace_files": [path.name for path in trace_files],
-        "compiler_linker_jit_build_service_calls": 0, "unclassified_executable_memory": executable_memory,
+        "compiler_linker_jit_build_service_calls": 0, "unclassified_executable_memory": code_mode["unclassified"],
+        "executable_memory_record_count": len(executable_memory),
+        "forbidden_mod_build_or_jit": 0,
         "boundary": "fixed audited native fixtures; not a generic malicious-native JIT detector",
         "socket_payloads": "sendto/recvfrom redacted in both audit and export"}
 
@@ -1080,6 +1095,123 @@ def budget_cases(producer):
     cases = [label.removeprefix("g02a-") for label in retry.PHASES if label.startswith("g02a-")]
     assert len(cases) == 6 and producer["g02a"]["cases"] == cases, "Frozen budget cases differ from the consumer checkpoints"
     return cases
+
+
+def classify_code_mode(calls, executable_memory, helper, hosts, events):
+    """Use outer PID identities from strace, never process names or a blanket JIT exemption."""
+    edges, inner, executed = {}, {}, {}
+    for line in calls:
+        pid = line.split()[0]
+        spawned = re.search(r'\b(clone3?|vfork|fork)\(.*\)\s+=\s+(\d+)(?: /\* (\d+) in strace\x27s PID NS \*/)?$', line)
+        if spawned and int(spawned[2]) > 0:
+            child = spawned[3] or spawned[2]
+            assert child not in edges, "Ambiguous process lineage"
+            edges[child] = (pid, spawned[2], "CLONE_THREAD" in line)
+        identity = re.search(r'\bgetpid\(\)\s+=\s+(\d+)(?: /\* (\d+) in strace\x27s PID NS \*/)?$', line)
+        if identity:
+            inner[pid] = identity[1]
+        execution = re.search(r'execve\("([^"]+)".*\)\s+=\s+0$', line)
+        if execution:
+            executed.setdefault(pid, []).append((execution[1], line))
+
+    def process(pid):
+        seen = set()
+        while pid in edges and edges[pid][2]:
+            assert pid not in seen, "Cyclic thread lineage"
+            seen.add(pid)
+            pid = edges[pid][0]
+        return pid
+
+    allowed, bindings = set(), []
+    for pid, entries in executed.items():
+        if not any(path == helper for path, _line in entries):
+            continue
+        assert len(entries) == 1 and '"--listen"' in entries[0][1] and '"grpc+stdio://"' in entries[0][1], entries
+        parent, helper_inner, is_thread = edges[pid]
+        assert not is_thread
+        host = process(parent)
+        assert any(path in hosts for path, _line in executed.get(host, ())), "Helper parent is not the sealed Host"
+        host_inner = inner.get(parent) or inner.get(host)
+        assert host_inner is not None, "Host PID namespace identity missing"
+        transports = [row["detail"] for row in events if row["event"] == "code-mode-transport"
+            and str(row["detail"]["host_pid"]) == host_inner and str(row["detail"]["helper_pid"]) == helper_inner
+            and row["detail"]["program"] == helper and row["detail"]["transport"] == "grpc+stdio://"]
+        assert transports, "Helper lacks the actual Host transport event"
+        cells = [row["detail"] for row in events if row["event"] == "code-mode-cell"
+            and str(row["detail"]["host_pid"]) == host_inner]
+        assert cells, "Interpreter did not execute an observed business cell"
+        leaves = [row["detail"] for row in events if row["event"] == "tool-concurrency-role"
+            and row["detail"].get("parent") is not None and row["detail"]["role"] == "leaf"]
+        assert any(leaf["parent"]["cell_id"] == cell["cell_id"] and leaf["turn"] == cell["turn"]
+            for leaf in leaves for cell in cells), "Cell has no actual nested Core leaf"
+        family = {value for value in {pid, *edges} if process(value) == pid}
+        assert not any(value != pid and value in executed for value in family), "Interpreter thread executed another program"
+        allowed.update(family)
+        bindings.append({"outer_pid": pid, "outer_host_pid": host, "inner_host_pid": host_inner,
+            "inner_helper_pid": helper_inner, "thread_ids": sorted(family), "cell_ids": sorted({cell["cell_id"] for cell in cells})})
+    classified = [line for line in executable_memory if line.split()[0] in allowed]
+    return {"executables": [helper] if bindings else [], "bindings": bindings,
+        "executable_memory_records": classified,
+        "unclassified": [line for line in executable_memory if line.split()[0] not in allowed],
+        "boundary": "sealed Code Mode business interpreter; does not authorize Mod compilation or JIT"}
+
+
+def bind_code_mode(calls, executable_memory, evidence, root, result_paths=None):
+    producer = read(root / "rootfs/inputs/producer.json")
+    concurrency = producer.get("concurrency")
+    if concurrency is None:
+        return {"executables": [], "bindings": [], "executable_memory_records": [], "unclassified": executable_memory}
+    helper = concurrency["code_mode_helper"]
+    assert helper["path"] == "/inputs/host/bin/codex-code-mode-host" and helper["transport"] == "grpc+stdio://"
+    assert sha(root / "rootfs" / helper["path"].lstrip("/")) == helper["sha256"], "Code Mode helper hash mismatch"
+    executions = [line for line in calls if re.match(r'\d+\s+execve\(', line)]
+    hosts = bind_host_executables(executions, root)
+    events = []
+    paths = evidence.rglob("native.jsonl") if result_paths is None else {
+        path.parent / "native.jsonl" for path in result_paths if (path.parent / "native.jsonl").is_file()}
+    for path in paths:
+        assert not path.is_symlink()
+        events.extend(json.loads(line) for line in path.read_text().splitlines(keepends=True) if line.endswith("\n"))
+    return classify_code_mode(calls, executable_memory, helper["path"], hosts, events)
+
+
+def check_code_mode_classification():
+    helper, host = "/inputs/host/bin/codex-code-mode-host", "/inputs/host/bin/codex"
+    calls = ['10 execve("' + host + '", ["codex"], 0x0) = 0',
+        '10 getpid() = 2 /* 10 in strace\x27s PID NS */',
+        '10 clone(child_stack=NULL, flags=SIGCHLD) = 3 /* 20 in strace\x27s PID NS */',
+        '20 execve("' + helper + '", ["' + helper + '", "--listen", "grpc+stdio://"], 0x0) = 0',
+        '20 clone(child_stack=0x0, flags=CLONE_VM|CLONE_THREAD) = 4 /* 21 in strace\x27s PID NS */']
+    events = [{"event":"code-mode-transport","detail":{"host_pid":2,"helper_pid":3,"program":helper,"transport":"grpc+stdio://"}},
+        {"event":"code-mode-cell","detail":{"host_pid":2,"cell_id":"c1","turn":"t1"}},
+        {"event":"tool-concurrency-role","detail":{"role":"leaf","parent":{"cell_id":"c1"},"turn":"t1"}}]
+    memory = ['21 mmap(NULL, 4096, PROT_READ|PROT_EXEC, MAP_ANONYMOUS, -1, 0) = 0x1']
+    assert not classify_code_mode(calls, memory, helper, {host: "sealed"}, events)["unclassified"]
+    assert classify_code_mode(calls, [memory[0].replace("21 mmap", "10 mmap")], helper, {host: "sealed"}, events)["unclassified"]
+    for bad_calls, bad_events in ((calls, events[:1]), (calls, events[:2]),
+        ([line.replace(host, "/work/unbound") if line.startswith("10 execve") else line for line in calls], events)):
+        try:
+            classify_code_mode(bad_calls, memory, helper, {host:"sealed"}, bad_events)
+        except (AssertionError, KeyError):
+            continue
+        raise AssertionError("Unbound business interpreter accepted")
+
+
+def bind_concurrency_probes(executions, root):
+    concurrency = read(root / "rootfs/inputs/producer.json").get("concurrency")
+    if concurrency is None:
+        return []
+    result = []
+    for key, expected in (("probe", "/inputs/probes/cm-concurrency-core"),
+                          ("backend_probe", "/inputs/probes/cm-concurrency-backend")):
+        probe = concurrency[key]
+        assert probe["path"] == expected and probe["separate_from_cli"]
+        assert sha(root / "rootfs" / probe["path"].lstrip("/")) == probe["sha256"]
+        for line in executions:
+            if 'execve("' + probe["path"] + '"' in line:
+                assert '"--ignored"' in line and '"--exact"' in line and any('"' + name + '"' in line for name in probe["names"]), line
+        result.append(probe["path"])
+    return result
 
 
 def bind_review_probes(executions, root):
@@ -1122,7 +1254,7 @@ def consume():
     assert producer["provenance"] == {**provenance(), "CM_SOURCE_SHA": origin["source_sha"],
         "GITHUB_WORKFLOW_SHA": origin["workflow_sha"], "GITHUB_RUN_ID": str(origin["run_id"]),
         "GITHUB_RUN_ATTEMPT": str(origin["run_attempt"]), "CM_REQUEST_ID": origin["request_id"]}, "Original producer provenance changed"
-    assert producer["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B") and producer["target"] == TARGET
+    assert producer["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03") and producer["target"] == TARGET
     m05_only = producer["task_id"] == "CM-M05" and producer["m05"]["build_kind"] == "mod-only"
     if producer["task_id"] == "CM-M05":
         assert producer["m05"]["build_kind"] == os.environ["CM_BUILD_KIND"]
@@ -1138,49 +1270,58 @@ def consume():
     sys.path.insert(0, str(inputs / "fixture/ci/scripts"))
     import mod_manifest
     m01_acceptance = None
-    if not m05_only and producer["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B"):
+    if not m05_only and producer["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03"):
         m01_acceptance = {"schema_version": 1, "task_id": "CM-M01", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M01-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(mod_manifest.REPORTS, 1)]}
     m02_acceptance = None
-    if not m05_only and producer["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B"):
+    if not m05_only and producer["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03"):
         import runtime_sdk
         m02_acceptance = {"schema_version": 1, "task_id": "CM-M02", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M02-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(runtime_sdk.REPORTS, 1)]}
     m03_acceptance = None
-    if not m05_only and producer["task_id"] in ("CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B"):
+    if not m05_only and producer["task_id"] in ("CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03"):
         import managed_package
         m03_acceptance = {"schema_version": 1, "task_id": "CM-M03", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M03-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(managed_package.REPORTS, 1)]}
     m04_acceptance = None
-    if not m05_only and producer["task_id"] in ("CM-M04", "CM-M05", "CM-G02A", "CM-G02B"):
+    if not m05_only and producer["task_id"] in ("CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03"):
         import runtime_state
         m04_acceptance = {"schema_version": 1, "task_id": "CM-M04", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M04-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(runtime_state.REPORTS, 1)]}
     m05_acceptance = None
-    if producer["task_id"] in ("CM-M05", "CM-G02A", "CM-G02B"):
+    if producer["task_id"] in ("CM-M05", "CM-G02A", "CM-G02B", "CM-G03"):
         import mod_author
         m05_acceptance = {"schema_version": 1, "task_id": "CM-M05", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M05-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(mod_author.REPORTS, 1)]}
     g02a_acceptance = None
-    if producer["task_id"] in ("CM-G02A", "CM-G02B"):
+    if producer["task_id"] in ("CM-G02A", "CM-G02B", "CM-G03"):
         cases = budget_cases(producer)
         g02a_acceptance = {"schema_version": 1, "task_id": "CM-G02A", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [
                 {"id": "CM-G02A-AC0" + str(index), "status": "not_run", "phase": "g02a-" + case,
                  "evidence": ["evidence/budget-" + case + ".json"]} for index, case in enumerate(cases, 1)]}
     review_acceptance = None
-    if producer["task_id"] == "CM-G02B":
+    if producer["task_id"] in ("CM-G02B", "CM-G03"):
         review_steps = review_cases(producer)
         review_acceptance = {"schema_version": 1, "task_id": "CM-G02B", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [
                 {"id": "CM-G02B-AC0" + str(index), "status": "not_run", "phase": "review-" + case,
                  "evidence": ["evidence/review-" + case + ".json"]} for index, case in enumerate(review_steps, 1)]}
-    acceptance = review_acceptance or g02a_acceptance or m05_acceptance or m04_acceptance or m03_acceptance or m02_acceptance or m01_acceptance or p04_acceptance
+    concurrency_acceptance = None
+    if producer["task_id"] == "CM-G03":
+        import tool_concurrency
+        concurrency_steps = tool_concurrency.CASES
+        assert producer["concurrency"]["cases"] == list(concurrency_steps)
+        concurrency_acceptance = {"schema_version": 1, "task_id": "CM-G03", "target": TARGET, "status": "not_run",
+            "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [
+                {"id": "CM-G03-AC0" + str(index), "status": "not_run", "phase": "concurrency-" + case,
+                 "evidence": ["evidence/concurrency-" + case + ".json"]} for index, case in enumerate(concurrency_steps, 1)]}
+    acceptance = concurrency_acceptance or review_acceptance or g02a_acceptance or m05_acceptance or m04_acceptance or m03_acceptance or m02_acceptance or m01_acceptance or p04_acceptance
     write(artifact / "acceptance.json", acceptance)
     stage = "rootfs"
     try:
@@ -1247,10 +1388,12 @@ def consume():
                 report_names.update({row["phase"]: [Path(row["evidence"][0]).name] for row in g02a_acceptance["checks"]})
             if review_acceptance is not None:
                 report_names.update({row["phase"]: [Path(row["evidence"][0]).name] for row in review_acceptance["checks"]})
+            if concurrency_acceptance is not None:
+                report_names.update({row["phase"]: [Path(row["evidence"][0]).name] for row in concurrency_acceptance["checks"]})
             checkpoints = retry.Checkpoints(sys.modules[__name__], validation, closure, temp, evidence, logs, report_names, canary_hits)
             stage = "independent isolated matrices"
-            trace = ["strace", "-ff", "-qq", "-yy", "-s", "1024", "-e",
-                "trace=execve,execveat,socket,getsockname,accept,accept4,connect,sendto,recvfrom,socketpair,symlink,symlinkat,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl,readlink,mmap,mprotect,memfd_create",
+            trace = ["strace", "-ff", "-qq", "-yy", "--pidns-translation", "-s", "1024", "-e",
+                "trace=execve,execveat,socket,getsockname,accept,accept4,connect,sendto,recvfrom,socketpair,symlink,symlinkat,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl,readlink,mmap,mprotect,memfd_create,clone,clone3,fork,vfork,getpid,gettid",
                 "-o", "CM_PHASE_TRACE", "--"]
 
             def command(label, arguments, sandbox=base):
@@ -1280,6 +1423,11 @@ def consume():
                     label = "review-" + case
                     commands.append((label, command(label, [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B",
                         "/fixture/fixtures/review-before-send/driver.py", case]), 600))
+            if concurrency_acceptance is not None:
+                for case in concurrency_steps:
+                    label = "concurrency-" + case
+                    commands.append((label, command(label, [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B",
+                        "/fixture/fixtures/tool-concurrency/driver.py", case]), 900))
             results = parallel_matrices(logs, commands, checkpoints.run)
             result = results["m05-consumer-matrix" if m05_only else "consumer-matrix"]
             write(logs / "consumer-return.json", {"return_code": result.returncode, "stage": stage})
@@ -1324,6 +1472,10 @@ def consume():
             audits = {label: row["audit"] for label, row in checkpoints.results.items() if row["status"] == "pass"}
             audit = {"status": "pass", "compiler_linker_jit_build_service_calls": 0,
                 "unclassified_executable_memory": [], "steps": audits,
+                "normal_business_interpreter": {label: row["normal_business_interpreter"] for label, row in audits.items()
+                    if row.get("normal_business_interpreter", {}).get("bindings")},
+                "executable_memory_record_count": sum(row.get("executable_memory_record_count", 0) for row in audits.values()),
+                "forbidden_mod_build_or_jit": 0,
                 "executions": [line for row in audits.values() for line in row["executions"]],
                 "packaged_bwrap_fd_executions": sorted({pid for row in audits.values() for pid in row["packaged_bwrap_fd_executions"]}),
                 "tui_mcp_listener": next((row["tui_mcp_listener"] for row in audits.values() if row["tui_mcp_listener"]), None)}
@@ -1395,6 +1547,10 @@ def consume():
                 for case in review_steps:
                     assert read(evidence / "review" / case / "suite.json")["status"] == "pass"
                 report_sets.append(review_acceptance)
+            if concurrency_acceptance is not None:
+                for case in concurrency_steps:
+                    assert read(evidence / "concurrency" / case / "suite.json")["status"] == "pass"
+                report_sets.append(concurrency_acceptance)
             for report_set in report_sets:
                 for check in report_set["checks"]:
                     path = evidence / Path(check["evidence"][0]).name
@@ -1427,6 +1583,9 @@ def consume():
             if review_acceptance is not None:
                 write(artifact / "g02a-baseline-acceptance.json", g02a_acceptance)
                 write(logs / "g02a-baseline-acceptance.json", g02a_acceptance)
+            if concurrency_acceptance is not None:
+                write(artifact / "g02b-baseline-acceptance.json", review_acceptance)
+                write(logs / "g02b-baseline-acceptance.json", review_acceptance)
         finally:
             stopped.set()
             thread.join(timeout=1)

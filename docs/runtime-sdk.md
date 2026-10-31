@@ -88,3 +88,7 @@ Core 在 thread 发布、turn 启动、工具执行和模型请求前检查。�
 私有 child/isolation 分支另由真实上游 ThreadManager 的原生集成测试验证。
 该测试可执行文件单独记录 SHA，不冒充打包 CLI 的 H。所有报告保留失败证据，
 M02 通过不表示完整 Core suite、其他平台或产品发布就绪。
+
+## G03 候选扩展
+
+`core.turn_tool_concurrency.v1` 使用 ABI 2.2 的既有请求与 scope，新增 kind 11、event 14，无结构布局变更。策略事件使用真实 thread/turn handle，须由 SDK 校验；许可和队列留在 Host。入口、None/steer、Code Mode 和未覆盖路径见 [工具并发契约](tool-concurrency.md)。G03 仍待独立 Actions 验收。

@@ -9,18 +9,22 @@ pub const TOOL: &str = "runtime.tool.v1";
 pub const CONTEXT_SECTION: &str = "runtime.context_section.v1";
 pub const SAMPLING_BUDGET_CAPABILITY: &str = "core.turn_sampling_budget.v1";
 pub const SUBMIT_REVIEW_CAPABILITY: &str = "tui.submit_review.v1";
-pub const CAPABILITIES: [&str; 5] = [
+pub const TOOL_CONCURRENCY_CAPABILITY: &str = "core.turn_tool_concurrency.v1";
+pub const MAX_TOOL_CONCURRENCY: u32 = 1024;
+pub const CAPABILITIES: [&str; 6] = [
     LIFECYCLE,
     TOOL,
     CONTEXT_SECTION,
     SAMPLING_BUDGET_CAPABILITY,
     SUBMIT_REVIEW_CAPABILITY,
+    TOOL_CONCURRENCY_CAPABILITY,
 ];
 pub const KIND_LIFECYCLE: u32 = 6;
 pub const KIND_TOOL: u32 = 7;
 pub const KIND_CONTEXT_SECTION: u32 = 8;
 pub const KIND_SAMPLING_BUDGET: u32 = 9;
 pub const KIND_SUBMIT_REVIEW: u32 = 10;
+pub const KIND_TOOL_CONCURRENCY: u32 = 11;
 pub const THREAD_START: u32 = 1;
 pub const THREAD_READY: u32 = 2;
 pub const THREAD_RESUME: u32 = 3;
@@ -34,6 +38,7 @@ pub const TOOL_CALL: u32 = 10;
 pub const SECTION: u32 = 11;
 pub const SAMPLING_BUDGET: u32 = 12;
 pub const SUBMIT_REVIEW: u32 = 13;
+pub const TOOL_CONCURRENCY: u32 = 14;
 pub const SUCCEEDED: u32 = 0;
 pub const FAILED: u32 = 1;
 pub const CANCELLED: u32 = 2;

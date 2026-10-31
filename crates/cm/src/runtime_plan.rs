@@ -20,6 +20,13 @@ use crate::loader::Preflighted;
 const IDENTITY: &str = include_str!(env!("CM_HOST_IDENTITY_JSON"));
 const DOMAIN: &str = "cm.runtime-plan.v1";
 
+pub fn embedded_build_id() -> Result<String, LoadError> {
+    let value: serde_json::Value = serde_json::from_str(IDENTITY)
+        .map_err(|error| LoadError::input("host_identity", "", &error.to_string()))?;
+    value["host_build_id"].as_str().map(str::to_owned)
+        .ok_or_else(|| LoadError::input("host_identity", "", "host_build_id"))
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct HostIdentity {
     pub build_id: String,
@@ -275,6 +282,7 @@ fn phase(kind: &Kind) -> &'static str {
         Kind::ContextSection => "context_section",
         Kind::SamplingBudget => "sampling_budget",
         Kind::SubmitReview => "submit_review",
+        Kind::ToolConcurrency => "tool_concurrency",
     }
 }
 
@@ -451,10 +459,11 @@ fn resolve(
                     Kind::ContextSection => cm_abi::v22::CONTEXT_SECTION,
                     Kind::SamplingBudget => cm_abi::v22::SAMPLING_BUDGET_CAPABILITY,
                     Kind::SubmitReview => cm_abi::v22::SUBMIT_REVIEW_CAPABILITY,
+                    Kind::ToolConcurrency => cm_abi::v22::TOOL_CONCURRENCY_CAPABILITY,
                     _ => unreachable!("runtime kind"),
                 };
                 let valid_resource =
-                    if matches!(contribution.kind, Kind::SamplingBudget | Kind::SubmitReview) {
+                    if matches!(contribution.kind, Kind::SamplingBudget | Kind::SubmitReview | Kind::ToolConcurrency) {
                         contribution.resource == capability
                     } else {
                         crate::runtime::valid_name(id, &contribution.resource)
@@ -502,7 +511,7 @@ fn resolve(
                     runtime_names.insert(name, format!("{id}::{}", contribution.id))
                 {
                     let mut error = failure(
-                        if matches!(contribution.kind, Kind::SamplingBudget | Kind::SubmitReview) {
+                        if matches!(contribution.kind, Kind::SamplingBudget | Kind::SubmitReview | Kind::ToolConcurrency) {
                             "exclusive_conflict"
                         } else {
                             "runtime_name_collision"
@@ -668,6 +677,7 @@ fn resolve(
         "context_section",
         "sampling_budget",
         "submit_review",
+        "tool_concurrency",
     ] {
         let nodes: BTreeSet<_> = hooks
             .iter()
@@ -694,6 +704,7 @@ fn resolve(
                 | "context_section"
                 | "sampling_budget"
                 | "submit_review"
+                | "tool_concurrency"
         ) || !order.is_empty()
         {
             phases.insert(name.into(), order);
@@ -965,7 +976,7 @@ fn prepare_snapshot(
 mod tests {
     use super::*;
 
-    fn budget_manifest(id: &str) -> Manifest {
+    fn policy_manifest(id: &str, capability: &str, kind: &str, api: &str) -> Manifest {
         let hash = "a".repeat(64);
         let revision = "b".repeat(40);
         let text = format!(
@@ -985,13 +996,13 @@ cpu = "x86-64"
 abi_major = 2
 abi_minor_min = 2
 abi_minor_max = 2
-host_api_min = "0.7.0"
-required_capabilities = ["core.turn_sampling_budget.v1"]
+host_api_min = "{api}"
+required_capabilities = ["{capability}"]
 [[contributions]]
 id = "budget"
-kind = "sampling_budget"
-capability = "core.turn_sampling_budget.v1"
-resource = "core.turn_sampling_budget.v1"
+kind = "{kind}"
+capability = "{capability}"
+resource = "{capability}"
 [provenance]
 repository = "https://example.com/fixture"
 revision = "{revision}"
@@ -1003,52 +1014,64 @@ license = "Apache-2.0"
     }
 
     #[test]
-    fn sampling_budget_is_exclusive_and_requires_the_exact_host_capability() {
-        let capability = cm_abi::v22::SAMPLING_BUDGET_CAPABILITY;
-        let host = HostIdentity {
-            build_id: format!("sha256:{}", "a".repeat(64)),
-            executable_sha256: "b".repeat(64),
-            target: loader::TARGET.into(),
-            api_version: "0.7.0".into(),
-            capabilities: vec![capability.into()],
-            abis: vec!["2.2".into()],
-        };
-        let config = ConfigIdentity {
-            present: false,
-            sha256: None,
-            mods: BTreeMap::new(),
-        };
-        let mut selected = BTreeMap::from([(
-            "budget-a".into(),
-            (budget_manifest("budget-a"), "c".repeat(64)),
-        )]);
-        let plan = resolve(&selected, host.clone(), config.clone(), BTreeMap::new()).unwrap();
-        assert_eq!(plan.phases["sampling_budget"], ["budget-a::budget"]);
-        let mut missing = host.clone();
-        missing.capabilities.clear();
-        let error = resolve(&selected, missing, config.clone(), BTreeMap::new())
-            .err()
-            .unwrap();
-        assert_eq!(error.code, "unknown_capability");
-        assert!(!error.already_native_executed);
-        let mut older = host.clone();
-        older.api_version = "0.6.0".into();
-        let error = resolve(&selected, older, config.clone(), BTreeMap::new())
-            .err()
-            .unwrap();
-        assert_eq!(error.code, "compatibility");
-        assert!(!error.already_native_executed);
-        selected.insert(
-            "budget-b".into(),
-            (budget_manifest("budget-b"), "d".repeat(64)),
-        );
-        let error = resolve(&selected, host, config, BTreeMap::new())
-            .err()
-            .unwrap();
-        assert_eq!(error.code, "exclusive_conflict");
-        assert_eq!(error.resource.as_deref(), Some(capability));
-        assert_eq!(error.related_contributions.len(), 2);
-        assert!(!error.already_native_executed);
+    fn turn_policies_are_exclusive_and_require_the_exact_host_capability() {
+        for (capability, kind, api) in [
+            (
+                cm_abi::v22::SAMPLING_BUDGET_CAPABILITY,
+                "sampling_budget",
+                "0.7.0",
+            ),
+            (
+                cm_abi::v22::TOOL_CONCURRENCY_CAPABILITY,
+                "tool_concurrency",
+                "0.9.0",
+            ),
+        ] {
+            let host = HostIdentity {
+                build_id: format!("sha256:{}", "a".repeat(64)),
+                executable_sha256: "b".repeat(64),
+                target: loader::TARGET.into(),
+                api_version: api.into(),
+                capabilities: vec![capability.into()],
+                abis: vec!["2.2".into()],
+            };
+            let config = ConfigIdentity {
+                present: false,
+                sha256: None,
+                mods: BTreeMap::new(),
+            };
+            let mut selected = BTreeMap::from([(
+                "budget-a".into(),
+                (policy_manifest("budget-a", capability, kind, api), "c".repeat(64)),
+            )]);
+            let plan = resolve(&selected, host.clone(), config.clone(), BTreeMap::new()).unwrap();
+            assert_eq!(plan.phases[kind], ["budget-a::budget"]);
+            let mut missing = host.clone();
+            missing.capabilities.clear();
+            let error = resolve(&selected, missing, config.clone(), BTreeMap::new())
+                .err()
+                .unwrap();
+            assert_eq!(error.code, "unknown_capability");
+            assert!(!error.already_native_executed);
+            let mut older = host.clone();
+            older.api_version = "0.6.0".into();
+            let error = resolve(&selected, older, config.clone(), BTreeMap::new())
+                .err()
+                .unwrap();
+            assert_eq!(error.code, "compatibility");
+            assert!(!error.already_native_executed);
+            selected.insert(
+                "budget-b".into(),
+                (policy_manifest("budget-b", capability, kind, api), "d".repeat(64)),
+            );
+            let error = resolve(&selected, host, config, BTreeMap::new())
+                .err()
+                .unwrap();
+            assert_eq!(error.code, "exclusive_conflict");
+            assert_eq!(error.resource.as_deref(), Some(capability));
+            assert_eq!(error.related_contributions.len(), 2);
+            assert!(!error.already_native_executed);
+        }
     }
 
     #[test]

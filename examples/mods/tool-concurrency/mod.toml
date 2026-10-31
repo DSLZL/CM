@@ -1,0 +1,43 @@
+format_version = 3
+id = "org.example.tool-concurrency"
+version = "0.1.0"
+kind = "sdk"
+dependencies = []
+conflicts = []
+resources = []
+
+[binary]
+path = "payload.so"
+size = 0
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+target = "x86_64-unknown-linux-gnu"
+entry = "cm_mod_entry_v2"
+glibc_min = "2.17"
+cpu = "x86-64"
+
+[compat]
+abi_major = 2
+abi_minor_min = 2
+abi_minor_max = 2
+host_api_min = "0.9.0"
+required_capabilities = ["core.turn_tool_concurrency.v1"]
+
+[[contributions]]
+id = "turn-leaves"
+kind = "tool_concurrency"
+capability = "core.turn_tool_concurrency.v1"
+resource = "core.turn_tool_concurrency.v1"
+
+[config]
+schema_version = 1
+defaults = {}
+
+[config.schema]
+type = "object"
+additionalProperties = false
+
+[provenance]
+repository = "https://github.com/DSLZL/CM"
+revision = "2424a969eba0eb65b78c62a0375d2a6a8eae078d"
+release_notes = "Turn-local leaf capacity for local Embedded and stdio; Code Mode execute/wait orchestration is exempt."
+license = "Apache-2.0"

@@ -49,6 +49,7 @@ pub(crate) enum Kind {
     ContextSection,
     SamplingBudget,
     SubmitReview,
+    ToolConcurrency,
 }
 
 impl Kind {
@@ -65,6 +66,7 @@ impl Kind {
             Self::ContextSection => cm_abi::v22::KIND_CONTEXT_SECTION,
             Self::SamplingBudget => cm_abi::v22::KIND_SAMPLING_BUDGET,
             Self::SubmitReview => cm_abi::v22::KIND_SUBMIT_REVIEW,
+            Self::ToolConcurrency => cm_abi::v22::KIND_TOOL_CONCURRENCY,
         }
     }
 
@@ -76,6 +78,7 @@ impl Kind {
                 | Self::ContextSection
                 | Self::SamplingBudget
                 | Self::SubmitReview
+                | Self::ToolConcurrency
         )
     }
 }

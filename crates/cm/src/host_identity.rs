@@ -20,7 +20,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing Host build identity"))?;
         assert_eq!(build_id.len(), "sha256:".len() + 64);
         assert!(build_id.starts_with("sha256:"));
-        assert_eq!(identity["stage"], "tui-submit-review");
+        assert_eq!(identity["stage"], "turn-tool-concurrency");
         assert_eq!(
             identity["capabilities"],
             serde_json::json!([
@@ -32,7 +32,8 @@ mod tests {
                 "runtime.context_section.v1",
                 "state.files.v1",
                 "core.turn_sampling_budget.v1",
-                "tui.submit_review.v1"
+                "tui.submit_review.v1",
+                "core.turn_tool_concurrency.v1"
             ])
         );
         assert!(identity.get("artifact_sha256").is_none());

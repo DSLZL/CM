@@ -494,8 +494,15 @@ impl Fixture {
             b"{}".to_vec()
         };
         if request.event == v22::TOOL_CALL
-            && ["async", "cancel", "noncooperative", "late", "timeout"]
-                .contains(&self.mode.as_str())
+            && [
+                "async",
+                "cancel",
+                "noncooperative",
+                "late",
+                "timeout",
+                "quiet-barrier",
+            ]
+            .contains(&self.mode.as_str())
         {
             let pending = Arc::new(Pending {
                 cancelled: AtomicBool::new(false),
@@ -508,6 +515,10 @@ impl Fixture {
             let mode = self.mode.clone();
             let barrier =
                 std::env::var("CM_RUNTIME_BARRIER").map_err(|_| "missing fixture barrier")?;
+            if mode == "quiet-barrier" && request.call_id == "native-terminal" {
+                host.complete(request.handle, v22::SUCCEEDED, &output, false)
+                    .map_err(|error| format!("{error:?}"))?;
+            }
             std::thread::spawn(move || {
                 record(
                     owner,
@@ -516,7 +527,7 @@ impl Fixture {
                 );
                 let started = Instant::now();
                 let mut guard = pending.lock.lock().expect("fixture barrier lock");
-                while !pending.cancelled.load(Ordering::Acquire)
+                while (mode == "quiet-barrier" || !pending.cancelled.load(Ordering::Acquire))
                     && !std::path::Path::new(&barrier).exists()
                 {
                     assert!(
@@ -555,6 +566,8 @@ impl Fixture {
                 );
                 if cancelled {
                     assert_eq!(result, v22::REQUEST_CANCELLED);
+                } else if mode == "quiet-barrier" && request.call_id == "native-terminal" {
+                    assert_eq!(result, v22::ALREADY_COMPLETED);
                 } else {
                     assert_eq!(result, 0);
                 }

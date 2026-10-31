@@ -318,7 +318,7 @@ pub unsafe extern "C" fn dispatch<T: Mod>(
             let request = &*request;
             if !valid_header::<v22::Request>(request.header)
                 || request.reserved != 0
-                || !(v22::THREAD_START..=v22::SUBMIT_REVIEW).contains(&request.event)
+                || !(v22::THREAD_START..=v22::TOOL_CONCURRENCY).contains(&request.event)
                 || request.handle == Handle::NONE
                 || request.mod_scope == Handle::NONE
                 || request.route == 0
@@ -352,6 +352,7 @@ fn valid_request_scopes(event: u32, thread: Handle, turn: Handle) -> bool {
         v22::THREAD_START..=v22::THREAD_STOP => thread != Handle::NONE && turn == Handle::NONE,
         v22::TURN_START..=v22::SAMPLING_BUDGET => thread != Handle::NONE && turn != Handle::NONE,
         v22::SUBMIT_REVIEW => thread == Handle::NONE && turn == Handle::NONE,
+        v22::TOOL_CONCURRENCY => thread != Handle::NONE && turn != Handle::NONE,
         _ => false,
     }
 }
@@ -515,7 +516,13 @@ mod tests {
             owned,
             Handle::NONE
         ));
-        assert!(!valid_request_scopes(v22::SUBMIT_REVIEW + 1, owned, owned));
+        assert!(valid_request_scopes(v22::TOOL_CONCURRENCY, owned, owned));
+        assert!(!valid_request_scopes(
+            v22::TOOL_CONCURRENCY,
+            owned,
+            Handle::NONE
+        ));
+        assert!(!valid_request_scopes(v22::TOOL_CONCURRENCY + 1, owned, owned));
     }
 
     #[test]

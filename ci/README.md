@@ -267,3 +267,9 @@ their own reports; only the six G02A reports form this task's acceptance root.
 No G02A source CI, Cargo check, runtime case or cold/warm qualification has executed
 for this candidate. A workflow success must still be checked against every report,
 actual jobs, source/workflow revisions and original build/execution provenance.
+
+## G03 candidate
+
+The mapped G03 candidate adds seven `concurrency-*` checkpoints to the existing twenty stages. Each owns its reports and AST dependencies. Python case fixes reuse the unchanged producer bundle, Host and acceptance executables; they do not rebuild or upload H. Core and TUI probes reuse the already compiled M02/review executables and retain separate identities from production H.
+
+The cold worker regenerates protocol TypeScript/JSON, compressed exports and the config schema with the pinned upstream generators before sealing Host sources. It records the exact changed schema paths and final source manifest, runs protocol contract checks, and never generates assets locally. The strict observer binds normal Code Mode executable memory to the sealed helper hash, translated PID lineage, actual Host transport and nested cell events. It retains the raw counts and fails unclassified mappings; normal business V8 execution is distinct from forbidden Mod compilation/JIT. G03 runtime acceptance and cold/warm/single-case reuse proof remain NOT_RUN for this candidate.

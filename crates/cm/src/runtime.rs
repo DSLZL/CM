@@ -28,6 +28,7 @@ pub enum Kind {
     ContextSection,
     SamplingBudget,
     SubmitReview,
+    ToolConcurrency,
 }
 
 #[derive(Clone, Debug)]
@@ -652,6 +653,7 @@ struct ScopeInner {
     turn_id: String,
     errors: Mutex<Vec<LoadError>>,
     budget: crate::sampling_budget::Gate,
+    concurrency: crate::tool_concurrency::Gate,
 }
 
 impl Scope {
@@ -722,6 +724,7 @@ impl Scope {
             turn_id: turn_id.into(),
             errors: Mutex::new(Vec::new()),
             budget: crate::sampling_budget::Gate::default(),
+            concurrency: crate::tool_concurrency::Gate::default(),
         })))
     }
 
@@ -755,6 +758,38 @@ impl Scope {
             .await
     }
 
+    pub fn bind_tool_concurrency(&self, requested: Option<u32>) -> Result<(), LoadError> {
+        self.check()?;
+        if self.0.parent.is_none() {
+            return Err(failure("tool concurrency requires a turn scope"));
+        }
+        self.0.concurrency.bind(requested)
+    }
+
+    pub(crate) async fn prepare_tool_concurrency(
+        &self,
+        provider: Contribution,
+    ) -> Result<crate::tool_concurrency::Prepared, LoadError> {
+        self.check_tool_concurrency()?;
+        self.0.concurrency.prepare(self, provider).await
+    }
+
+    pub(crate) fn check_tool_concurrency(&self) -> Result<(), LoadError> {
+        self.check()?;
+        if self.0.parent.is_none() {
+            return Err(failure("tool concurrency requires a turn scope"));
+        }
+        self.0.concurrency.check()
+    }
+
+    pub(crate) fn retain_tool_lease(
+        &self,
+        call_id: &str,
+        lease: &crate::tool_concurrency::Lease,
+    ) -> Result<(), LoadError> {
+        self.0.concurrency.retain(call_id, lease)
+    }
+
     pub(crate) fn identity(&self, instance: Handle) -> Result<(&str, &str, Value), LoadError> {
         let handle = *self
             .0
@@ -780,6 +815,7 @@ impl Scope {
     }
 
     pub fn begin_close(&self) -> Result<(), LoadError> {
+        self.0.concurrency.close()?;
         self.0.budget.close()?;
         let hub = hub()?;
         let requests = {
@@ -913,6 +949,8 @@ struct RequestData {
     thread: Handle,
     turn: Handle,
     cleanup: bool,
+    // A cancelled native worker retains its leaf slot through quiet/release.
+    _tool_lease: Option<crate::tool_concurrency::Lease>,
     state: Mutex<RequestState>,
     changed: Condvar,
 }
@@ -1066,6 +1104,7 @@ pub fn dispatch(
         Kind::ContextSection => event_kind == v22::SECTION,
         Kind::SamplingBudget => event_kind == v22::SAMPLING_BUDGET,
         Kind::SubmitReview => false,
+        Kind::ToolConcurrency => event_kind == v22::TOOL_CONCURRENCY,
     };
     let turn_event = matches!(
         event_kind,
@@ -1076,6 +1115,7 @@ pub fn dispatch(
             | v22::TOOL_CALL
             | v22::SECTION
             | v22::SAMPLING_BUDGET
+            | v22::TOOL_CONCURRENCY
     );
     if !expected || (turn_event != scope.0.parent.is_some()) {
         return Err(failure("event/contribution/scope kind mismatch"));
@@ -1120,6 +1160,12 @@ fn dispatch_owned(
     if input.len() > v22::MAX_INPUT || call_id.len() > 512 {
         return Err(failure("request input limit"));
     }
+    let tool_lease = match &owner {
+        RequestOwner::Core(scope) if event_kind == v22::TOOL_CALL => {
+            scope.0.concurrency.native_lease(call_id)?
+        }
+        _ => None,
+    };
     let hub = hub()?;
     let mut tables = hub.tables.lock().map_err(|_| lock_error())?;
     if matches!(&owner, RequestOwner::Ui(_))
@@ -1207,6 +1253,7 @@ fn dispatch_owned(
         thread,
         turn,
         cleanup,
+        _tool_lease: tool_lease,
         state: Mutex::new(RequestState {
             result: None,
             terminal: false,

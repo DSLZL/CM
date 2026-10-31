@@ -162,6 +162,51 @@ def prepare(root, logs):
     append_environment({"CM_HOST_PRISTINE": str(pristine), "CODEX_REPO_ROOT": str(host)})
 
 
+def schemas(root, logs):
+    """Regenerate pinned schema assets on the hosted worker before sealing Host inputs."""
+    if load_config(root)["task_id"] != "CM-G03":
+        return
+    verify_sources(root, logs)
+    cfg = load_config(root)
+    tree = root / HOST
+    before = {row["path"]: row for row in manifest(tree)}
+    env = {**os.environ, "CARGO_TARGET_DIR": str(Path(os.environ["CARGO_TARGET_DIR"]) / "g03-schema"),
+        "CODEX_APP_SERVER_SCHEMA_ROOT": str(tree / "codex-rs/app-server-protocol/schema")}
+    common = ["--locked", "--manifest-path", HOST + "/codex-rs/Cargo.toml", "--target", TARGET,
+        "--profile", cfg["test_profile"]]
+    test = "schema_fixtures_tests::write_schema_fixtures_from_env"
+    for experimental in ("0", "1"):
+        execute(root, logs, "g03-protocol-schema-" + experimental, ["cargo", "test", *common,
+            "-p", "codex-app-server-protocol", "--lib", test, "--", "--ignored", "--exact", "--nocapture"],
+            {**env, "CODEX_APP_SERVER_SCHEMA_EXPERIMENTAL": experimental})
+    execute(root, logs, "g03-config-schema", ["cargo", "run", *common, "-p", "codex-config",
+        "--example", "cm-schema", "--", str(tree / "codex-rs/core/config.schema.json")], env)
+    # A fresh protocol test executable must embed the newly generated compressed exports.
+    execute(root, logs, "g03-protocol-contract-tests", ["cargo", "test", *common,
+        "-p", "codex-app-server-protocol", "--lib"], env)
+    schema = read(tree / "codex-rs/core/config.schema.json")["properties"]["tool_concurrency"]
+    assert schema["minimum"] == 1 and schema["maximum"] == 1024
+    ts = tree / "codex-rs/app-server-protocol/schema/typescript"
+    for name in ("TurnStartParams", "TurnSteerParams"):
+        assert "cmToolConcurrency?" in (ts / "v2" / (name + ".ts")).read_text()
+    assert "cmToolConcurrency?" in (ts / "InitializeResponse.ts").read_text()
+    after = {row["path"]: row for row in manifest(tree)}
+    changed = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
+    assert changed and all(name == "codex-rs/core/config.schema.json" or
+        name.startswith("codex-rs/app-server-protocol/schema/") for name in changed), changed
+    original = {row["path"]: row for row in read(logs / "original-source-manifest.json")}
+    provenance = read(logs / "host-source-provenance.json")
+    provenance.update(host_manifest_sha256=manifest_digest(list(after.values())),
+        changes=[{"path": name, "original": original.get(name), "host": after.get(name)}
+            for name in sorted(original.keys() | after.keys()) if original.get(name) != after.get(name)],
+        generated_schema_sources={"status": "pass", "paths": changed,
+            "source_generator": "pinned upstream derives plus reviewed G03 fields",
+            "local_generation": False, "before_host_seal": True})
+    write(logs / "host-source-manifest.json", list(after.values()))
+    write(logs / "host-source-provenance.json", provenance)
+    verify_sources(root, logs)
+
+
 def native(root, logs):
     host = root / HOST
     os.environ["CODEX_REPO_ROOT"] = str(host)
@@ -720,7 +765,7 @@ def main():
     root = Path(os.environ["CM_SOURCE_DIR"]).resolve()
     logs = Path(os.environ["CM_CI_LOG_DIR"]).resolve()
     logs.mkdir(parents=True, exist_ok=True)
-    {"prepare": prepare, "native": native, "helper": helper, "seal": seal, "acceptance": acceptance,
+    {"prepare": prepare, "schemas": schemas, "native": native, "helper": helper, "seal": seal, "acceptance": acceptance,
      "cache-restore": restore_build, "cache-save": save_build}[sys.argv[1]](root, logs)
 
 

@@ -510,7 +510,9 @@ impl CompositionMod {
                     || descriptor.kind == cm_abi::v22::KIND_SAMPLING_BUDGET
                         && resource == cm_abi::v22::SAMPLING_BUDGET_CAPABILITY
                     || descriptor.kind == cm_abi::v22::KIND_SUBMIT_REVIEW
-                        && resource == cm_abi::v22::SUBMIT_REVIEW_CAPABILITY)
+                        && resource == cm_abi::v22::SUBMIT_REVIEW_CAPABILITY
+                    || descriptor.kind == cm_abi::v22::KIND_TOOL_CONCURRENCY
+                        && resource == cm_abi::v22::TOOL_CONCURRENCY_CAPABILITY)
                 {
                     return Err(LoadError::native(
                         "negotiate",
@@ -560,6 +562,7 @@ impl CompositionMod {
                     Kind::ContextSection => crate::runtime::Kind::ContextSection,
                     Kind::SamplingBudget => crate::runtime::Kind::SamplingBudget,
                     Kind::SubmitReview => crate::runtime::Kind::SubmitReview,
+                    Kind::ToolConcurrency => crate::runtime::Kind::ToolConcurrency,
                     _ => {
                         return Err(LoadError::native(
                             "negotiate",

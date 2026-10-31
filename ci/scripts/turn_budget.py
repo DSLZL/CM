@@ -44,7 +44,7 @@ def prepare(inputs, package, frozen, logs, authors, sdk):
     from linux_ci import cargo_args, execute, load_config
     root = Path(os.environ["CM_SOURCE_DIR"])
     cfg = load_config(root)
-    if cfg["task_id"] == "CM-G02B":
+    if cfg["task_id"] in ("CM-G02B", "CM-G03"):
         from review_before_send import inherit_budget
         return inherit_budget(inputs, package, frozen, logs, authors, sdk)
     unit = {"manifest": "examples/mods/turn-budget/Cargo.toml", "packages": ["cm-turn-budget"], "features": []}

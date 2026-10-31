@@ -157,3 +157,16 @@ templates/native-mod/LICENSE
 templates/native-mod/README.md
 templates/native-mod/mod.toml
 templates/native-mod/src/lib.rs
+adapters/codex-e4568a3/tool-concurrency.patch
+ci/scripts/tool_concurrency.py
+crates/cm/src/tool_concurrency.rs
+docs/tool-concurrency.md
+examples/mods/tool-concurrency/Cargo.lock
+examples/mods/tool-concurrency/Cargo.toml
+examples/mods/tool-concurrency/mod.toml
+examples/mods/tool-concurrency/src/lib.rs
+fixtures/tool-concurrency/acceptance.sh
+fixtures/tool-concurrency/backend_probe.rs
+fixtures/tool-concurrency/core_probe.rs
+fixtures/tool-concurrency/driver.py
+fixtures/tool-concurrency/steer_probe.rs

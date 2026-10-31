@@ -37,7 +37,9 @@ pub fn append<C: Send + Sync + 'static>(builder: &mut ExtensionRegistryBuilder<C
         for contribution in &contributions {
             if !(runtime::valid_name(&contribution.owner, &contribution.name)
                 || contribution.kind == Kind::SamplingBudget
-                    && contribution.name == v22::SAMPLING_BUDGET_CAPABILITY)
+                    && contribution.name == v22::SAMPLING_BUDGET_CAPABILITY
+                || contribution.kind == Kind::ToolConcurrency
+                    && contribution.name == v22::TOOL_CONCURRENCY_CAPABILITY)
             {
                 return Err(runtime::registration_error(
                     &contribution.owner,
@@ -270,6 +272,18 @@ impl TurnLifecycleContributor for Adapter {
                 });
                 input.turn_store.insert(TurnScope(scope.clone()));
                 let scope = scope?;
+                if let Some(requested) = input
+                    .turn_store
+                    .get::<cm_runtime::tool_concurrency::RequestedLimit>()
+                {
+                    scope.bind_tool_concurrency(requested.0)?;
+                } else if self
+                    .contributions
+                    .iter()
+                    .any(|item| item.kind == Kind::ToolConcurrency)
+                {
+                    return Err(error("typed turn concurrency request missing"));
+                }
                 holder
                     .turns
                     .lock()
