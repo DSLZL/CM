@@ -11,6 +11,7 @@ mod cm_concurrency_probe {
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_extension_api::{TurnStartInput, TurnStopInput};
     use codex_protocol::openai_models::ToolMode;
+    use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
     use tokio::sync::{Semaphore, mpsc};
     use tokio_util::sync::CancellationToken;
