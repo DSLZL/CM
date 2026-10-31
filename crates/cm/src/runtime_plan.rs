@@ -23,7 +23,9 @@ const DOMAIN: &str = "cm.runtime-plan.v1";
 pub fn embedded_build_id() -> Result<String, LoadError> {
     let value: serde_json::Value = serde_json::from_str(IDENTITY)
         .map_err(|error| LoadError::input("host_identity", "", &error.to_string()))?;
-    value["host_build_id"].as_str().map(str::to_owned)
+    value["host_build_id"]
+        .as_str()
+        .map(str::to_owned)
         .ok_or_else(|| LoadError::input("host_identity", "", "host_build_id"))
 }
 
@@ -462,12 +464,14 @@ fn resolve(
                     Kind::ToolConcurrency => cm_abi::v22::TOOL_CONCURRENCY_CAPABILITY,
                     _ => unreachable!("runtime kind"),
                 };
-                let valid_resource =
-                    if matches!(contribution.kind, Kind::SamplingBudget | Kind::SubmitReview | Kind::ToolConcurrency) {
-                        contribution.resource == capability
-                    } else {
-                        crate::runtime::valid_name(id, &contribution.resource)
-                    };
+                let valid_resource = if matches!(
+                    contribution.kind,
+                    Kind::SamplingBudget | Kind::SubmitReview | Kind::ToolConcurrency
+                ) {
+                    contribution.resource == capability
+                } else {
+                    crate::runtime::valid_name(id, &contribution.resource)
+                };
                 manifest.format_version == 3
                     && manifest.abi_major == 2
                     && manifest.abi_minor == 2
@@ -511,7 +515,10 @@ fn resolve(
                     runtime_names.insert(name, format!("{id}::{}", contribution.id))
                 {
                     let mut error = failure(
-                        if matches!(contribution.kind, Kind::SamplingBudget | Kind::SubmitReview | Kind::ToolConcurrency) {
+                        if matches!(
+                            contribution.kind,
+                            Kind::SamplingBudget | Kind::SubmitReview | Kind::ToolConcurrency
+                        ) {
                             "exclusive_conflict"
                         } else {
                             "runtime_name_collision"
@@ -1042,7 +1049,10 @@ license = "Apache-2.0"
             };
             let mut selected = BTreeMap::from([(
                 "budget-a".into(),
-                (policy_manifest("budget-a", capability, kind, api), "c".repeat(64)),
+                (
+                    policy_manifest("budget-a", capability, kind, api),
+                    "c".repeat(64),
+                ),
             )]);
             let plan = resolve(&selected, host.clone(), config.clone(), BTreeMap::new()).unwrap();
             assert_eq!(plan.phases[kind], ["budget-a::budget"]);
@@ -1062,7 +1072,10 @@ license = "Apache-2.0"
             assert!(!error.already_native_executed);
             selected.insert(
                 "budget-b".into(),
-                (policy_manifest("budget-b", capability, kind, api), "d".repeat(64)),
+                (
+                    policy_manifest("budget-b", capability, kind, api),
+                    "d".repeat(64),
+                ),
             );
             let error = resolve(&selected, host, config, BTreeMap::new())
                 .err()

@@ -522,7 +522,11 @@ mod tests {
             owned,
             Handle::NONE
         ));
-        assert!(!valid_request_scopes(v22::TOOL_CONCURRENCY + 1, owned, owned));
+        assert!(!valid_request_scopes(
+            v22::TOOL_CONCURRENCY + 1,
+            owned,
+            owned
+        ));
     }
 
     #[test]

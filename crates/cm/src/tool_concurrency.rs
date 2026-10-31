@@ -89,7 +89,8 @@ fn parse_policy(bytes: &[u8], requested: Option<u32>) -> Result<Option<u32>, Loa
     {
         return Err(error("policy must contain limit"));
     }
-    let policy: Policy = serde_json::from_slice(bytes).map_err(|_| error("invalid policy fields"))?;
+    let policy: Policy =
+        serde_json::from_slice(bytes).map_err(|_| error("invalid policy fields"))?;
     validate(policy.limit)?;
     if policy.version != 1 || policy.limit != requested {
         return Err(error(
@@ -127,7 +128,9 @@ impl Gate {
         if state.leases.len() >= v22::MAX_REQUESTS || state.leases.contains_key(call_id) {
             return Err(error("duplicate or excessive active invocation"));
         }
-        state.leases.insert(call_id.into(), Arc::downgrade(&lease.0));
+        state
+            .leases
+            .insert(call_id.into(), Arc::downgrade(&lease.0));
         Ok(())
     }
 
@@ -135,7 +138,9 @@ impl Gate {
         validate(requested)?;
         let mut state = self.0.lock().map_err(|_| error("poisoned turn gate"))?;
         if state.closed || state.requested.is_some_and(|bound| bound != requested) {
-            return Err(error("turn gate closed or already bound to another request"));
+            return Err(error(
+                "turn gate closed or already bound to another request",
+            ));
         }
         state.requested = Some(requested);
         Ok(())
@@ -157,7 +162,12 @@ impl Gate {
     }
 
     pub(crate) fn check(&self) -> Result<(), LoadError> {
-        if self.0.lock().map_err(|_| error("poisoned turn gate"))?.closed {
+        if self
+            .0
+            .lock()
+            .map_err(|_| error("poisoned turn gate"))?
+            .closed
+        {
             return Err(error("actual turn scope is closed"));
         }
         Ok(())
@@ -186,7 +196,11 @@ impl Gate {
                 state.initializing = true;
                 return Poll::Ready(Ok(Some(requested)));
             }
-            if !state.waiters.iter().any(|waiter| waiter.will_wake(cx.waker())) {
+            if !state
+                .waiters
+                .iter()
+                .any(|waiter| waiter.will_wake(cx.waker()))
+            {
                 if state.waiters.len() >= v22::MAX_REQUESTS {
                     return Poll::Ready(Err(error("too many policy waiters")));
                 }
@@ -321,7 +335,10 @@ impl Prepared {
             None => None,
         };
         self.scope.check_tool_concurrency()?;
-        let mut slot = lease.0.lock().map_err(|_| error("poisoned invocation lease"))?;
+        let mut slot = lease
+            .0
+            .lock()
+            .map_err(|_| error("poisoned invocation lease"))?;
         if slot.is_some() {
             return Err(error("invocation acquired twice"));
         }

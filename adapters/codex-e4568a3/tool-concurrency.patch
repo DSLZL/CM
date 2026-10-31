@@ -294,7 +294,7 @@ index 64d37f1..d055543 100644
          event_rx,
          runtime_handle,
 diff --git a/codex-rs/app-server/src/message_processor.rs b/codex-rs/app-server/src/message_processor.rs
-index dcad61a..4b524ee 100644
+index dcad61a..25e33bd 100644
 --- a/codex-rs/app-server/src/message_processor.rs
 +++ b/codex-rs/app-server/src/message_processor.rs
 @@ -983,6 +983,8 @@ impl MessageProcessor {
@@ -306,7 +306,7 @@ index dcad61a..4b524ee 100644
          if let Some(reason) = codex_request.experimental_reason()
              && !session.experimental_api_enabled()
          {
-@@ -1933,3 +1935,56 @@ mod thread_lifecycle_tests;
+@@ -1933,3 +1935,61 @@ mod thread_lifecycle_tests;
  #[cfg(test)]
  #[path = "message_processor_workspace_routing_tests.rs"]
  mod workspace_routing_tests;
@@ -321,7 +321,12 @@ index dcad61a..4b524ee 100644
 +        ClientRequest::TurnSteer { params, .. } => params.cm_tool_concurrency.is_some(),
 +        _ => false,
 +    };
-+    if explicit && !matches!(origin, ConnectionOrigin::InProcess | ConnectionOrigin::Stdio) {
++    if explicit
++        && !matches!(
++            origin,
++            ConnectionOrigin::InProcess | ConnectionOrigin::Stdio
++        )
++    {
 +        return Err(invalid_request(
 +            "cmToolConcurrency requires the local Embedded/stdio backend",
 +        ));
@@ -402,7 +407,7 @@ index d68a29d..f52176b 100644
              codex_home,
              platform_family: std::env::consts::FAMILY.to_string(),
 diff --git a/codex-rs/app-server/src/request_processors/turn_processor.rs b/codex-rs/app-server/src/request_processors/turn_processor.rs
-index 1ce59c4..31e47a5 100644
+index 1ce59c4..7c8b30b 100644
 --- a/codex-rs/app-server/src/request_processors/turn_processor.rs
 +++ b/codex-rs/app-server/src/request_processors/turn_processor.rs
 @@ -663,6 +663,7 @@ impl TurnRequestProcessor {
@@ -426,15 +431,19 @@ index 1ce59c4..31e47a5 100644
                  params.expected_turn_id,
              )
              .await
-@@ -1165,6 +1170,11 @@ impl TurnRequestProcessor {
+@@ -1165,6 +1170,15 @@ impl TurnRequestProcessor {
                          None,
                          None,
                      ),
-+                    NotSubmittedReason::ActiveTurnToolConcurrencyMismatch { requested, active } => (
-+                        format!("cmToolConcurrency {requested} differs from active turn {active:?}"),
-+                        None,
-+                        None,
-+                    ),
++                    NotSubmittedReason::ActiveTurnToolConcurrencyMismatch { requested, active } => {
++                        (
++                            format!(
++                                "cmToolConcurrency {requested} differs from active turn {active:?}"
++                            ),
++                            None,
++                            None,
++                        )
++                    }
                      NotSubmittedReason::PendingTriggerTurn
                      | NotSubmittedReason::PlanMode
                      | NotSubmittedReason::Superseded => (
@@ -555,7 +564,7 @@ index 374b537..782d6e1 100644
              client_user_message_id: None,
              input: Vec::new(),
 diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
-index dc03046..3425fe8 100644
+index dc03046..5873d19 100644
 --- a/codex-rs/cli/src/main.rs
 +++ b/codex-rs/cli/src/main.rs
 @@ -140,6 +140,15 @@ struct MultitoolCli {
@@ -594,7 +603,7 @@ index dc03046..3425fe8 100644
      let agents_options = match &subcommand {
          Some(Subcommand::Agents(options)) => Some(options),
          _ => None,
-@@ -5343,3 +5358,29 @@ enabled = true
+@@ -5343,3 +5358,30 @@ enabled = true
  #[cfg(all(test, unix))]
  #[path = "daemon_update_tests.rs"]
  mod daemon_update_tests;
@@ -608,8 +617,9 @@ index dc03046..3425fe8 100644
 +    fn global_leaf_limit_is_bounded_and_reaches_all_cli_entries() {
 +        for entry in ["exec", "app-server"] {
 +            for value in ["1", "2", "1024"] {
-+                let cli = MultitoolCli::try_parse_from(["codex", "--tool-concurrency", value, entry])
-+                    .expect("valid limit");
++                let cli =
++                    MultitoolCli::try_parse_from(["codex", "--tool-concurrency", value, entry])
++                        .expect("valid limit");
 +                assert_eq!(cli.tool_concurrency, Some(value.parse().unwrap()));
 +            }
 +        }
@@ -651,17 +661,20 @@ index e1b08bf..b0dfc50 100644
      pub model: Option<String>,
      /// Default Daybreak preference for new threads and non-interactive turns.
 diff --git a/codex-rs/core/src/code_mode_host.rs b/codex-rs/core/src/code_mode_host.rs
-index de32887..14685c6 100644
+index de32887..1553762 100644
 --- a/codex-rs/core/src/code_mode_host.rs
 +++ b/codex-rs/core/src/code_mode_host.rs
-@@ -100,6 +100,10 @@ impl HostConnection {
+@@ -100,6 +100,13 @@ impl HostConnection {
              .kill_on_drop(/*kill_on_drop*/ true);
          scrub_non_inheritable_env_vars(command.as_std_mut());
          let mut child = command.spawn()?;
-+        cm_runtime::tool_policy::core_event("code-mode-transport", serde_json::json!({
-+            "host_pid":std::process::id(),"helper_pid":child.id(),
-+            "program":host_program,"transport":"grpc+stdio://",
-+        }));
++        cm_runtime::tool_policy::core_event(
++            "code-mode-transport",
++            serde_json::json!({
++                "host_pid":std::process::id(),"helper_pid":child.id(),
++                "program":host_program,"transport":"grpc+stdio://",
++            }),
++        );
          let stdin = child
              .stdin
              .take()
@@ -693,7 +706,7 @@ index 2f13f03..f50f582 100644
              prefer_mxc,
              model,
 diff --git a/codex-rs/core/src/session/turn_context.rs b/codex-rs/core/src/session/turn_context.rs
-index 1c2f977..662f239 100644
+index 1c2f977..1ec53eb 100644
 --- a/codex-rs/core/src/session/turn_context.rs
 +++ b/codex-rs/core/src/session/turn_context.rs
 @@ -314,6 +314,7 @@ impl std::fmt::Debug for TurnEnvironment {
@@ -760,7 +773,7 @@ index 1c2f977..662f239 100644
          let service_tier_for_turn = updates.service_tier_for_turn.clone();
          let commit = match self.update_settings_if(updates, should_start).await {
              Ok(Some(commit)) => commit,
-@@ -1390,6 +1409,19 @@ impl Session {
+@@ -1390,6 +1409,22 @@ impl Session {
          turn_context.realtime_active = self.conversation.running_state().await.is_some();
  
          turn_context.final_output_json_schema = options.final_output_json_schema;
@@ -772,16 +785,19 @@ index 1c2f977..662f239 100644
 +            .insert(cm_runtime::tool_concurrency::RequestedLimit(
 +                turn_context.cm_tool_concurrency,
 +            ));
-+        cm_runtime::tool_policy::core_event("tool-concurrency-turn", serde_json::json!({
-+            "turn":turn_context.sub_id,"level":turn_context.extension_data.level_id(),
-+            "requested":options.cm_tool_concurrency,"configured":turn_context.config.tool_concurrency,
-+            "effective":turn_context.cm_tool_concurrency,
-+        }));
++        cm_runtime::tool_policy::core_event(
++            "tool-concurrency-turn",
++            serde_json::json!({
++                "turn":turn_context.sub_id,"level":turn_context.extension_data.level_id(),
++                "requested":options.cm_tool_concurrency,"configured":turn_context.config.tool_concurrency,
++                "effective":turn_context.cm_tool_concurrency,
++            }),
++        );
          turn_context.cyber_access_program = cyber_access_program::for_provider(
              &turn_context.config.model_provider_id,
              options.cyber_access_program,
 diff --git a/codex-rs/core/src/session/turn_input.rs b/codex-rs/core/src/session/turn_input.rs
-index 4c1c6ba..c80dd7c 100644
+index 4c1c6ba..503296e 100644
 --- a/codex-rs/core/src/session/turn_input.rs
 +++ b/codex-rs/core/src/session/turn_input.rs
 @@ -106,6 +106,8 @@ impl PreparedTurnInputSettings {
@@ -833,17 +849,20 @@ index 4c1c6ba..c80dd7c 100644
          responsesapi_client_metadata: ResponsesApiClientMetadataUpdate,
          origin: UserInputOrigin,
      ) -> Result<(String, String), NotSubmittedReason> {
-@@ -868,6 +875,18 @@ impl Session {
+@@ -868,6 +875,21 @@ impl Session {
          {
              return Err(NotSubmittedReason::ActiveTurnOutputSchemaMismatch);
          }
 +        if let Some(requested) = requested_tool_concurrency
 +            && active_task.turn_context.cm_tool_concurrency != Some(requested)
 +        {
-+            cm_runtime::tool_policy::core_event("tool-concurrency-steer-rejected", serde_json::json!({
-+                "turn":active_turn_id,"requested":requested,
-+                "active":active_task.turn_context.cm_tool_concurrency,"before_queue":true,
-+            }));
++            cm_runtime::tool_policy::core_event(
++                "tool-concurrency-steer-rejected",
++                serde_json::json!({
++                    "turn":active_turn_id,"requested":requested,
++                    "active":active_task.turn_context.cm_tool_concurrency,"before_queue":true,
++                }),
++            );
 +            return Err(NotSubmittedReason::ActiveTurnToolConcurrencyMismatch {
 +                requested,
 +                active: active_task.turn_context.cm_tool_concurrency,
@@ -865,21 +884,24 @@ index 0db73d9..d93d797 100644
                      cyber_access_program: start_options.cyber_access_program,
                  },
 diff --git a/codex-rs/core/src/tools/code_mode/execute_handler.rs b/codex-rs/core/src/tools/code_mode/execute_handler.rs
-index 25661c6..585f148 100644
+index 25661c6..bbe19cc 100644
 --- a/codex-rs/core/src/tools/code_mode/execute_handler.rs
 +++ b/codex-rs/core/src/tools/code_mode/execute_handler.rs
-@@ -101,6 +101,10 @@ impl CodeModeExecuteHandler {
+@@ -101,6 +101,13 @@ impl CodeModeExecuteHandler {
              .await
              .map_err(FunctionCallError::RespondToModel)?;
          let cell_id = started_cell.cell_id.clone();
-+        cm_runtime::tool_policy::core_event("code-mode-cell", serde_json::json!({
-+            "turn":exec.turn.sub_id,"call_id":call_id,"cell_id":cell_id.to_string(),
-+            "host_pid":std::process::id(),
-+        }));
++        cm_runtime::tool_policy::core_event(
++            "code-mode-cell",
++            serde_json::json!({
++                "turn":exec.turn.sub_id,"call_id":call_id,"cell_id":cell_id.to_string(),
++                "host_pid":std::process::id(),
++            }),
++        );
          tracing::Span::current().record("cell.id", trace_id(cell_id.as_str()));
          telemetry.cell_id = Some(cell_id.to_string());
          exec.session
-@@ -255,6 +259,10 @@ impl CodeModeExecuteHandler {
+@@ -255,6 +262,10 @@ impl CodeModeExecuteHandler {
  }
  
  impl CoreToolRuntime for CodeModeExecuteHandler {

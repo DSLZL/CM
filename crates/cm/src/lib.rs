@@ -32,8 +32,8 @@ pub mod runtime;
 pub mod runtime_plan;
 pub mod sampling_budget;
 pub mod state;
-pub mod tool_policy;
 pub mod tool_concurrency;
+pub mod tool_policy;
 pub mod tui_review;
 
 use loader::registration::RegistrationSet;
