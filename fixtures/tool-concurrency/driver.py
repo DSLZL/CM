@@ -534,14 +534,15 @@ def plug_and_play():
     budget.cm(home, directory, "enable", OWNER)
     budget.cm(home, directory, "remove", OWNER)
     run, plan = business("removed")
-    assert "tool_concurrency" in plan["phases"], ("intentional R12 checkpoint fault", sorted(plan["phases"]))
+    assert "sampling_budget" in plan["phases"] and "tool_concurrency" not in plan["phases"], sorted(plan["phases"])
     assert not any(row["event"] == "tool-concurrency-acquired" for row in rows(run))
     assert sha(BINARY) == frozen
     producer = read(Path("/fixture/concurrency-producer.json"))
     assert producer["author"]["payload_sha256"] == sha(INPUTS / "mods/g03/tool-concurrency/payload.so")
     report("plug-and-play", {"same_frozen_host": frozen, "original_a": producer["original_a"],
         "original_c": producer["parent_abc_handoff"], "loading_conflict_before_native": rejected,
-        "install_disable_enable_remove_restart": True, "parent_abc_acceptance": "not_run"})
+        "install_disable_enable_remove_restart": True, "removed_plan_phases": sorted(plan["phases"]),
+        "parent_abc_acceptance": "not_run"})
 
 
 if __name__ == "__main__":
