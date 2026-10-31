@@ -1,5 +1,5 @@
 diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
-index 1bba7c7..fe38f3d 100644
+index 1bba7c7..f42afc1 100644
 --- a/codex-rs/Cargo.lock
 +++ b/codex-rs/Cargo.lock
 @@ -1925,6 +1925,7 @@ dependencies = [
@@ -10,6 +10,14 @@ index 1bba7c7..fe38f3d 100644
   "toml 0.9.11+spec-1.1.0",
   "zip",
  ]
+@@ -2135,6 +2136,7 @@ dependencies = [
+  "chrono",
+  "clap",
+  "cm-host-adapter",
++ "cm-runtime",
+  "codex-agent-extension",
+  "codex-analytics",
+  "codex-app-server-protocol",
 diff --git a/codex-rs/analytics/src/client_tests.rs b/codex-rs/analytics/src/client_tests.rs
 index e28a38e..3f5e32f 100644
 --- a/codex-rs/analytics/src/client_tests.rs
@@ -237,8 +245,20 @@ index 490ac1e..b422cc9 100644
                              user_agent: "codex-test-agent".to_string(),
                              codex_home: codex_home.path().abs(),
                              platform_family: "test-family".to_string(),
+diff --git a/codex-rs/app-server/Cargo.toml b/codex-rs/app-server/Cargo.toml
+index f406c79..603f6b8 100644
+--- a/codex-rs/app-server/Cargo.toml
++++ b/codex-rs/app-server/Cargo.toml
+@@ -26,6 +26,7 @@ workspace = true
+ 
+ [dependencies]
+ cm-host-adapter = { path = "../cm-host-adapter" }
++cm-runtime = { path = "../cm" }
+ codex-utils-process = { workspace = true }
+ anyhow = { workspace = true }
+ base64 = { workspace = true }
 diff --git a/codex-rs/app-server/src/in_process.rs b/codex-rs/app-server/src/in_process.rs
-index 64d37f1..d055543 100644
+index 64d37f1..636f83e 100644
 --- a/codex-rs/app-server/src/in_process.rs
 +++ b/codex-rs/app-server/src/in_process.rs
 @@ -283,6 +283,7 @@ impl InProcessClientSender {
@@ -293,6 +313,14 @@ index 64d37f1..d055543 100644
          client: InProcessClientSender { client_tx },
          event_rx,
          runtime_handle,
+@@ -1017,6 +1025,7 @@ mod tests {
+             let _ = done_tx.send(());
+         });
+         let client = InProcessClientHandle {
++            initialize_response: None,
+             client: InProcessClientSender { client_tx },
+             event_rx,
+             runtime_handle,
 diff --git a/codex-rs/app-server/src/message_processor.rs b/codex-rs/app-server/src/message_processor.rs
 index dcad61a..25e33bd 100644
 --- a/codex-rs/app-server/src/message_processor.rs
