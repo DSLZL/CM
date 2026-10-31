@@ -90,7 +90,7 @@ index eb2b76d..1945bae 100644
  pub use protocol::v1::ConversationSummary;
  pub use protocol::v1::ExecCommandApprovalParams;
 diff --git a/codex-rs/app-server-protocol/src/protocol/v1.rs b/codex-rs/app-server-protocol/src/protocol/v1.rs
-index 7d05fb1..a36b045 100644
+index 7d05fb1..a53a15b 100644
 --- a/codex-rs/app-server-protocol/src/protocol/v1.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/v1.rs
 @@ -72,6 +72,10 @@ pub struct InitializeCapabilities {
@@ -99,7 +99,7 @@ index 7d05fb1..a36b045 100644
  pub struct InitializeResponse {
 +    /// Present only on the CM local Embedded/stdio backend.
 +    #[serde(default, skip_serializing_if = "Option::is_none")]
-+    #[ts(optional = nullable)]
++    #[ts(optional)]
 +    pub cm_tool_concurrency: Option<CmToolConcurrencyBackend>,
      pub user_agent: String,
      /// Absolute path to the server's $CODEX_HOME directory.
