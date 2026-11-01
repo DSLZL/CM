@@ -38,6 +38,27 @@ jobs:
       - name: Require hosted Linux x64 and record run identity
         run: python3 -B ci/scripts/record_run.py "$CM_CI_LOG_DIR"
 
+      - name: Inspect V04r2 failed reentry text evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 41305856575 -R DSLZL/CM-build-linux-x64 -n cm-linux-x64-consumer-evidence-ci-reuse-v04r2-20261101-1 -D "$RUNNER_TEMP/cm-v04r2-diagnostics"
+          python3 -B - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, "ci/scripts")
+          from mod_manifest import redact
+          root = Path(os.environ["RUNNER_TEMP"]) / "cm-v04r2-diagnostics"
+          for path in sorted(root.rglob("runtime-step-results.json")):
+              value = json.loads(path.read_text())
+              print("REENTRY CHECKPOINT RESULT", redact(json.dumps(value.get("g02a-reentry"), sort_keys=True))[:16000])
+          for path in sorted(root.rglob("g02a-reentry.log")):
+              print("REENTRY FIXTURE TRACE", path.relative_to(root))
+              print(redact(path.read_text(errors="replace"))[-20000:])
+          PY
+
       - name: Check publication boundary and CI scripts
         run: |
           python3 -B - <<'PY' 2>&1 | tee "$CM_CI_LOG_DIR/source-check.log"
