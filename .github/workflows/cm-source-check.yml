@@ -65,14 +65,15 @@ jobs:
           missing = [p for p in paths if p not in tracked or not Path(p).is_file() or Path(p).is_symlink()]
           assert not missing, f"Required CI files missing from this commit: {missing}"
           worker = json.loads(Path("ci/worker-files.json").read_text(encoding="utf-8"))
-          assert len(worker["files"]) == 7
+          assert len(worker["files"]) == 8
           assert all(row["source"] in paths for row in worker["files"]), "Worker inputs must be published"
 
           scripts = [*Path("ci/scripts").glob("*.py"), *Path("fixtures/runtime-consumer").glob("*.py"),
                      *Path("fixtures/native-loader").glob("*.py"), *Path("fixtures/host-baseline").glob("*.py"),
                      *Path("fixtures/runtime-sdk").glob("*.py"), *Path("fixtures/managed-package").glob("*.py"),
                      *Path("fixtures/state").glob("*.py"), *Path("fixtures/mod-author").glob("*.py"),
-                     *Path("fixtures/turn-budget").glob("*.py"), *Path("fixtures/review-before-send").glob("*.py")]
+                     *Path("fixtures/turn-budget").glob("*.py"), *Path("fixtures/review-before-send").glob("*.py"),
+                     *Path("fixtures/tool-concurrency").glob("*.py")]
           for script in scripts:
               py_compile.compile(str(script), cfile=str(Path(os.environ["RUNNER_TEMP"]) / (script.stem + ".pyc")),
                                  doraise=True)
@@ -103,6 +104,7 @@ jobs:
       - name: Check product reuse and partial failure recovery
         run: |
           python3 -B ci/scripts/retry.py self-check
+          python3 -B ci/scripts/acceptance_cache.py self-check
           python3 -B ci/scripts/mod_author.py self-check
           python3 -B ci/scripts/turn_budget.py self-check
           python3 -B ci/scripts/review_before_send.py self-check

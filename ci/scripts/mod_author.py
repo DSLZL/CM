@@ -439,4 +439,4 @@ def self_check():
 
 if __name__ == "__main__":
     {"configure": configure, "produce": produce, "audit-mod-only": audit_mod_only,
-     "matrix": lambda: driver().matrix(), "self-check": self_check}[sys.argv[1]]()
+     "matrix": lambda: driver().matrix(sys.argv[2] if len(sys.argv) > 2 else None), "self-check": self_check}[sys.argv[1]]()

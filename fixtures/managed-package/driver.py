@@ -671,7 +671,7 @@ def self_check():
     assert struct.unpack_from("<I", changed, 152)[0] == 2
 
 
-def matrix():
+def case_setup():
     import mod_manifest
     import managed_package
     assert os.uname().sysname == "Linux" and os.uname().machine == "x86_64"
@@ -699,6 +699,10 @@ def matrix():
     official_binary = official_entrypoint(INPUTS / "official/install")
     (global_path / "codex").symlink_to(official_binary)
     path_before = os.environ["PATH"]
+    return sdk, producer, authored, frozen, official_before, writable_official_before, global_path, path_before
+
+
+def case_install(sdk, producer, authored, frozen):
     drop = []
     homes = []
     for method in ("directory", "archive", "explicit"):
@@ -732,12 +736,27 @@ def matrix():
     removed = business("removed-inbox", archive_home, sdk, tool=False)
     assert "example-tool" not in state(archive_home)[1]["installed"]
     assert state_file.read_text() == "preserve user data"
+    return ({"frozen_host_sha256": frozen, "package_inventory": read(INPUTS / "host/cm-runtime-files.json"),
+        "author_preparation": authored, "runtime_regressions": ["P01", "P02", "P03", "P04", "M01", "M02"]},
+        {"three_install_paths": drop, "idempotent_generation": previous[0].decode(),
+         "disabled_inbox": disabled, "reenabled": enabled, "removed_inbox": removed, "data_preserved": True}, {}, {}, {}, {})
+
+
+def case_process(sdk, producer, authored, frozen):
+    process_home = PROFILE / "explicit"
+    populated(process_home)
     shutil.copytree(INPUTS / "host", COPY, symlinks=True)
     unicode_home = PROFILE / "用户 数据"
     populated(unicode_home, binary=COPY / "bin/codex")
     independent = business("unicode-exec", unicode_home, sdk, binary=COPY / "bin/codex")
-    process_behavior = process_contracts(homes[2], sdk)
-    unsafe_profiles = profile_rejections(protected_inventory)
+    process_behavior = process_contracts(process_home, sdk)
+    return ({}, {}, {"unicode_host_and_home": independent,
+        "argv_contains_unicode_spaces_quotes_and_shell_metacharacters": True, "official_inventory_unchanged": True,
+        "writable_official_profile_unchanged": True, "path_unchanged": True, "exit_and_signal": process_behavior},
+        {}, {"actual_exec": independent}, {})
+
+
+def case_terminal(sdk, producer, authored, frozen):
     # A known reachable old daemon is present during the real empty-argv TUI launch.
     tui_home = PROFILE / "tui"
     populated(tui_home)
@@ -753,17 +772,44 @@ def matrix():
     finally:
         implicit.close()
         implicit_path.unlink()
+    return ({}, {}, {"actual_tui": terminal}, {}, {"actual_tui": terminal,
+        "implicit_daemon_listener_connections": 0, "implicit_daemon_installations": 0,
+        "transport": "InProcess", "implicit_daemon_socket": str(implicit_path)}, {})
+
+
+def case_live(sdk, producer, authored, frozen):
+    homes = [None, None, PROFILE / "explicit"]
+    populated(homes[2])
     live = business("live-generation", homes[2], sdk,
         mutate=lambda: cm(homes[2], "disable", "example-tool"))
     restarted = business("next-generation", homes[2], sdk, tool=False)
+    return ({}, {"live_generation": live, "next_generation": restarted}, {}, {}, {}, {})
+
+
+def case_rejections(sdk, producer, authored, frozen):
+    unsafe_profiles = profile_rejections(protected_inventory)
     negative_home = PROFILE / "negative"
     populated(negative_home, runtime=False)
     rejected = rejections(negative_home)
+    return ({}, {}, {}, {"rejections": rejected, "precise_unit_evidence": authored, "unsafe_profiles": unsafe_profiles}, {},
+        {"native_rejections": [row for row in rejected if row["case"] in
+            ("target", "cpu", "glibc-understated", "elf-architecture", "runpath", "actual-glibc", "actual-cpu-property")],
+         "actual_removed_library": read(Path("/evidence/missing-library.json")),
+         "actual_library_recovery": read(Path("/evidence/actual-missing-library-recovery.json")),
+         "baseline": authored["baseline"], "installation_native_execution": False})
+
+
+def case_legacy(sdk, producer, authored, frozen):
     legacy_home = PROFILE / "legacy-managed"
     for relative in ("a", "b/normal"):
         cm(legacy_home, "install", INPUTS / "mods" / relative)
     legacy_plan = cm(legacy_home, "plan")["plan_projection"]
     assert {owner: row["content_tree_sha256"] for owner, row in legacy_plan["mods"].items()} == state(legacy_home)[1]["installed"]
+    return ({}, {}, {}, {"legacy_managed_plan": legacy_plan}, {}, {})
+
+
+def case_writers(sdk, producer, authored, frozen):
+    import mod_manifest
     fault_home = PROFILE / "faults"
     cm(fault_home, "install", INPUTS / "mods/m02/lifecycle-audit/normal")
     faults = failures(fault_home)
@@ -786,36 +832,34 @@ def matrix():
     sentinel_home = PROFILE / "sentinel"
     cm(sentinel_home, "install", INPUTS / "mods/constructor-sentinel")
     cm(sentinel_home, "remove", "constructor-sentinel")
+    return ({}, {}, {}, {"public_cli_faults": faults, "two_real_writers": concurrent, "recovery": recovered,
+        "dependency_breaking_changes_rejected": True, "constructor_entry_and_postinstall_executions_during_install": 0}, {}, {})
+
+
+def case_backends(sdk, producer, authored, frozen):
+    fault_home = PROFILE / "faults"
+    populated(fault_home)
     backends = backend_rejections(fault_home)
+    return ({}, {}, {}, {}, {"reachable_old_backend_rejections": backends}, {})
+
+
+def matrix(case=None):
+    import managed_package
+    import runtime_cases
+    if case is None:
+        for selected in runtime_cases.GROUPS["m03"]:
+            matrix(selected)
+        runtime_cases.aggregate(Path("/evidence"), "m03", managed_package.REPORTS)
+        return
+    runtime_cases.enter(globals(), "m03", case)
+    sdk, producer, authored, frozen, official_before, writable_official_before, global_path, path_before = case_setup()
+    reports = globals()[runtime_cases.function(case)](sdk, producer, authored, frozen)
     assert protected_inventory(INPUTS / "official") == official_before
     assert protected_inventory(OFFICIAL_PROFILE) == writable_official_before
     assert shutil.which("codex", path=str(global_path)) == str(global_path / "codex")
-    assert os.environ["PATH"] == path_before and sha(BINARY) == sha(COPY / "bin/codex") == frozen
+    assert os.environ["PATH"] == path_before and sha(BINARY) == frozen
+    if case == "process":
+        assert sha(COPY / "bin/codex") == frozen
     assert read(Path("/evidence/missing-library.json"))["status"] == "pass"
     assert read(Path("/evidence/actual-missing-library-recovery.json"))["status"] == "pass"
-    reports = (
-        {"frozen_host_sha256": frozen, "package_inventory": read(INPUTS / "host/cm-runtime-files.json"),
-         "author_preparation": authored, "runtime_regressions": ["P01", "P02", "P03", "P04", "M01", "M02"]},
-        {"three_install_paths": drop, "idempotent_generation": previous[0].decode(),
-         "disabled_inbox": disabled, "reenabled": enabled, "removed_inbox": removed,
-         "live_generation": live, "next_generation": restarted, "data_preserved": True},
-        {"unicode_host_and_home": independent, "argv_contains_unicode_spaces_quotes_and_shell_metacharacters": True,
-         "official_inventory_unchanged": True, "writable_official_profile_unchanged": True,
-         "path_unchanged": True, "exit_and_signal": process_behavior, "actual_tui": terminal},
-        {"rejections": rejected, "public_cli_faults": faults, "precise_unit_evidence": authored,
-         "legacy_managed_plan": legacy_plan,
-         "unsafe_profiles": unsafe_profiles,
-         "two_real_writers": concurrent, "recovery": recovered, "dependency_breaking_changes_rejected": True,
-         "constructor_entry_and_postinstall_executions_during_install": 0},
-        {"actual_tui": terminal, "actual_exec": independent, "reachable_old_backend_rejections": backends,
-         "implicit_daemon_listener_connections": 0, "implicit_daemon_installations": 0,
-         "transport": "InProcess", "implicit_daemon_socket": str(implicit_path)},
-        {"native_rejections": [row for row in rejected if row["case"] in
-            ("target", "cpu", "glibc-understated", "elf-architecture", "runpath", "actual-glibc", "actual-cpu-property")],
-         "actual_removed_library": read(Path("/evidence/missing-library.json")),
-         "actual_library_recovery": read(Path("/evidence/actual-missing-library-recovery.json")),
-         "baseline": authored["baseline"], "installation_native_execution": False},
-    )
-    for name, report in zip(managed_package.REPORTS, reports):
-        write(Path("/evidence") / name, {"status": "behavior_pass", **report})
-    write(EVIDENCE / "suite.json", {"status": "pass", "frozen_host_sha256": frozen, "reports": list(managed_package.REPORTS)})
+    runtime_cases.finish("m03", case, reports, managed_package.REPORTS)

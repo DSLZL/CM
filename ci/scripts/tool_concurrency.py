@@ -38,7 +38,7 @@ def prepare(inputs, package, frozen, logs, authors, sdk):
     cfg = load_config(root)
     from acceptance_cache import run
     run(root, logs, "g03-local-backend-contract")
-    contract_log = Path(os.environ["CM_ACCEPTANCE_BUILD_CACHE_DIR"]) / "g03-local-backend-contract.log"
+    contract_log = Path(os.environ["CM_ACCEPTANCE_BUILD_CACHE_DIR"]) / "g03-local-backend-contract/g03-local-backend-contract.log"
     assert "1 passed; 0 failed" in contract_log.read_text(), "Local backend contract test did not execute"
     source = root / "examples/mods/tool-concurrency"
     unit = {"manifest": "examples/mods/tool-concurrency/Cargo.toml",

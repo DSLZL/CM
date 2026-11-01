@@ -244,31 +244,54 @@ def command_contract(m):
         "local_or_remote_build_fallback": False}
 
 
-def matrix():
-    WORK.mkdir()
-    PROFILE.mkdir()
-    EVIDENCE.mkdir()
+def case_setup():
+    for directory in (WORK, PROFILE, EVIDENCE):
+        directory.mkdir(parents=True, exist_ok=True)
     m, sdk = helpers()
     receipt = packages.read(INPUTS / "producer.json")["m05"]
     baseline = m.protected_inventory(INPUTS / "official")
     host_before = packages.sha(BINARY)
-    updated = update(m, sdk, receipt)
-    rejected = failures(m, sdk, receipt)
-    boundary = metadata_boundary(m, sdk)
-    contract = command_contract(m)
-    assert contract["compiler_paths_absent"] and host_before == packages.sha(BINARY)
-    assert m.protected_inventory(INPUTS / "official") == baseline
     if receipt["build_kind"] == "mod-only":
         assert receipt["builder_execution_audit"]["status"] == "pass"
         assert receipt["current_author_variants"] == ["v2"]
-    reports = (updated, receipt["source_review"], rejected, updated, boundary,
-        {**contract, "ci_blocked_checks": receipt["source_review"]["blocked_ci_checks"]})
-    for name, report in zip(REPORTS, reports, strict=True):
-        packages.write(Path("/evidence") / name, {"status": "behavior_pass", "result": report,
-            "host_unchanged": True, "official_installation_unchanged": True})
+    return m, sdk, receipt, baseline, host_before
+
+
+def case_update(m, sdk, receipt):
+    updated = update(m, sdk, receipt)
+    return ({"result": updated}, {}, {}, {"result": updated}, {}, {})
+
+
+def case_failures(m, sdk, receipt):
+    return ({}, {}, {"result": failures(m, sdk, receipt)}, {}, {}, {})
+
+
+def case_metadata(m, sdk, receipt):
+    return ({}, {}, {}, {}, {"result": metadata_boundary(m, sdk)}, {})
+
+
+def case_commands(m, sdk, receipt):
+    contract = command_contract(m)
+    assert contract["compiler_paths_absent"]
+    return ({}, {"result": receipt["source_review"]}, {}, {}, {},
+        {"result": {**contract, "ci_blocked_checks": receipt["source_review"]["blocked_ci_checks"]}})
+
+
+def matrix(case=None):
+    import runtime_cases
+    if case is None:
+        for selected in runtime_cases.GROUPS["m05"]:
+            matrix(selected)
+        runtime_cases.aggregate(Path("/evidence"), "m05", REPORTS)
+        return
+    runtime_cases.enter(globals(), "m05", case)
+    m, sdk, receipt, baseline, host_before = case_setup()
+    reports = globals()[runtime_cases.function(case)](m, sdk, receipt)
+    assert packages.sha(BINARY) == host_before and m.protected_inventory(INPUTS / "official") == baseline
     for path in (*EVIDENCE.rglob("*.json"), *EVIDENCE.rglob("*.jsonl"), *EVIDENCE.rglob("*.log")):
         assert SECRET not in path.read_text(errors="replace"), "Secret in exported M05 evidence"
-    packages.write(EVIDENCE / "suite.json", {"status": "pass", "reports": list(REPORTS), "release_ready": False})
+    runtime_cases.finish("m05", case, tuple({"host_unchanged": True,
+        "official_installation_unchanged": True, **report} for report in reports), REPORTS)
 
 
 def self_check():

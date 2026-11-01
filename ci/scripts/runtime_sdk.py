@@ -307,7 +307,7 @@ def produce():
 def matrix():
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "fixtures/runtime-sdk"))
     import driver
-    driver.matrix()
+    driver.matrix(sys.argv[2] if len(sys.argv) > 2 else None)
 
 
 if __name__ == "__main__":

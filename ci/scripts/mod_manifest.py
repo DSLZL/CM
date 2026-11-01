@@ -176,7 +176,7 @@ def mutate(home, owner, change):
 
 
 @ci_progress.case()
-def rejection_cases(work, inputs, binary, evidence):
+def rejection_cases(work, inputs, binary, evidence, selected=None):
     cases = {
         "version-conflict": lambda m: m.update(dependencies=[{"id": "serial-fixture", "version": ">=2.0.0"}]),
         "missing-dependency": lambda m: m.update(dependencies=[{"id": "missing", "version": "^1"}]),
@@ -199,10 +199,14 @@ def rejection_cases(work, inputs, binary, evidence):
     }
     rows = []
     for name, change in cases.items():
+        if selected is not None and name != selected:
+            continue
         home = install(work / name, inputs)
         mutate(home, "output-fixture", change)
         rows.append({"case": name, **metadata(binary, home, ["plan"], success=False, evidence=evidence / (name + ".json"))})
     for name in ("missing-payload", "ordinary-executable", "zip-executable", "directory-link", "directory-hardlink", "directory-special"):
+        if selected is not None and name != selected:
+            continue
         home = install(work / name, inputs)
         package = home / "mods/output-fixture"
         if name == "missing-payload":
@@ -221,6 +225,9 @@ def rejection_cases(work, inputs, binary, evidence):
             os.mkfifo(package / "pipe")
         result = metadata(binary, home, ["plan"], success=False)
         rows.append({"case": name, **result})
+    if selected not in (None, "dependencies"):
+        assert len(rows) == 1, "Unknown manifest rejection"
+        return {"rejected": rows}
     home = install(work / "dependency-cycle", inputs)
     mutate(home, "output-fixture", lambda m: m.update(dependencies=[{"id": "serial-fixture", "version": "^1"}]))
     mutate(home, "serial-fixture", lambda m: m.update(dependencies=[{"id": "output-fixture", "version": "^1"}]))
@@ -272,12 +279,14 @@ def rejection_cases(work, inputs, binary, evidence):
         "optional_selected_matching": selected_optional, "explicit_prerelease": prerelease, "build_metadata_intersection": build_metadata}
 
 
-def zip_rejections(work, inputs, binary):
+def zip_rejections(work, inputs, binary, selected=None):
     source = install(work / "zip-source", inputs)
     package = source / "mods/output-fixture"
     rows = []
     for name in ("traversal", "absolute", "backslash", "depth", "duplicate", "file-directory", "symlink", "special", "encrypted", "method", "crc", "truncated", "local-name", "size", "entry-limit",
                  "implicit-entry-limit", "entry-byte-limit", "attachment-byte-limit", "total-byte-limit"):
+        if selected is not None and name != selected:
+            continue
         home = work / ("zip-" + name)
         (home / "mods").mkdir(parents=True)
         path = home / "mods/bad.cmod"
@@ -376,7 +385,7 @@ def lock_integrity(work, inputs, binary):
     return {"mutations": rows, "unsafe_targets_rejected": True, "atomic_recovery": True}
 
 
-def config_rejections(work, inputs, binary, evidence):
+def config_rejections(work, inputs, binary, evidence, selected=None):
     cases = {
         "unknown-key": lambda m: m["config"]["defaults"].update(unknown=CANARIES[2]),
         "wrong-type": lambda m: m["config"]["defaults"].update(limit=CANARIES[2]),
@@ -386,6 +395,8 @@ def config_rejections(work, inputs, binary, evidence):
     }
     rows = []
     for name, change in cases.items():
+        if selected is not None and name != selected:
+            continue
         home = install(work / name, inputs, configured=True)
         owner = "serial-fixture" if name == "abi1-config" else "output-fixture"
         if name == "abi1-config":
@@ -397,19 +408,23 @@ def config_rejections(work, inputs, binary, evidence):
         assert result["output"]["mod_id"] == owner, (name, result["output"])
         assert result["output"]["field"].startswith("compat.abi_major" if name == "abi1-config" else "config"), (name, result["output"])
         rows.append({"case": name, **result})
-    home = install(work / "invalid-selection", inputs, configured=True)
-    (home / "cm-runtime.toml").write_text("format_version=2\nenabled=[]\nsecret=" + CANARIES[2])
-    rows.append({"case": "invalid-selection", **metadata(binary, home, ["plan"], success=False,
-        evidence=evidence / "invalid-selection.json")})
-    home = install(work / "missing-effective-required", inputs, configured=True)
-    mutate(home, "output-fixture", lambda m: m["config"]["defaults"].pop("token"))
-    fields = tomllib.loads((home / "cm-runtime.toml").read_text()); fields["mods"]["output-fixture"].pop("token")
-    write_toml(home / "cm-runtime.toml", fields)
-    rows.append({"case": "missing-effective-required", **metadata(binary, home, ["plan"], success=False,
-        evidence=evidence / "missing-effective-required.json")})
+    if selected in (None, "invalid-selection"):
+        home = install(work / "invalid-selection", inputs, configured=True)
+        (home / "cm-runtime.toml").write_text("format_version=2\nenabled=[]\nsecret=" + CANARIES[2])
+        rows.append({"case": "invalid-selection", **metadata(binary, home, ["plan"], success=False,
+            evidence=evidence / "invalid-selection.json")})
+    if selected in (None, "missing-effective-required"):
+        home = install(work / "missing-effective-required", inputs, configured=True)
+        mutate(home, "output-fixture", lambda m: m["config"]["defaults"].pop("token"))
+        fields = tomllib.loads((home / "cm-runtime.toml").read_text()); fields["mods"]["output-fixture"].pop("token")
+        write_toml(home / "cm-runtime.toml", fields)
+        rows.append({"case": "missing-effective-required", **metadata(binary, home, ["plan"], success=False,
+            evidence=evidence / "missing-effective-required.json")})
     home = install(work / "invalid-cli", inputs, configured=True)
     for index, value in enumerate(("output-fixture.limit=" + json.dumps(CANARIES[2]), "output-fixture.unknown=" + json.dumps(CANARIES[2]),
                   "output-fixture.limit=" + CANARIES[2], "missing.limit=2", "output-fixture.limit=nan", "output-fixture.limit=2020-01-01")):
+        if selected is not None and selected != "cli-" + str(index):
+            continue
         rows.append({"case": "invalid-cli", **metadata(binary, home, ["plan"], options=["--cm-set", value], success=False,
             evidence=evidence / ("invalid-cli-" + str(index) + ".json"))})
     return rows
@@ -431,13 +446,23 @@ def remote_rejection(binary, home):
         server.close()
 
 
-def matrix():
+WORK = Path("/work/m01")
+PROFILE = Path("/profile/m01")
+EVIDENCE = Path("/evidence/m01")
+
+
+def case_setup():
     assert os.uname().sysname == "Linux" and os.uname().machine == "x86_64"
+    WORK.mkdir(parents=True)
+    EVIDENCE.mkdir(parents=True)
+    inputs = Path("/inputs")
+    binary = inputs / "host/bin/codex"
+    return inputs, binary, EVIDENCE, WORK, sha(binary)
+
+
+def case_configured(inputs, binary, evidence, work):
     sys.path.insert(0, "/fixture/fixtures/native-loader")
     import core_acceptance as core
-    inputs = Path("/inputs"); binary = inputs / "host/bin/codex"
-    evidence = Path("/evidence/m01"); work = Path("/work/m01"); work.mkdir()
-    baseline = sha(binary)
     home = install(work / "configured", inputs, configured=True)
     other = home / "mods/other-mod"; shutil.copytree(inputs / "mods/m01-b", other)
     convert(other, configured=True)
@@ -466,6 +491,13 @@ def matrix():
     core.run_case(Path("/fixture"), evidence / "startup-ignores-stale-record", binary, home, True,
         restrictive=True, expected_releases=2, sandboxed=True, cm_options=options)
     metadata(binary, home, ["lock", "--check"], options=options, success=False)
+    return ({}, {}, {}, {}, {"actual_config": actual, "plan": planned,
+        "owner_view_only": True, "array_replacement": True, "state_description_only": True, "native_memory_isolation": False}, {})
+
+
+def case_order(inputs, binary, evidence, work):
+    sys.path.insert(0, "/fixture/fixtures/native-loader")
+    import core_acceptance as core
     # ZIP order/method and directory slot names must not enter the content identity or lock.
     identities = []
     for n, (reverse, archive) in enumerate(((False, False), (True, False), (False, True), (True, True))):
@@ -475,8 +507,15 @@ def matrix():
     assert len({item["lock_sha256"] for item in identities}) == 1
     zip_business = core.run_case(Path("/fixture"), evidence / "actual-zip", binary, candidate, True,
         restrictive=True, expected_releases=2, sandboxed=True)
-    host = planned["output"]["plan_projection"]["host"]
+    return ({"sdk_plan": identities[0], "binary_required": True, "actual_zip": zip_business},
+        {"permutations": identities, "canonical_identity_equal": True}, {}, {}, {}, {})
+
+
+def case_exact(inputs, binary, evidence, work):
+    sys.path.insert(0, "/fixture/fixtures/native-loader")
+    import core_acceptance as core
     exact = install(work / "exact", inputs)
+    host = metadata(binary, exact, ["plan"])["output"]["plan_projection"]["host"]
     mutate(exact, "output-fixture", lambda m: (m.update(kind="exact_host"), m["compat"].update(exact_host={
         "build_id": host["build_id"], "executable_sha256": host["executable_sha256"]})))
     exact_plan = metadata(binary, exact, ["plan"])
@@ -488,10 +527,48 @@ def matrix():
     declared = metadata(binary, exact, ["list"])
     assert declared["output"]["mods"]["output-fixture"]["qualification"] == {"declared": True, "verified": False, "unsupported": True}
     unsupported = metadata(binary, exact, ["plan"], success=False)
-    rejection = rejection_cases(work / "rejections", inputs, binary, evidence / "rejections")
-    rejection["zip"] = zip_rejections(work / "zip", inputs, binary)
+    return ({"exact_host": exact_plan, "wrong_host": mismatch, "actual_exact_host": exact_business}, {}, {}, {}, {},
+        {"advanced_declared": declared, "unsupported_activation": unsupported})
+
+
+def case_rejections(inputs, binary, evidence, work, case):
+    sys.path.insert(0, "/fixture/fixtures/native-loader")
+    import core_acceptance as core
+    rejection = rejection_cases(work / "rejections", inputs, binary, evidence / "rejections", case.removeprefix("rejections-"))
+    return ({}, {}, rejection, {}, {}, {})
+
+
+def case_dependencies(inputs, binary, evidence, work):
+    rejection = rejection_cases(work / "rejections", inputs, binary, evidence / "rejections", "dependencies")
+    return ({}, {}, rejection, {}, {}, {})
+
+
+def case_zip(inputs, binary, evidence, work, case):
+    sys.path.insert(0, "/fixture/fixtures/native-loader")
+    import core_acceptance as core
+    rejected = zip_rejections(work / "zip", inputs, binary, case.removeprefix("zip-"))
+    return ({}, {}, {"zip": rejected}, {}, {}, {})
+
+
+def case_lock(inputs, binary, evidence, work):
+    sys.path.insert(0, "/fixture/fixtures/native-loader")
+    import core_acceptance as core
     integrity = lock_integrity(work / "integrity", inputs, binary)
-    config = config_rejections(work / "config", inputs, binary, evidence / "config-rejections")
+    return ({}, {}, {}, integrity, {}, {})
+
+
+def case_config(inputs, binary, evidence, work, case):
+    sys.path.insert(0, "/fixture/fixtures/native-loader")
+    import core_acceptance as core
+    config = config_rejections(work / "config", inputs, binary, evidence / "config-rejections", case.removeprefix("config-"))
+    return ({}, {}, {}, {}, {"rejected": config}, {})
+
+
+def case_mixed(inputs, binary, evidence, work):
+    sys.path.insert(0, "/fixture/fixtures/native-loader")
+    import core_acceptance as core
+    options = ["--cm-profile", "review", "--cm-set", "output-fixture.limit=128",
+        "--cm-set", 'output-fixture.labels=["parameter"]']
     mixed = install(work / "mixed", inputs, configured=True)
     shutil.rmtree(mixed / "mods/serial-fixture")
     shutil.copytree(inputs / "mods/a", mixed / "mods/serial-fixture")
@@ -503,22 +580,33 @@ def matrix():
         extra_env={"CM_LEGACY_CONFIG_OBSERVATION": str(evidence / "legacy-config-view.json")})
     assert read(evidence / "legacy-config-view.json") == {"selection_projection_only": True}
     assert read(inputs / "producer.json")["regressions"]["p03"]["status"] == "pass"
+    return ({"mixed_plan": mixed_plan, "actual_mixed": mixed_business}, {}, {}, {},
+        {"legacy_config_projection": read(evidence / "legacy-config-view.json")}, {})
+
+
+def case_remote(inputs, binary, evidence, work):
+    sys.path.insert(0, "/fixture/fixtures/native-loader")
+    import core_acceptance as core
+    home = install(work / "configured", inputs, configured=True)
     remote = remote_rejection(binary, home)
+    return ({}, {}, {}, {}, {}, {"remote": remote, "commands": ["list", "plan", "doctor", "lock", "lock --check"],
+        "third_party_code_executed": False})
+
+
+def matrix(case=None):
+    import runtime_cases
+    if case is None:
+        for selected in runtime_cases.GROUPS["m01"]:
+            matrix(selected)
+        runtime_cases.aggregate(Path("/evidence"), "m01", REPORTS)
+        return
+    runtime_cases.enter(globals(), "m01", case)
+    inputs, binary, evidence, work, baseline = case_setup()
+    selected = globals()[runtime_cases.function(case)]
+    reports = selected(inputs, binary, evidence, work, case) if case.startswith((
+        "rejections-", "zip-", "config-")) else selected(inputs, binary, evidence, work)
     assert sha(binary) == baseline
-    reports = [
-        {"sdk_plan": identities[0], "exact_host": exact_plan, "wrong_host": mismatch, "binary_required": True,
-            "actual_zip": zip_business, "actual_exact_host": exact_business, "mixed_plan": mixed_plan, "actual_mixed": mixed_business},
-        {"permutations": identities, "canonical_identity_equal": True}, rejection, integrity,
-        {"actual_config": actual, "plan": planned, "rejected": config, "owner_view_only": True, "array_replacement": True,
-            "legacy_config_projection": read(evidence / "legacy-config-view.json"),
-            "state_description_only": True, "native_memory_isolation": False},
-        {"remote": remote, "advanced_declared": declared, "unsupported_activation": unsupported,
-            "commands": ["list", "plan", "doctor", "lock", "lock --check"], "third_party_code_executed": False},
-    ]
-    for name, data in zip(REPORTS, reports):
-        write(Path("/evidence") / name, {"status": "behavior_pass", **data})
-    write(evidence / "suite.json", {"status": "pass", "host_sha256": baseline, "report_names": REPORTS,
-        "cache_mode": "none", "product_build_calls": 0})
+    runtime_cases.finish("m01", case, reports, REPORTS)
 
 
 def producer_audit(inputs, package, destination):
@@ -619,4 +707,4 @@ def produce():
 
 
 if __name__ == "__main__":
-    {"produce": produce, "matrix": matrix}[sys.argv[1]]()
+    {"produce": produce, "matrix": lambda: matrix(sys.argv[2] if len(sys.argv) > 2 else None)}[sys.argv[1]]()

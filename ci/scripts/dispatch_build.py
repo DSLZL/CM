@@ -196,6 +196,15 @@ def main():
             artifact_binding(exact("cm-linux-x64-validation-inputs-" + request_id + "-" + str(run["run_attempt"])),
                 validation["artifact_id"], "cm-linux-x64-validation-inputs-" + request_id + "-" + str(run["run_attempt"]),
                 validation["artifact_sha256"], run_id)
+        from retry import verify_test_build
+        for label, test_build in consumer["test_builds"].items():
+            if label != test_build["target"]:
+                raise RuntimeError("Receipt test-build target differs")
+            verify_test_build(test_build, worker=worker, fetch=api)
+            for repository, previous, current in ((source, test_build["source_sha"], source_sha),
+                    (worker, test_build["workflow_sha"], worker_sha)):
+                if api("repos/" + repository + "/compare/" + previous + "..." + current)["status"] not in ("ahead", "identical"):
+                    raise RuntimeError("Test-build origin is not an ancestor of the requested source/workflow")
     ci["conclusion"] = run["conclusion"]
     if kind == "qualification" and consumer_required:
         origin = {"run_id": run_id, "run_attempt": run["run_attempt"], "source_sha": source_sha,

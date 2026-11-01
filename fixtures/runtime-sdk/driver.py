@@ -421,7 +421,7 @@ def self_check():
         raise AssertionError("Missing business builtin accepted: " + repr(invalid))
 
 
-def matrix():
+def case_setup():
     import mod_manifest
     import runtime_sdk
     EVIDENCE.mkdir(parents=True)
@@ -431,16 +431,32 @@ def matrix():
     assert before == frozen["executable_sha256"]
     authored = producer["runtime_sdk"]
     assert authored["status"] == "pass" and authored["native_scope_probe"]["status"] == "pass"
+    return producer, frozen, before, authored
+
+
+def case_authoring(producer, frozen, before, authored, mode=None):
     native_evidence = EVIDENCE / "native-core"
     native_evidence.mkdir()
     for name in ("m02-native-probe.json", "m02-native-scopes.json", "m02-native-events.jsonl", "m02-native-trace.jsonl"):
         shutil.copyfile(Path("/fixture") / name, native_evidence / name)
+    return ({"authoring": authored, "ffi_boundary": "C DTOs, opaque handles and copied byte buffers"},
+        {"private_builtin_order": authored["native_scope_probe"]["builtin_before_mod"]},
+        {"private_thread_manager": authored["native_scope_probe"]}, {},
+        {"private_registry_state": authored["native_scope_probe"], "memory_persistence": "process-local only"},
+        {"ordinary_reentry": authored["native_scope_probe"]["ordinary_reentry"]}, {})
+
+
+def case_embedded(producer, frozen, before, authored, mode=None):
     home = PROFILE / "embedded"
     install(home)
     first = embedded("embedded-new", home)
     resumed = embedded("embedded-resume", home, mode="resume", thread_id=first["thread"])
     forked = embedded("embedded-fork", home, mode="fork", thread_id=first["thread"])
     assert resumed["thread"] == first["thread"] != forked["thread"]
+    return ({}, {"embedded": first}, {"embedded_new_resume_fork": [first, resumed, forked]}, {}, {}, {}, {})
+
+
+def case_stdio(producer, frozen, before, authored, mode=None):
     scope_home = PROFILE / "stdio"
     install(scope_home)
     provider = Provider()
@@ -481,42 +497,55 @@ def matrix():
         assert len({row[field] for row in selected}) == len(selected)
         assert all(row["thread_before" if kind == 1 else "turn_before"] == 0 for row in selected)
 
-    cancellations = []
-    for mode in ("async", "sync-cancel", "cancel", "late", "noncooperative", "timeout"):
-        case_home = PROFILE / mode
-        install(case_home)
-        service = Provider()
-        test = Client(EVIDENCE / mode, case_home, service, mode=mode)
-        try:
-            identity = test.start()
-            outcome = test.turn(identity, mode, interrupt=mode in ("sync-cancel", "cancel", "late", "noncooperative"),
-                release=mode == "async", failure=mode == "timeout")
-        finally:
-            test.close(failure=mode in ("noncooperative", "timeout"))
-            service.close()
-        lifetime = settled(EVIDENCE / mode, pinned=mode == "noncooperative", failed=mode == "timeout")
-        records = rows(EVIDENCE / mode / "events.jsonl")
-        complete = [row for row in records if row["event"] == "worker-complete"]
-        if mode == "async":
-            assert len(complete) == 1 and complete[0]["code"] == 0
-            business_evidence(service)
-        elif mode == "sync-cancel":
-            acknowledged = [row for row in records if row["event"] == "sync-cancel-quiet" and row["owner"] == "example-tool"]
-            assert len(acknowledged) == 1 and acknowledged[0]["code"] == 8 and not complete
-            tool_request = next(row["request"] for row in records if row["event"] == "dispatch"
-                and row["owner"] == "example-tool" and row["kind"] == 10)
-            assert acknowledged[0]["request"] == tool_request
-            native = core.trace_rows(EVIDENCE / mode / "native.jsonl")
-            assert any(row["event"] == "runtime-request-cancel" and row["detail"]["mod"] == "example-tool"
-                and not row["detail"]["timeout"] for row in native)
-            assert not any(row["event"] == "runtime-scope-failed" for row in native)
-        elif mode != "noncooperative":
-            assert len(complete) == 1 and complete[0]["code"] == 8
-        if mode == "timeout":
-            assert any(row["event"] == "runtime-request-cancel" and row["detail"]["timeout"]
-                for row in core.trace_rows(EVIDENCE / mode / "native.jsonl"))
-        cancellations.append({"mode": mode, "turn": outcome, "lifetime": lifetime, "completion": complete})
+    handle_events = [row for row in scope_events if row["event"] in
+        ("handle-probes", "previous-handles", "cross-owner-handle")]
+    assert any(row["event"] == "cross-owner-handle" for row in handle_events)
+    assert any(row["event"] == "previous-handles" and row["old_turn"] != 0 for row in handle_events)
+    return ({}, {"stdio": public_business}, {"stdio_turns": turns, "live_resume_keeps_runtime": live["thread"]["id"],
+        "scopes": scope_lifetime, "lifecycle_counts": dict(lifecycle_counts), "unsubscribed_configuration_rebuild": rebuilt},
+        {"builtin_names_retained": public_business["builtin_exec_command_retained"]}, {"checks": handle_events}, {}, {})
 
+
+def case_cancel(producer, frozen, before, authored, mode):
+    cancellations = []
+    case_home = PROFILE / mode
+    install(case_home)
+    service = Provider()
+    test = Client(EVIDENCE / mode, case_home, service, mode=mode)
+    try:
+        identity = test.start()
+        outcome = test.turn(identity, mode, interrupt=mode in ("sync-cancel", "cancel", "late", "noncooperative"),
+            release=mode == "async", failure=mode == "timeout")
+    finally:
+        test.close(failure=mode in ("noncooperative", "timeout"))
+        service.close()
+    lifetime = settled(EVIDENCE / mode, pinned=mode == "noncooperative", failed=mode == "timeout")
+    records = rows(EVIDENCE / mode / "events.jsonl")
+    complete = [row for row in records if row["event"] == "worker-complete"]
+    if mode == "async":
+        assert len(complete) == 1 and complete[0]["code"] == 0
+        business_evidence(service)
+    elif mode == "sync-cancel":
+        acknowledged = [row for row in records if row["event"] == "sync-cancel-quiet" and row["owner"] == "example-tool"]
+        assert len(acknowledged) == 1 and acknowledged[0]["code"] == 8 and not complete
+        tool_request = next(row["request"] for row in records if row["event"] == "dispatch"
+            and row["owner"] == "example-tool" and row["kind"] == 10)
+        assert acknowledged[0]["request"] == tool_request
+        native = core.trace_rows(EVIDENCE / mode / "native.jsonl")
+        assert any(row["event"] == "runtime-request-cancel" and row["detail"]["mod"] == "example-tool"
+            and not row["detail"]["timeout"] for row in native)
+        assert not any(row["event"] == "runtime-scope-failed" for row in native)
+    elif mode != "noncooperative":
+        assert len(complete) == 1 and complete[0]["code"] == 8
+    if mode == "timeout":
+        assert any(row["event"] == "runtime-request-cancel" and row["detail"]["timeout"]
+            for row in core.trace_rows(EVIDENCE / mode / "native.jsonl"))
+    cancellations.append({"mode": mode, "turn": outcome, "lifetime": lifetime, "completion": complete})
+
+    return ({}, {}, {}, {}, {}, {"cases": cancellations}, {})
+
+
+def case_restart(producer, frozen, before, authored, mode=None):
     restart_home = PROFILE / "restart"
     install(restart_home)
     service = Provider()
@@ -559,105 +588,111 @@ def matrix():
     cold_start = next(row for row in cold_events if row["event"] == "dispatch" and row["kind"] == 1)
     assert cold_start["mod_before"] == cold_start["thread_before"] == 0
 
-    errors = []
-    for mode in ("lifecycle-error", "turn-error", "context-error", "tool-error", "callback-error", "panic", "stop-error", "release-error", "bounds"):
-        error_home = PROFILE / mode
-        install(error_home)
-        directory = EVIDENCE / mode
-        directory.mkdir(parents=True)
-        service = Provider(tool_error=mode == "tool-error")
-        arguments = command(directory, service.endpoint, "embedded", token=mode)
-        try:
-            with (directory / "stdout.jsonl").open("w") as out, (directory / "stderr.log").open("w") as err:
-                result = subprocess.run(arguments, env=environment(error_home, directory, mode), cwd=directory,
-                    stdout=out, stderr=err, timeout=90)
-            write(directory / "result.json", {"command": arguments, "return_code": result.returncode, "provider_requests": service.requests})
-            if mode in ("tool-error", "bounds"):
-                assert result.returncode == 0
-                business_evidence(service)
-            elif mode in ("stop-error", "release-error"):
-                assert result.returncode != 0
-                business_evidence(service)
-                events = rows(directory / "events.jsonl")
-                assert sum(row["event"] == "userdata-release" for row in events) == 2
-            elif mode in ("callback-error", "panic"):
-                assert result.returncode != 0 and len(service.requests) == 1
-                assert not service.errors, service.errors
-            else:
-                assert result.returncode != 0 and not service.requests, "Required callback error reached the model"
-            if mode == "bounds":
-                assert any(row["event"] == "bounds" and row["quota_recovered"] for row in rows(directory / "events.jsonl"))
-            else:
-                assert "CM " in (directory / "stderr.log").read_text() + (directory / "stdout.jsonl").read_text() or mode == "tool-error"
-            error_case = {"mode": mode, "return_code": result.returncode, "model_requests": len(service.requests)}
-            if mode in ("callback-error", "panic"):
-                native = core.trace_rows(directory / "native.jsonl")
-                failures = [row["detail"]["error"] for row in native if row["event"] == "runtime-scope-failed"
-                    and row["detail"]["error"]["stage"] == "runtime_dispatch"]
-                assert failures and all(failure == failures[0] for failure in failures), failures
-                failure = failures[0]
-                assert (failure["mod_id"], failure["contribution"], failure["resource"]) == (
-                    "example-tool", "echo", "example-tool__echo")
-                expected = "native_reported_panic" if mode == "panic" else "native_failure"
-                assert failure["reason"] == expected and failure["already_native_executed"], failure
-                tool_request = next(row["detail"]["request"] for row in native if row["event"] == "runtime-request"
-                    and row["detail"]["mod"] == "example-tool" and row["detail"]["event_kind"] == 10)
-                completions = [row["detail"] for row in native if row["event"] == "runtime-complete"
-                    and row["detail"]["request"] == tool_request]
-                assert len(completions) == 1 and completions[0]["status"] == 1
-                assert completions[0]["quiescent"] and completions[0]["code"] == 7
-                error_case.update(abi_callback=failure, lifetime=settled(directory, failed=True))
-            errors.append(error_case)
-        finally:
-            service.close()
+    return ({}, {}, {}, {}, {"old_process": [row for row in cold_events if row["event"] == "old-process-handle"]}, {},
+        {"live": live_outcome, "live_lifetime": live_lifetime, "library_mappings": library_maps,
+         "cold": cold_outcome, "cold_lifetime": cold_lifetime, "old_handle_rejected": True,
+         "same_cli_executable_sha256": before, "compilation_during_consumption": 0, "active_libraries_unloaded": 0})
 
-    rejected = [rejection("abi-" + variant, variant) for variant in runtime_sdk.NEGATIVE]
+
+def case_error(producer, frozen, before, authored, mode):
+    errors = []
+    error_home = PROFILE / mode
+    install(error_home)
+    directory = EVIDENCE / mode
+    directory.mkdir(parents=True)
+    service = Provider(tool_error=mode == "tool-error")
+    arguments = command(directory, service.endpoint, "embedded", token=mode)
+    try:
+        with (directory / "stdout.jsonl").open("w") as out, (directory / "stderr.log").open("w") as err:
+            result = subprocess.run(arguments, env=environment(error_home, directory, mode), cwd=directory,
+                stdout=out, stderr=err, timeout=90)
+        write(directory / "result.json", {"command": arguments, "return_code": result.returncode, "provider_requests": service.requests})
+        if mode in ("tool-error", "bounds"):
+            assert result.returncode == 0
+            business_evidence(service)
+        elif mode in ("stop-error", "release-error"):
+            assert result.returncode != 0
+            business_evidence(service)
+            events = rows(directory / "events.jsonl")
+            assert sum(row["event"] == "userdata-release" for row in events) == 2
+        elif mode in ("callback-error", "panic"):
+            assert result.returncode != 0 and len(service.requests) == 1
+            assert not service.errors, service.errors
+        else:
+            assert result.returncode != 0 and not service.requests, "Required callback error reached the model"
+        if mode == "bounds":
+            assert any(row["event"] == "bounds" and row["quota_recovered"] for row in rows(directory / "events.jsonl"))
+        else:
+            assert "CM " in (directory / "stderr.log").read_text() + (directory / "stdout.jsonl").read_text() or mode == "tool-error"
+        error_case = {"mode": mode, "return_code": result.returncode, "model_requests": len(service.requests)}
+        if mode in ("callback-error", "panic"):
+            native = core.trace_rows(directory / "native.jsonl")
+            failures = [row["detail"]["error"] for row in native if row["event"] == "runtime-scope-failed"
+                and row["detail"]["error"]["stage"] == "runtime_dispatch"]
+            assert failures and all(failure == failures[0] for failure in failures), failures
+            failure = failures[0]
+            assert (failure["mod_id"], failure["contribution"], failure["resource"]) == (
+                "example-tool", "echo", "example-tool__echo")
+            expected = "native_reported_panic" if mode == "panic" else "native_failure"
+            assert failure["reason"] == expected and failure["already_native_executed"], failure
+            tool_request = next(row["detail"]["request"] for row in native if row["event"] == "runtime-request"
+                and row["detail"]["mod"] == "example-tool" and row["detail"]["event_kind"] == 10)
+            completions = [row["detail"] for row in native if row["event"] == "runtime-complete"
+                and row["detail"]["request"] == tool_request]
+            assert len(completions) == 1 and completions[0]["status"] == 1
+            assert completions[0]["quiescent"] and completions[0]["code"] == 7
+            error_case.update(abi_callback=failure, lifetime=settled(directory, failed=True))
+        errors.append(error_case)
+    finally:
+        service.close()
+
+    return ({}, {"required_error_gates": errors}, {}, {}, {}, {"required_errors": errors}, {})
+
+
+def case_rejections(producer, frozen, before, authored, mode=None):
+    import mod_manifest
+    import runtime_sdk
+    assert mode in (*runtime_sdk.NEGATIVE, "manifest-reserved", "manifest-name-collision")
     def change(home, transform):
         path = home / "mods/example-tool"
         import tomllib
         value = tomllib.loads((path / "mod.toml").read_text())
         transform(value)
         mod_manifest.manifest(path, value)
-    rejected.append(rejection("manifest-reserved", mutate=lambda home: change(home,
-        lambda value: value["contributions"][0].update(resource="exec_command"))))
-    rejected.append(rejection("manifest-name-collision", mutate=lambda home: change(home,
-        lambda value: value["contributions"][1].update(id="shadow", kind="tool",
-            capability="runtime.tool.v1", resource="example-tool__echo"))))
-    collision = next(row["detail"] for row in core.trace_rows(EVIDENCE / "manifest-name-collision/native.jsonl")
-        if row["event"] == "startup-failed")
-    assert (collision["stage"], collision["code"], collision["mod_id"], collision["contribution"],
-        collision["resource"], collision["already_native_executed"]) == (
-        "preflight", "runtime_name_collision", "example-tool", "shadow", "example-tool__echo", False), collision
-    assert set(collision["related_contributions"]) == {"example-tool::echo", "example-tool::shadow"}, collision
-    rejected[-1]["structured_error"] = collision
+    if mode in runtime_sdk.NEGATIVE:
+        rejected = [rejection("abi-" + mode, mode)]
+    elif mode == "manifest-reserved":
+        rejected = [rejection(mode, mutate=lambda home: change(home,
+            lambda value: value["contributions"][0].update(resource="exec_command")))]
+    else:
+        rejected = [rejection(mode, mutate=lambda home: change(home,
+            lambda value: value["contributions"][1].update(id="shadow", kind="tool",
+                capability="runtime.tool.v1", resource="example-tool__echo")))]
+        collision = next(row["detail"] for row in core.trace_rows(EVIDENCE / "manifest-name-collision/native.jsonl")
+            if row["event"] == "startup-failed")
+        assert (collision["stage"], collision["code"], collision["mod_id"], collision["contribution"],
+            collision["resource"], collision["already_native_executed"]) == (
+            "preflight", "runtime_name_collision", "example-tool", "shadow", "example-tool__echo", False), collision
+        assert set(collision["related_contributions"]) == {"example-tool::echo", "example-tool::shadow"}, collision
+        rejected[-1]["structured_error"] = collision
+    return ({}, {}, {}, {"rejected": rejected}, {}, {}, {})
 
-    handle_events = [row for row in scope_events if row["event"] in
-        ("handle-probes", "previous-handles", "cross-owner-handle")]
-    assert any(row["event"] == "cross-owner-handle" for row in handle_events)
-    assert any(row["event"] == "previous-handles" and row["old_turn"] != 0 for row in handle_events)
+
+def matrix(case=None):
+    import runtime_cases
+    import runtime_sdk
+    if case is None:
+        for selected in runtime_cases.GROUPS["m02"]:
+            matrix(selected)
+        runtime_cases.aggregate(Path("/evidence"), "m02", runtime_sdk.REPORTS)
+        return
+    runtime_cases.enter(globals(), "m02", case)
+    producer, frozen, before, authored = case_setup()
+    mode = case.split("-", 1)[1] if case.startswith(("cancel-", "error-", "rejections-")) else None
+    reports = globals()[runtime_cases.function(case)](producer, frozen, before, authored, mode)
     assert core.sha(BINARY) == before
-    reports = (
-        {"authoring": authored, "ffi_boundary": "C DTOs, opaque handles and copied byte buffers"},
-        {"embedded": first, "stdio": public_business, "private_builtin_order": authored["native_scope_probe"]["builtin_before_mod"],
-         "required_error_gates": errors},
-        {"embedded_new_resume_fork": [first, resumed, forked], "stdio_turns": turns,
-         "live_resume_keeps_runtime": live["thread"]["id"], "scopes": scope_lifetime,
-         "lifecycle_counts": dict(lifecycle_counts),
-         "unsubscribed_configuration_rebuild": rebuilt,
-         "private_thread_manager": authored["native_scope_probe"]},
-        {"rejected": rejected, "builtin_names_retained": public_business["builtin_exec_command_retained"]},
-        {"checks": handle_events, "old_process": [row for row in cold_events if row["event"] == "old-process-handle"],
-         "private_registry_state": authored["native_scope_probe"], "memory_persistence": "process-local only"},
-        {"cases": cancellations, "required_errors": errors,
-         "ordinary_reentry": authored["native_scope_probe"]["ordinary_reentry"]},
-        {"live": live_outcome, "live_lifetime": live_lifetime, "library_mappings": library_maps,
-         "cold": cold_outcome, "cold_lifetime": cold_lifetime, "old_handle_rejected": True,
-         "same_cli_executable_sha256": before, "compilation_during_consumption": 0, "active_libraries_unloaded": 0},
-    )
-    for name, report in zip(runtime_sdk.REPORTS, reports, strict=True):
-        write(Path("/evidence") / name, {"status": "behavior_pass", **report})
-    write(EVIDENCE / "suite.json", {"status": "pass", "reports": list(runtime_sdk.REPORTS)})
+    runtime_cases.finish("m02", case, reports, runtime_sdk.REPORTS)
 
 
 if __name__ == "__main__":
-    matrix()
+    matrix(sys.argv[1] if len(sys.argv) > 1 else None)

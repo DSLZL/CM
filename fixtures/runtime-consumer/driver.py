@@ -278,16 +278,26 @@ def startup(name, home, binary=BINARY, *, remote=False, require_cm=True):
         thread.join(timeout=2)
 
 
-def matrix():
+REPORTS = ["frozen-host-independent-mods.json","zero-build-runtime-environment.json","plug-and-play-matrix.json","runtime-package-integrity.json","zero-build-failure-matrix.json","empty-host-independent-install.json"]
+
+
+def case_setup():
     env = environment("matrix")
     baseline = tree(INPUTS)
     official_before = tree(INPUTS / "official")
     producer = read(INPUTS / "producer.json")
     data = PROFILE / "mod-data"
-    data.mkdir()
+    data.mkdir(parents=True)
     for name in ("a", "b"):
         (data / name).write_text("retained-" + name)
     retained = tree(data)
+    WORK.mkdir(parents=True, exist_ok=True)
+    install(PROFILE, ("b",))
+    (PROFILE / "cm-runtime.toml").write_text("format_version = 1\nenabled = []\n")
+    return env, baseline, official_before, producer, data, retained
+
+
+def case_states(env, baseline, official_before, producer, data, retained):
     states = []
     for name, installed, selected in (("empty", (), ()), ("a", ("a",), ("a",)), ("b", ("b",), ("b",)),
                                       ("ab", ("a", "b"), ("a", "b")), ("remove-a", ("b",), ("b",)),
@@ -309,66 +319,96 @@ def matrix():
         assert stable(states[0]["provider_tool_bodies"][label]) == stable(states[1]["provider_tool_bodies"][label])
         assert stable(states[0]["provider_tool_bodies"][label]) == stable(states[5]["provider_tool_bodies"][label])
         assert all(stable(states[2]["provider_tool_bodies"][label]) == stable(states[index]["provider_tool_bodies"][label]) for index in (3, 4))
+    return ({"authors": producer["authors"], "host_link_inputs_contain_mods": False,
+        "input_inventory_before": baseline, "input_inventory_after": tree(INPUTS), "selection_builds": 0,
+        "read_only_input_digest_reuse": core.input_digest_stats()},
+        {"environment": env, "probes": read(Path("/evidence/isolation-probes.json")),
+         "runtime_inputs": baseline, "build_modules_available": False, "cache_mode": "none"},
+        {"states": states, "data_retained": retained},
+        {"absolute_cli": str(BINARY), "actual_elf_sha256": core.sha(BINARY), "embedded": True,
+         "sandbox": "workspace-write/never; actual nested packaged bwrap and rg", "package_files": tree(INPUTS / "host")},
+        {}, {"empty_states": [states[0], states[5]], "official_before": official_before,
+         "official_after": tree(INPUTS / "official"), "official_producer_manifest": producer["official"],
+         "official_profile_setup": producer["official_profile_setup"], "maintained_source": producer["maintained_source"],
+         "cm_inputs_unchanged": baseline == tree(INPUTS)})
+
+
+def case_startup(env, baseline, official_before, producer, data, retained, case):
     known_success = tree(PROFILE / "mods")
     selection = (PROFILE / "cm-runtime.toml").read_bytes()
     failures = []
-    for kind in ("conflict", "dependency", "abi", "target", "capability", "payload", "resource", "backend", "init-fail",
-                 *producer["entry_invalid"]):
-        candidate = WORK / "candidates" / kind
-        install(candidate, ("a", "b"))
-        package = candidate / "mods/b"
-        if kind in producer["entry_invalid"] or kind == "init-fail":
-            shutil.rmtree(package)
-            shutil.copytree(INPUTS / "mods/b" / kind, package)
-            if kind == "init-fail":
-                change_manifest(package, lambda fields: fields.update(dependencies=[{"id": "serial-fixture", "version": "0.1.0"}]))
-        elif kind == "payload":
-            with (package / "payload.so").open("r+b") as stream:
-                stream.write(b"broken")
-        elif kind == "resource":
-            change_manifest(package, lambda fields: fields.update(resources=[{"path": "missing.txt", "size": 1, "sha256": "0" * 64}]))
-        elif kind != "backend":
-            changes = {"conflict": {"conflicts": ["serial-fixture"]}, "abi": {"abi_minor": 99},
-                "dependency": {"dependencies": [{"id": "missing-mod", "version": "0.1.0"}]},
-                "target": {"target": "aarch64-unknown-linux-gnu"}, "capability": {"required_capabilities": ["unknown.capability"]}}
-            change_manifest(package, lambda fields: fields.update(changes[kind]))
-        report = startup("failures/" + kind, candidate, remote=kind == "backend")
-        if kind not in ("backend", "conflict"):
-            errors = [row["detail"] for row in report["trace"] if row["event"] == "startup-failed"]
-            assert errors and errors[0]["resource"] == LIMIT_CAP and errors[0]["mod_id"] == "output-fixture"
-        native = kind in producer["entry_invalid"] or kind == "init-fail"
-        assert any(row["event"] == "dlopen-start" for row in report["trace"]) == native
+    kind = case.removeprefix("startup-")
+    candidate = WORK / "candidates" / kind
+    install(candidate, ("a", "b"))
+    package = candidate / "mods/b"
+    if kind in producer["entry_invalid"] or kind == "init-fail":
+        shutil.rmtree(package)
+        shutil.copytree(INPUTS / "mods/b" / kind, package)
         if kind == "init-fail":
-            released = [index for index, row in enumerate(report["trace"]) if row["event"] == "userdata-released"]
-            assert len(released) == 2 and report["trace"][released[0]]["detail"]["mod"] == "output-fixture"
-            assert released[0] < next(index for index, row in enumerate(report["trace"]) if row["event"] == "release-start" and row["detail"]["mod"] == "serial-fixture") < released[1]
-            assert [row["detail"]["mod"] for row in report["trace"] if row["event"] == "init-start"] == ["serial-fixture", "output-fixture"]
-        failures.append({"case": kind, "result": report})
-        assert tree(PROFILE / "mods") == known_success and (PROFILE / "cm-runtime.toml").read_bytes() == selection
-        assert tree(data) == retained and tree(INPUTS) == baseline
-        business("recoveries/startup-" + kind, PROFILE, ())
-    for kind in ("missing-helper", "damaged-package", "missing-inventory"):
-        candidate = WORK / "packages" / kind
-        shutil.copytree(INPUTS / "host", candidate)
-        if kind == "missing-helper":
-            (candidate / "codex-resources/bwrap").unlink()
-        elif kind == "missing-inventory":
-            (candidate / "cm-runtime-files.json").unlink()
-        else:
-            with (candidate / "codex-path/rg").open("r+b") as stream:
-                stream.write(b"damaged")
-        report = startup("failures/" + kind, PROFILE, binary=candidate / "bin/codex")
-        assert not report["trace"] and "CM package" in report["stderr"]
-        failures.append({"case": kind, "result": report})
-        business("recoveries/package-" + kind, PROFILE, ())
-    for variant in producer["call_invalid"]:
-        candidate = WORK / "callbacks" / variant
-        install(candidate, ("b",))
-        shutil.rmtree(candidate / "mods/b")
-        shutil.copytree(INPUTS / "mods/b" / variant, candidate / "mods/b")
-        failures.append({"case": variant, "result": business("callbacks/" + variant, candidate, ("b",), variant=variant)})
-        assert tree(INPUTS) == baseline and tree(data) == retained
-        business("recoveries/callback-" + variant, PROFILE, ())
+            change_manifest(package, lambda fields: fields.update(dependencies=[{"id": "serial-fixture", "version": "0.1.0"}]))
+    elif kind == "payload":
+        with (package / "payload.so").open("r+b") as stream:
+            stream.write(b"broken")
+    elif kind == "resource":
+        change_manifest(package, lambda fields: fields.update(resources=[{"path": "missing.txt", "size": 1, "sha256": "0" * 64}]))
+    elif kind != "backend":
+        changes = {"conflict": {"conflicts": ["serial-fixture"]}, "abi": {"abi_minor": 99},
+            "dependency": {"dependencies": [{"id": "missing-mod", "version": "0.1.0"}]},
+            "target": {"target": "aarch64-unknown-linux-gnu"}, "capability": {"required_capabilities": ["unknown.capability"]}}
+        change_manifest(package, lambda fields: fields.update(changes[kind]))
+    report = startup("failures/" + kind, candidate, remote=kind == "backend")
+    if kind not in ("backend", "conflict"):
+        errors = [row["detail"] for row in report["trace"] if row["event"] == "startup-failed"]
+        assert errors and errors[0]["resource"] == LIMIT_CAP and errors[0]["mod_id"] == "output-fixture"
+    native = kind in producer["entry_invalid"] or kind == "init-fail"
+    assert any(row["event"] == "dlopen-start" for row in report["trace"]) == native
+    if kind == "init-fail":
+        released = [index for index, row in enumerate(report["trace"]) if row["event"] == "userdata-released"]
+        assert len(released) == 2 and report["trace"][released[0]]["detail"]["mod"] == "output-fixture"
+        assert released[0] < next(index for index, row in enumerate(report["trace"]) if row["event"] == "release-start" and row["detail"]["mod"] == "serial-fixture") < released[1]
+        assert [row["detail"]["mod"] for row in report["trace"] if row["event"] == "init-start"] == ["serial-fixture", "output-fixture"]
+    failures.append({"case": kind, "result": report})
+    assert tree(PROFILE / "mods") == known_success and (PROFILE / "cm-runtime.toml").read_bytes() == selection
+    assert tree(data) == retained and tree(INPUTS) == baseline
+    business("recoveries/startup-" + kind, PROFILE, ())
+    return ({}, {}, {}, {}, {"failures": failures}, {})
+
+
+def case_packages(env, baseline, official_before, producer, data, retained, case):
+    failures = []
+    kind = case.removeprefix("packages-")
+    candidate = WORK / "packages" / kind
+    shutil.copytree(INPUTS / "host", candidate)
+    if kind == "missing-helper":
+        (candidate / "codex-resources/bwrap").unlink()
+    elif kind == "missing-inventory":
+        (candidate / "cm-runtime-files.json").unlink()
+    else:
+        with (candidate / "codex-path/rg").open("r+b") as stream:
+            stream.write(b"damaged")
+    report = startup("failures/" + kind, PROFILE, binary=candidate / "bin/codex")
+    assert not report["trace"] and "CM package" in report["stderr"]
+    failures.append({"case": kind, "result": report})
+    business("recoveries/package-" + kind, PROFILE, ())
+    return ({}, {}, {}, {"required_component_failures": failures}, {"failures": failures}, {})
+
+
+def case_callbacks(env, baseline, official_before, producer, data, retained, case):
+    failures = []
+    variant = case.removeprefix("callbacks-")
+    candidate = WORK / "callbacks" / variant
+    install(candidate, ("b",))
+    shutil.rmtree(candidate / "mods/b")
+    shutil.copytree(INPUTS / "mods/b" / variant, candidate / "mods/b")
+    failures.append({"case": variant, "result": business("callbacks/" + variant, candidate, ("b",), variant=variant)})
+    assert tree(INPUTS) == baseline and tree(data) == retained
+    business("recoveries/callback-" + variant, PROFILE, ())
+    return ({}, {}, {}, {}, {"failures": failures}, {})
+
+
+def case_limits(env, baseline, official_before, producer, data, retained):
+    known_success = tree(PROFILE / "mods")
+    selection = (PROFILE / "cm-runtime.toml").read_bytes()
     zero_cases = []
     for owner in ((), ("b",)):
         candidate = WORK / ("zero-" + str(len(owner)))
@@ -388,29 +428,26 @@ def matrix():
     # A known successful selection is still usable after every failed candidate.
     recovery = business("recovery", PROFILE, ())
     assert tree(PROFILE / "mods") == known_success and tree(data) == retained and tree(INPUTS) == baseline
-    reports = {
-        "frozen-host-independent-mods.json": {"authors": producer["authors"], "host_link_inputs_contain_mods": False,
-            "input_inventory_before": baseline, "input_inventory_after": tree(INPUTS), "selection_builds": 0},
-        "zero-build-runtime-environment.json": {"environment": env, "probes": read(EVIDENCE / "isolation-probes.json"),
-            "runtime_inputs": baseline, "build_modules_available": False, "cache_mode": "none"},
-        "plug-and-play-matrix.json": {"states": states, "zero_request_cases": zero_cases,
-            "equal_input_limit": equal_case, "multiple_limiters_minimum": minimum_case,
-            "absent_default_request": default_case, "data_retained": retained},
-        "runtime-package-integrity.json": {"absolute_cli": str(BINARY), "actual_elf_sha256": core.sha(BINARY),
-            "embedded": True, "sandbox": "workspace-write/never; actual nested packaged bwrap and rg",
-            "package_files": tree(INPUTS / "host"), "required_component_failures": [case for case in failures if "package" in case["case"] or "missing" in case["case"]]},
-        "zero-build-failure-matrix.json": {"failures": failures, "known_selection_unchanged": True,
-            "active_pointer": "absent in current runtime; candidates never overwrite known selection", "recovery": recovery},
-        "empty-host-independent-install.json": {"empty_states": [states[0], states[5]], "official_before": official_before,
-            "official_after": tree(INPUTS / "official"), "official_producer_manifest": producer["official"],
-            "official_profile_setup": producer["official_profile_setup"],
-            "maintained_source": producer["maintained_source"],
-            "cm_inputs_unchanged": baseline == tree(INPUTS)},
-    }
-    reports["frozen-host-independent-mods.json"]["read_only_input_digest_reuse"] = core.input_digest_stats()
-    for name, report in reports.items():
-        write(EVIDENCE / name, {"status": "behavior_pass", **report})
-    write(EVIDENCE / "suite.json", {"status": "pass", "reports": sorted(reports), "release_ready": False})
+    return ({}, {}, {"zero_request_cases": zero_cases, "equal_input_limit": equal_case,
+        "multiple_limiters_minimum": minimum_case, "absent_default_request": default_case}, {},
+        {"known_selection_unchanged": True,
+         "active_pointer": "absent in current runtime; candidates never overwrite known selection", "recovery": recovery}, {})
+
+
+def matrix(case=None):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ci/scripts"))
+    import runtime_cases
+    if case is None:
+        for selected in runtime_cases.GROUPS["p04"]:
+            matrix(selected)
+        runtime_cases.aggregate(Path("/evidence"), "p04", REPORTS)
+        return
+    runtime_cases.enter(globals(), "p04", case)
+    context = case_setup()
+    selected = globals()[runtime_cases.function(case)]
+    reports = selected(*context, case) if case.startswith(("startup-", "packages-", "callbacks-")) else selected(*context)
+    assert tree(INPUTS) == context[1] and tree(INPUTS / "official") == context[2]
+    runtime_cases.finish("p04", case, reports, REPORTS)
 
 
 def missing_library():
@@ -437,4 +474,4 @@ def recovery():
 
 
 if __name__ == "__main__":
-    {"probe": probe, "matrix": matrix, "missing-library": missing_library, "recovery": recovery}[sys.argv[1]]()
+    {"probe": probe, "matrix": lambda: matrix(sys.argv[2] if len(sys.argv) > 2 else None), "missing-library": missing_library, "recovery": recovery}[sys.argv[1]]()

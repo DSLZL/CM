@@ -530,9 +530,9 @@ def self_check():
     assert len(runtime_state.REPORTS) == 6
 
 
-def matrix():
+def case_setup():
     for directory in (WORK, PROFILE, EVIDENCE):
-        directory.mkdir(parents=True, mode=0o700)
+        directory.mkdir(parents=True, mode=0o700, exist_ok=True)
     m = managed_package.driver()
     m.WORK, m.PROFILE, m.EVIDENCE = WORK, PROFILE, EVIDENCE
     m.OFFICIAL_PROFILE = WORK / "official-profile"
@@ -543,13 +543,43 @@ def matrix():
     assert authored["status"] == "pass" and authored["host_executable_sha256"] == frozen
     official_before = m.protected_inventory(INPUTS / "official")
     writable_official_before = m.protected_inventory(m.OFFICIAL_PROFILE)
+    return m, sdk, frozen, authored, official_before, writable_official_before
+
+
+def case_query(m, sdk, frozen, authored):
     missing = PROFILE / "query-missing"
     m.cm(missing, "state", "path", OWNER, success=False)
     assert not missing.exists(), "Read-only state query created a managed home"
+    return ({}, {}, {}, {}, {}, {})
+
+
+def case_restart(m, sdk, frozen, authored):
     restarted = restart_matrix(m, sdk)
+    return ({"restart_behavior": restarted},
+        {"empty_selected_set": restarted["empty"], "empty_installed_set": restarted["empty_removed"],
+         "old_native_mappings_preserved_until_exit": True, "mod_callbacks_after_empty_restart": 0},
+        {"read_after_process_restart": restarted["read_in_new_process"], "default_disable_remove_preserves_data": True},
+        {}, {}, {})
+
+
+def case_rollback(m, sdk, frozen, authored):
     rolled = rollback_matrix(m, sdk)
+    return ({}, {}, {}, {"precompiled_rollback": rolled, "host_compiled_for_mod_changes": False}, {}, {})
+
+
+def case_interruption(m, sdk, frozen, authored):
     interrupted = public_failures(m, sdk)
+    return ({}, {}, {"cleanup_pending_retry": interrupted["cleanup_retry"]}, {},
+        {"public_cli_interruption": interrupted, "precise_internal_tests": authored,
+         "internal_fault_binary_is_published_host": False}, {})
+
+
+def case_stdio(m, sdk, frozen, authored):
     stdio = stdio_leases(m, sdk)
+    return ({"stdio_leases": stdio}, {}, {}, {}, {}, {})
+
+
+def case_terminal(m, sdk, frozen, authored):
     tui_home = PROFILE / "tui"
     setup(m, tui_home)
     business(m, sdk, "tui-initial-write", tui_home, operation="write", value="tui", expected="v1:tui")
@@ -562,24 +592,29 @@ def matrix():
 
     tui = business(m, sdk, "actual-tui", tui_home, expected="v1:tui", tui=True, mutate=tui_disable)
     m.cm(tui_home, "state", "checkpoint")
+    return ({"actual_tui": tui, "tui_busy": tui_busy}, {}, {}, {}, {}, {})
+
+
+def case_ownership(m, sdk, frozen, authored):
     owned = ownership(m, sdk)
+    return ({}, {}, {"explicit_cleanup": owned["removed_owner_cleanup"]}, {}, {},
+        {"ownership": owned, "official_and_unrelated_profiles_unchanged": True,
+         "unchanged_b_payload_sha256": m.sha(INPUTS / "mods/m04/audit/payload.so")})
+
+
+def matrix(case=None):
+    import runtime_cases
+    if case is None:
+        for selected in runtime_cases.GROUPS["m04"]:
+            matrix(selected)
+        runtime_cases.aggregate(Path("/evidence"), "m04", runtime_state.REPORTS)
+        return
+    runtime_cases.enter(globals(), "m04", case)
+    m, sdk, frozen, authored, official_before, writable_official_before = case_setup()
+    reports = globals()[runtime_cases.function(case)](m, sdk, frozen, authored)
     assert m.protected_inventory(INPUTS / "official") == official_before
     assert m.protected_inventory(m.OFFICIAL_PROFILE) == writable_official_before
     assert m.sha(BINARY) == frozen
-    b_payload = INPUTS / "mods/m04/audit/payload.so"
-    assert m.sha(b_payload) == m.sha(INPUTS / "mods/m02/lifecycle-audit/normal/payload.so")
-    reports = (
-        {"restart_behavior": restarted, "stdio_leases": stdio, "actual_tui": tui, "tui_busy": tui_busy},
-        {"empty_selected_set": restarted["empty"], "empty_installed_set": restarted["empty_removed"],
-         "old_native_mappings_preserved_until_exit": True, "mod_callbacks_after_empty_restart": 0},
-        {"read_after_process_restart": restarted["read_in_new_process"], "default_disable_remove_preserves_data": True,
-         "explicit_cleanup": owned["removed_owner_cleanup"], "cleanup_pending_retry": interrupted["cleanup_retry"]},
-        {"precompiled_rollback": rolled, "host_compiled_for_mod_changes": False},
-        {"public_cli_interruption": interrupted, "precise_internal_tests": authored,
-         "internal_fault_binary_is_published_host": False},
-        {"ownership": owned, "official_and_unrelated_profiles_unchanged": True,
-         "unchanged_b_payload_sha256": m.sha(b_payload)},
-    )
-    for name, report in zip(runtime_state.REPORTS, reports):
-        m.write(Path("/evidence") / name, {"status": "behavior_pass", "frozen_host_sha256": frozen, **report})
-    m.write(EVIDENCE / "suite.json", {"status": "pass", "reports": list(runtime_state.REPORTS), "frozen_host_sha256": frozen})
+    assert m.sha(INPUTS / "mods/m04/audit/payload.so") == m.sha(INPUTS / "mods/m02/lifecycle-audit/normal/payload.so")
+    reports = tuple({"frozen_host_sha256": frozen, **report} for report in reports)
+    runtime_cases.finish("m04", case, reports, runtime_state.REPORTS)

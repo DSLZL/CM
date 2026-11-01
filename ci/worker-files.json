@@ -24,6 +24,10 @@
       "destination": ".github/scripts/retry.py"
     },
     {
+      "source": "ci/scripts/runtime_cases.py",
+      "destination": ".github/scripts/runtime_cases.py"
+    },
+    {
       "source": "ci/worker/cache-authority/action.yml",
       "destination": ".github/actions/cache-authority/action.yml"
     },

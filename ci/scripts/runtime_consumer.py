@@ -383,7 +383,13 @@ def rootfs(inputs, root):
     if (inputs / "probes").exists():
         copy_runtime_tree(inputs / "probes", root / "inputs/probes")
     shutil.copytree(inputs / "fixture", root / "fixture")
-    shutil.copyfile(inputs / "producer.json", root / "inputs/producer.json")
+    import retry
+    effective = retry.effective_producer(inputs)
+    write(root / "inputs/producer.json", effective)
+    for key, name in (("g02a", "g02a-producer.json"), ("review", "review-producer.json"),
+                      ("concurrency", "concurrency-producer.json")):
+        if key in effective:
+            write(root / "fixture" / name, effective[key])
     for path in (root / "inputs").rglob("*"):
         if path.is_file():
             for dependency in elf_dependencies(path):
@@ -504,7 +510,7 @@ def self_check():
     observer_text = runtime_observer_source(composition)
     observer = types.ModuleType("observer")
     exec(observer_text, observer.__dict__)
-    unicode_host = "/work/m03/独立 Host/bin/codex"
+    unicode_host = "/work/m03/process/独立 Host/bin/codex"
     encoded = "".join("\\%03o" % byte if byte >= 128 else chr(byte) for byte in unicode_host.encode())
     sample = '1 execve("' + encoded + '", ["codex"], 0x1) = 0'
     assert trace_paths(sample) == '1 execve("' + unicode_host + '", ["codex"], 0x1) = 0'
@@ -536,9 +542,9 @@ def self_check():
             "executable_sha256": sha(primary), "host_identity": {"host_build_id": build_id}}})
         copies = {
             "/inputs/host/bin/codex": data,
-            "/work/m03/独立 Host/bin/codex": data,
-            "/work/m01/integrity/changed-host/codex": data + b"different executable identity",
-            "/work/m01/integrity/changed-host-build-id/codex": data.replace(build_id.encode(), b"sha256:" + b"0" * 64),
+            "/work/m03/process/独立 Host/bin/codex": data,
+            "/work/m01/lock/integrity/changed-host/codex": data + b"different executable identity",
+            "/work/m01/lock/integrity/changed-host-build-id/codex": data.replace(build_id.encode(), b"sha256:" + b"0" * 64),
         }
         for name, content in copies.items():
             actual = root / ("rootfs" + name if name.startswith("/inputs/") else name.lstrip("/"))
@@ -590,7 +596,7 @@ def self_check():
         assert (trusted / "syscalls.102").read_text() == ""
         assert report["bound_host_executables"] == bound and report["file_load_count"] == 2
         assert report["sandbox_aliases"] == [{"path": alias, "target": unicode_host}]
-        tui = {"command": ["/inputs/host/bin/codex", "cm", "--home", "/profile/m03/tui", "launch", "--"],
+        tui = {"command": ["/inputs/host/bin/codex", "cm", "--home", "/profile/m03/terminal/tui", "launch", "--"],
             "tui": True, "empty_launch_argv": True,
             "identity": {"proc_exe": "/inputs/host/bin/codex", "executable_sha256": bound["/inputs/host/bin/codex"]},
             "provider_requests": [{"tools": [{"name": "mcp__codex_worktrees"}]}],
@@ -600,7 +606,7 @@ def self_check():
             '3 getsockname(6<TCP:[81]>, {sa_family=AF_INET, sin_port=htons(8080), sin_addr=inet_addr("127.0.0.1")}, [128 => 16]) = 0']
         assert bind_tui_mcp_listener(tui, metadata, bound, observer) == {
             "port": "8080", "listener_inode": "81", "accepted_socket_inodes": ["71"]}
-        m04_tui = tui | {"command": [*tui["command"][:3], "/profile/m04/tui", "launch", "--"]}
+        m04_tui = tui | {"command": [*tui["command"][:3], "/profile/m04/terminal/tui", "launch", "--"]}
         assert bind_tui_mcp_listener(m04_tui, metadata, bound, observer) == bind_tui_mcp_listener(tui, metadata, bound, observer)
         image_tui = tui | {"command": [*tui["command"][:3], "/profile/review/entry-coverage/cli-image", "launch", "--",
             "--image", "/profile/review/entry-coverage/probe-0/review.png", "--", "CM_M02_cli-image"], "empty_launch_argv": False}
@@ -630,8 +636,8 @@ def self_check():
             except AssertionError:
                 continue
             raise AssertionError("Unobserved TUI MCP listener accepted: " + repr(invalid))
-        for name in ("/work/m03/独立 Host/bin/codex", "/work/m01/integrity/changed-host/codex",
-                     "/work/m01/integrity/changed-host-build-id/codex", "/work/m01/integrity/changed-host-extra/codex"):
+        for name in ("/work/m03/process/独立 Host/bin/codex", "/work/m01/lock/integrity/changed-host/codex",
+                     "/work/m01/lock/integrity/changed-host-build-id/codex", "/work/m01/lock/integrity/changed-host-extra/codex"):
             actual = root / name.lstrip("/")
             actual.parent.mkdir(parents=True, exist_ok=True)
             actual.write_bytes(b"unexpected executable")
@@ -930,8 +936,8 @@ def bind_host_executables(executions, root):
     after = b"sha256:" + (b"0" if before != b"sha256:" + b"0" * 64 else b"1") * 64
     # The M01 rejection matrix executes exactly these two deterministic mutations.
     rejected = {
-        "/work/m01/integrity/changed-host/codex": hashlib.sha256(data + b"different executable identity").hexdigest(),
-        "/work/m01/integrity/changed-host-build-id/codex": hashlib.sha256(data.replace(before, after)).hexdigest(),
+        "/work/m01/lock/integrity/changed-host/codex": hashlib.sha256(data + b"different executable identity").hexdigest(),
+        "/work/m01/lock/integrity/changed-host-build-id/codex": hashlib.sha256(data.replace(before, after)).hexdigest(),
     }
     if producer.get("g02a"):
         legacy = producer["g02a"]["legacy_host"]
@@ -971,7 +977,7 @@ def bind_tui_mcp_listener(record, metadata, bound_hosts, observer):
         ["launch", "--", "--image", "/profile/review/entry-coverage/probe-0/review.png", "--", "CM_M02_cli-image"]
         if initial_image else ["launch", "--"])
     assert command[4:] == expected
-    assert concurrency or command[3] in ("/profile/m03/tui", "/profile/m04/tui") or re.fullmatch(
+    assert concurrency or command[3] in ("/profile/m03/terminal/tui", "/profile/m04/terminal/tui") or re.fullmatch(
         r"/profile/review/(?:nondestructive|invalidation|key-events|entry-coverage|queue-lifecycle|plug-and-play)/[a-z0-9-]+", command[3])
     assert record["tui"] and record["empty_launch_argv"] is (not (initial_image or concurrency))
     assert record["identity"]["proc_exe"] == command[0]
@@ -1018,7 +1024,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
         calls = observer.complete_syscalls(text.splitlines())
         process_calls.extend(line for line in calls if re.match(r'\d+\s+(?:execve|clone|clone3|fork|vfork|getpid|gettid)\(', line))
         bwrap_executions.update(observer.bound_bwrap_executions(calls,
-            ("/inputs/host/codex-resources/bwrap", "/work/m03/独立 Host/codex-resources/bwrap")))
+            ("/inputs/host/codex-resources/bwrap", "/work/m03/process/独立 Host/codex-resources/bwrap")))
         sockets.extend(line for line in calls if re.match(r'\d+\s+socket\(', line))
         tcp_metadata.extend(line for line in calls if re.match(r'\d+\s+(?:getsockname|accept|accept4)\(', line))
         symlinks.extend(line for line in calls if re.match(r'\d+\s+symlink(?:at)?\(', line))
@@ -1030,7 +1036,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
             ("MAP_ANONYMOUS" in line or re.match(r'\d+\s+mprotect\(', line)))
         if index % 500 == 0 or index == len(trace_files):
             ci_progress.emit("outer-audit/traces-" + str(index) + "-of-" + str(len(trace_files)), "running", started)
-    hosts = ("/inputs/host/bin/codex", "/work/m03/独立 Host/bin/codex")
+    hosts = ("/inputs/host/bin/codex", "/work/m03/process/独立 Host/bin/codex")
     aliases = observer.bound_sandbox_aliases(symlinks, hosts)
     alias_targets = {}
     for line in symlinks:
@@ -1077,7 +1083,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
         "native_concurrency_probes": concurrency_probes,
         "normal_business_interpreter": code_mode,
         "provider_tcp_connections": sorted(tcp_connections), "provider_tcp_metadata": tcp_metadata,
-        "tui_mcp_listener": next((row for row in tui_listeners if row["evidence"] == "m03/actual-tui/result.json"), None),
+        "tui_mcp_listener": next((row for row in tui_listeners if row["evidence"] == "m03/terminal/actual-tui/result.json"), None),
         "tui_mcp_listeners": tui_listeners,
         "sandbox_aliases": [{"path": path, "target": alias_targets[path]} for path in sorted(aliases)],
         "packaged_bwrap_fd_executions": sorted(bwrap_executions),
@@ -1286,6 +1292,7 @@ def review_cases(producer):
 
 def consume():
     import retry
+    import runtime_cases
     hosted()
     assert os.environ["CM_CACHE_MODE"] == "none" and os.environ["ACTIONS_CACHE_MODE"] == "none"
     inputs = Path(os.environ["CM_CONSUMER_INPUT_DIR"]).resolve()
@@ -1432,6 +1439,14 @@ def consume():
                 report_names.update({row["phase"]: [Path(row["evidence"][0]).name] for row in review_acceptance["checks"]})
             if concurrency_acceptance is not None:
                 report_names.update({row["phase"]: [Path(row["evidence"][0]).name] for row in concurrency_acceptance["checks"]})
+            phase_reports = {"p04": report_names.pop("consumer-matrix")}
+            for phase in ("m01", "m02", "m03", "m04", "m05"):
+                coarse = phase + "-consumer-matrix"
+                if coarse in report_names:
+                    phase_reports[phase] = report_names.pop(coarse)
+            for phase in phase_reports:
+                for case in runtime_cases.GROUPS[phase]:
+                    report_names[phase + "-" + case] = [phase + "/" + case + "/reports.json"]
             checkpoints = retry.Checkpoints(sys.modules[__name__], validation, closure, temp, evidence, logs, report_names, canary_hits)
             stage = "independent isolated matrices"
             trace = ["strace", "-ff", "-qq", "-yy", "--pidns-translation", "-s", "1024", "-e",
@@ -1445,16 +1460,16 @@ def consume():
 
             write(logs / "consumer-command.json", {"command": command("consumer-matrix", [*driver, "matrix"]),
                 "cache_mode": "none", "producer_input_manifest_sha256": manifest["sha256"], "provenance": provenance()})
-            commands = [] if m05_only else [("consumer-matrix", command("consumer-matrix", [*driver, "matrix"]), 1800)]
-            if m05_acceptance is not None:
-                commands.append(("m05-consumer-matrix", command("m05-consumer-matrix", [*CONSUMER_ENV_PREFIX,
-                    "/usr/bin/python3", "-B", "/fixture/ci/scripts/mod_author.py", "matrix"]), 1200))
-            if m01_acceptance is not None:
-                commands.append(("m01-consumer-matrix", command("m01-consumer-matrix", [*CONSUMER_ENV_PREFIX,
-                    "/usr/bin/python3", "-B", "/fixture/ci/scripts/mod_manifest.py", "matrix"]), 1200))
-            if m02_acceptance is not None:
-                commands.append(("m02-consumer-matrix", command("m02-consumer-matrix", [*CONSUMER_ENV_PREFIX,
-                    "/usr/bin/python3", "-B", "/fixture/ci/scripts/runtime_sdk.py", "matrix"]), 1200))
+            commands = []
+            for phase in ("p04", "m01", "m02", "m05"):
+                if phase not in phase_reports or m05_only and phase == "p04":
+                    continue
+                wrapper = {"p04": "fixtures/runtime-consumer/driver.py", "m01": "ci/scripts/mod_manifest.py",
+                    "m02": "ci/scripts/runtime_sdk.py", "m05": "ci/scripts/mod_author.py"}[phase]
+                for case in runtime_cases.GROUPS[phase]:
+                    label = phase + "-" + case
+                    commands.append((label, command(label, [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B",
+                        "/fixture/" + wrapper, "matrix", case]), 1200))
             if g02a_acceptance is not None:
                 for case in cases:
                     label = "g02a-" + case
@@ -1471,12 +1486,7 @@ def consume():
                     commands.append((label, command(label, [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B",
                         "/fixture/fixtures/tool-concurrency/driver.py", case]), 900))
             results = parallel_matrices(logs, commands, checkpoints.run)
-            result = results["m05-consumer-matrix" if m05_only else "consumer-matrix"]
-            write(logs / "consumer-return.json", {"return_code": result.returncode, "stage": stage})
-            for label in ("m01", "m02"):
-                if label + "-consumer-matrix" in results:
-                    write(logs / (label + "-consumer-return.json"), {
-                        "return_code": results[label + "-consumer-matrix"].returncode, "stage": stage})
+            write(logs / "consumer-return.json", {"return_code": int(any(row.returncode for row in results.values())), "stage": stage})
             stage = "actual removed runtime library"
             missing_root = temp / "missing-library-root"
             copy_runtime_tree(root, missing_root)
@@ -1489,6 +1499,7 @@ def consume():
             (missing_root / removed.lstrip("/")).unlink()
             write(missing_root / "fixture/missing-library.json", mutation)
             missing_base = [str(missing_root) if argument == str(root) else argument for argument in base]
+            checkpoints.constraints["consumer-missing-library"] = {key: mutation[key] for key in ("removed_library", "sha256")}
             library_result = checkpoints.run(logs, "consumer-missing-library",
                 command("consumer-missing-library", [*driver, "missing-library"], missing_base), 90)
             results["consumer-missing-library"] = library_result
@@ -1497,18 +1508,16 @@ def consume():
                 command("consumer-library-recovery", [*driver, "recovery"]), 120)
             results["consumer-library-recovery"] = recovery_result
             write(logs / "consumer-library-recovery.json", {"return_code": recovery_result.returncode})
-            if m03_acceptance is not None:
-                stage = "M03 managed install and actual PTY TUI"
-                m03_driver = [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "/fixture/ci/scripts/managed_package.py", "matrix"]
-                result = checkpoints.run(logs, "m03-consumer-matrix", command("m03-consumer-matrix", m03_driver), 1200)
-                results["m03-consumer-matrix"] = result
-                write(logs / "m03-consumer-return.json", {"return_code": result.returncode, "stage": stage})
-            if m04_acceptance is not None:
-                stage = "M04 owned file state and restart rollback"
-                m04_driver = [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "/fixture/ci/scripts/runtime_state.py", "matrix"]
-                result = checkpoints.run(logs, "m04-consumer-matrix", command("m04-consumer-matrix", m04_driver), 1800)
-                results["m04-consumer-matrix"] = result
-                write(logs / "m04-consumer-return.json", {"return_code": result.returncode, "stage": stage})
+            remaining = []
+            for phase in ("m03", "m04"):
+                if phase not in phase_reports:
+                    continue
+                wrapper = {"m03": "managed_package", "m04": "runtime_state"}[phase]
+                for case in runtime_cases.GROUPS[phase]:
+                    label = phase + "-" + case
+                    remaining.append((label, command(label, [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B",
+                        "/fixture/ci/scripts/" + wrapper + ".py", "matrix", case]), 1800))
+            results.update(parallel_matrices(logs, remaining, checkpoints.run))
             # Audit and sanitize even on a failed matrix, before exporting any trace.
             stage = "outer runtime audit"
             audits = {label: row["audit"] for label, row in checkpoints.results.items() if row["status"] == "pass"}
@@ -1527,7 +1536,9 @@ def consume():
             write(evidence / "outer-runtime-audit.json", audit)
             stage = "isolated matrix results"
             assert all(item.returncode == 0 for item in results.values()), "Independent isolated matrix failed"
-            assert result.returncode == 0, "Isolated product matrix failed"
+            for phase, names in phase_reports.items():
+                if not m05_only or phase != "p04":
+                    runtime_cases.aggregate(evidence, phase, names)
             assert audit["packaged_bwrap_fd_executions"], "No actual nested packaged sandbox helper"
             assert any('execve("/inputs/host/codex-path/rg"' in line for line in audit["executions"]), "No actual packaged rg execution"
             assert not canary_hits
@@ -1547,6 +1558,7 @@ def consume():
                 "host": producer["host"], "input_manifest_sha256": manifest["sha256"], "rootfs_sha256": closure["sha256"],
                 "outer_audit": audit, "release_ready": False}
             common["production_origin"] = origin
+            common["test_build_origins"] = validation.get("test_builds", {})
             common["runtime_steps"] = {label: {k: v for k, v in row.items() if k != "audit"} for label, row in checkpoints.results.items()}
             if m05_acceptance is not None:
                 common["host_origin"] = producer.get("host_origin")
@@ -1599,10 +1611,14 @@ def consume():
                     report = read(path)
                     assert report["status"] == "behavior_pass" and common.keys().isdisjoint(report)
                     write(path, {**report, **common, "status": "pass"})
-                    label = check.get("phase") or ("consumer-matrix" if report_set["task_id"] == "CM-P04" else report_set["task_id"][3:].lower() + "-consumer-matrix")
-                    execution = checkpoints.results[label]
-                    check.update(status="pass", command="isolated compiler-free consumer: " + label,
-                                 execution_kind=execution["kind"], execution_origin=execution["origin"])
+                    label = check.get("phase")
+                    phase = report_set["task_id"][3:].lower()
+                    executions = {label: checkpoints.results[label]} if label else {
+                        phase + "-" + case: checkpoints.results[phase + "-" + case] for case in runtime_cases.GROUPS[phase]}
+                    kinds = {row["kind"] for row in executions.values()}
+                    check.update(status="pass", command="isolated compiler-free consumer: " + (label or phase),
+                        execution_kind=next(iter(kinds)) if len(kinds) == 1 else "mixed",
+                        execution_origin={name: row["origin"] for name, row in executions.items()})
                 report_set["status"] = "pass"
             if m01_acceptance is not None:
                 write(artifact / "p04-baseline-acceptance.json", p04_acceptance)

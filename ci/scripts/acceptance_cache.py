@@ -10,6 +10,9 @@ import time
 import host
 from linux_ci import TARGET, cargo_args, execute, load_config
 
+PROTOCOL = 2
+LEGACY_PROTOCOL_SHA256 = "4940eeb1711c2de08990dd7e3f2a8b96a350194780f1a9c2c07d3dfe6dd83361"
+
 
 def recipes(root):
     cfg = load_config(root)
@@ -50,19 +53,46 @@ def recipes(root):
 
 def identify(root, logs):
     specs = recipes(root)
-    inputs = {"schema_version": 1, "host": host.read(logs / "host-identity.json"),
-              "recipes": specs, "cache_protocol_sha256": host.sha(Path(__file__))}
+    selected = json.loads(os.environ.get("CM_PROBE_BUILD_TARGETS", "[]"))
+    if selected:
+        specs = {label: specs[label] for label in selected}
+    legacy = {"schema_version": 1, "host": host.read(logs / "host-identity.json"),
+              "recipes": specs, "cache_protocol_sha256": LEGACY_PROTOCOL_SHA256}
     if "m02-native-probe-build" in specs:
         from runtime_sdk import native_probe_source
         probe = native_probe_source(root)
-        inputs["instrumented_source_sha256"] = host.manifest_digest(host.manifest(probe))
+        legacy["instrumented_source_sha256"] = host.manifest_digest(host.manifest(probe))
     if "review-tui-probe-build" in specs:
         from review_before_send import native_probe_source
-        inputs["review_instrumented_source_sha256"] = host.manifest_digest(host.manifest(native_probe_source(root)))
+        legacy["review_instrumented_source_sha256"] = host.manifest_digest(host.manifest(native_probe_source(root)))
+    compatibility = host.read(logs / "build-identity.json")["compatibility"]
+    compiler = {"target": compatibility["target"],
+        "toolchain": {"declared": load_config(root)["rust_toolchain"],
+                      "rustc": compatibility["rustc"], "cargo": compatibility["cargo"]},
+        "profiles": compatibility["requested_profiles"],
+        "flags": {**compatibility["flags"], **{key: os.environ.get(key) for key in ("CARGO_INCREMENTAL", "RUSTC_WRAPPER")}},
+        "cargo_configuration": compatibility["identity_files"],
+        "native_tools": {name: {key: value for key, value in tool.items() if key != "path"}
+                         for name, tool in compatibility["native"].items()},
+        "native": host.read(root / host.ADAPTER / "inputs/native.json")}
+    inputs = {"schema_version": PROTOCOL, "recipes": specs, "legacy": legacy,
+              "targets": target_inputs(legacy, compiler)}
     host.write(logs / "acceptance-build-inputs.json", inputs)
-    key = "cm-acceptance-build-v1-" + TARGET + "-" + host.digest(inputs)
     with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
-        stream.write("acceptance_key=" + key + "\n")
+        stream.write("legacy_acceptance_key=cm-acceptance-build-v1-" + TARGET + "-" + host.digest(legacy) + "\n")
+        for label, value in inputs["targets"].items():
+            stream.write(label.replace("-", "_") + "=cm-acceptance-build-v2-" + TARGET + "-" + label + "-" + host.digest(value) + "\n")
+
+
+def target_inputs(legacy, compiler=None):
+    private_sources = {"m02-native-probe-build": "instrumented_source_sha256",
+                       "review-tui-probe-build": "review_instrumented_source_sha256"}
+    changed_compiler = compiler is not None and compiler != {
+        key: legacy["host"]["inputs"][key] for key in compiler}
+    return {label: {"schema_version": PROTOCOL, "host": legacy["host"], "recipes": {label: recipe},
+                   **({"instrumented_source_sha256": legacy[private_sources[label]],
+                       **({"compiler": compiler} if changed_compiler else {})} if label in private_sources else {})}
+            for label, recipe in legacy["recipes"].items()}
 
 
 def origin():
@@ -93,33 +123,51 @@ def restore(root, logs):
     cache = Path(os.environ["CM_ACCEPTANCE_BUILD_CACHE_DIR"])
     assert not cache.is_symlink()
     inputs = host.read(logs / "acceptance-build-inputs.json")
-    receipt = verify(cache, inputs) if cache.exists() else None
-    host.write(logs / "acceptance-build-cache.json", {"status": "hit" if receipt else "miss",
-        "origin": receipt["origin"] if receipt else None, "checks": receipt["checks"] if receipt else {},
-        "note": "Only compilation/checks reused; every current-source runtime test runs again"})
-    if receipt:
-        shutil.copytree(cache, logs / "reused-acceptance-build", ignore=shutil.ignore_patterns("*.bin"))
-    print("CM acceptance build cache:", "hit" if receipt else "miss", flush=True)
+    legacy = verify(cache / "legacy", inputs["legacy"]) if (cache / "legacy/build.json").is_file() else None
+    state = {"schema_version": PROTOCOL, "targets": {}, "checks": {},
+             "note": "Compilation and checks have independent receipts; runtime checkpoints are separate"}
+    reused = logs / "reused-acceptance-build"
+    reused.mkdir(exist_ok=True)
+    for label, value in inputs["targets"].items():
+        directory = cache / label
+        migrated = False
+        if not directory.exists() and legacy and value == target_inputs(inputs["legacy"])[label]:
+            directory.mkdir(parents=True)
+            for suffix in (".log", *((".bin",) if value["recipes"][label]["binary"] else ())):
+                shutil.copy2(cache / "legacy" / (label + suffix), directory / (label + suffix))
+            host.write(directory / "build.json", {"inputs": value, "origin": legacy["origin"],
+                "checks": {label: legacy["checks"][label]}, "files": host.manifest(directory)})
+            migrated = True
+        receipt = verify(directory, value) if directory.exists() else None
+        state["targets"][label] = {"status": "hit" if receipt else "miss", "migrated": migrated,
+            "origin": receipt["origin"] if receipt else None, "reason": "verified_target" if receipt else "no_target_cache"}
+        if receipt:
+            state["checks"].update(receipt["checks"])
+            shutil.copyfile(directory / (label + ".log"), reused / (label + ".log"))
+            host.write(reused / (label + ".json"), receipt)
+        print("CM acceptance build cache:", label, state["targets"][label]["status"], flush=True)
+    hits = sum(item["status"] == "hit" for item in state["targets"].values())
+    state["status"] = "hit" if hits == len(inputs["targets"]) else "partial" if hits else "miss"
+    host.write(logs / "acceptance-build-cache.json", state)
 
 
 def run(root, logs, label, destination=None):
     inputs = host.read(logs / "acceptance-build-inputs.json")
     recipe = recipes(root)[label]
     assert recipe == inputs["recipes"][label], "Acceptance build command changed after sealing"
-    if label == "m02-native-probe-build":
-        assert host.manifest_digest(host.manifest(Path(recipe["cwd"]))) == inputs["instrumented_source_sha256"]
-    if label == "review-tui-probe-build":
-        assert host.manifest_digest(host.manifest(Path(recipe["cwd"]))) == inputs["review_instrumented_source_sha256"]
+    value = inputs["targets"][label]
+    if "instrumented_source_sha256" in value:
+        assert host.manifest_digest(host.manifest(Path(recipe["cwd"]))) == value["instrumented_source_sha256"]
     state = host.read(logs / "acceptance-build-cache.json")
-    cache = Path(os.environ["CM_ACCEPTANCE_BUILD_CACHE_DIR"])
+    cache = Path(os.environ["CM_ACCEPTANCE_BUILD_CACHE_DIR"]) / label
     binary = cache / (label + ".bin")
-    if state["status"] == "hit":
+    if (cache / "build.json").is_file():
         started = time.monotonic()
-        original = host.read(cache / "build.json")
-        assert original["inputs"] == inputs and original["checks"][label]["recipe"] == recipe
-        for name in (label + ".log", *([binary.name] if recipe["binary"] else [])):
-            entry = next(entry for entry in original["files"] if entry["path"] == name)
-            assert host.sha(cache / name) == entry["sha256"]
+        original = verify(cache, value)
+        reused = logs / "reused-acceptance-build"
+        reused.mkdir(exist_ok=True)
+        shutil.copyfile(cache / (label + ".log"), reused / (label + ".log"))
+        host.write(reused / (label + ".json"), original)
         print("CM CI: reuse", label, "from run", original["origin"]["GITHUB_RUN_ID"], flush=True)
         event = {"phase": label, "command": recipe["command"], "cwd": recipe["cwd"], "return_code": 0,
             "elapsed_seconds": round(time.monotonic() - started, 3),
@@ -127,7 +175,7 @@ def run(root, logs, label, destination=None):
         with (logs / "phase-results.jsonl").open("a") as stream:
             stream.write(json.dumps(event) + "\n")
     else:
-        cache.mkdir(exist_ok=True)
+        cache.mkdir(parents=True, exist_ok=True)
         execute(Path(recipe["cwd"]), logs, label, recipe["command"],
                 {**os.environ, "CARGO_TARGET_DIR": recipe["target_directory"]})
         shutil.copyfile(logs / (label + ".log"), cache / (label + ".log"))
@@ -138,6 +186,10 @@ def run(root, logs, label, destination=None):
             assert len(set(artifacts)) == 1, artifacts
             shutil.copy2(artifacts[0], binary)
         state["checks"][label] = {"recipe": recipe, "return_code": 0}
+        host.write(cache / "build.json", {"inputs": value, "origin": origin(),
+            "checks": {label: state["checks"][label]},
+            "files": [entry for entry in host.manifest(cache) if entry["path"] != "build.json"]})
+        verify(cache, value)
         host.write(logs / "acceptance-build-cache.json", state)
     if destination is not None:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -149,13 +201,15 @@ def run(root, logs, label, destination=None):
 def save(root, logs):
     cache = Path(os.environ["CM_ACCEPTANCE_BUILD_CACHE_DIR"])
     inputs = host.read(logs / "acceptance-build-inputs.json")
-    state = host.read(logs / "acceptance-build-cache.json")
-    if state["status"] == "miss":
-        assert set(state["checks"]) == set(inputs["recipes"]), "Incomplete acceptance compilation"
-        host.write(cache / "build.json", {"inputs": inputs, "origin": origin(),
-            "checks": state["checks"], "files": host.manifest(cache)})
-    verify(cache, inputs)
-    shutil.copyfile(cache / "build.json", logs / "acceptance-build-receipt.json")
+    receipts = {}
+    with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+        for label, value in inputs["targets"].items():
+            complete = (cache / label / "build.json").is_file()
+            if complete:
+                receipts[label] = verify(cache / label, value)
+            output.write("save_" + label.replace("-", "_") + "=" + str(complete).lower() + "\n")
+    host.write(logs / "acceptance-build-receipt.json", {"schema_version": PROTOCOL, "targets": receipts,
+        "incomplete": sorted(set(inputs["targets"]) - receipts.keys())})
 
 
 def self_check():
@@ -163,40 +217,98 @@ def self_check():
     from unittest.mock import patch
     with tempfile.TemporaryDirectory() as directory:
         cache = Path(directory) / "cache"
-        cache.mkdir()
+        legacy_cache = cache / "legacy"
+        legacy_cache.mkdir(parents=True)
         logs = Path(directory) / "logs"
         logs.mkdir()
-        inputs = {"recipes": {"check": {"binary": None, "command": ["cargo", "clippy"],
-            "cwd": str(cache), "target_directory": str(cache / "target")}}}
-        (cache / "check.log").write_text("passed\n")
+        recipe = {"binary": None, "command": ["cargo", "clippy"],
+                  "cwd": str(cache), "target_directory": str(cache / "target")}
+        legacy = {"host": {"host_build_id": "frozen"},
+                  "recipes": {"check": recipe, "other": recipe}}
+        inputs = {"recipes": legacy["recipes"], "legacy": legacy, "targets": target_inputs(legacy)}
+        for label in legacy["recipes"]:
+            (legacy_cache / (label + ".log")).write_text("passed\n")
         env = {"CM_SOURCE_REPOSITORY": "DSLZL/CM", "CM_SOURCE_SHA": "a" * 40,
             "GITHUB_REPOSITORY": "DSLZL/CM-build-linux-x64", "GITHUB_WORKFLOW_SHA": "b" * 40,
-            "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_JOB": "build"}
+            "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_JOB": "build",
+            "GITHUB_OUTPUT": str(Path(directory) / "outputs")}
         with patch.dict(os.environ, {**env, "CM_ACCEPTANCE_BUILD_CACHE_DIR": str(cache)}):
-            receipt = {"inputs": json.loads(json.dumps(inputs)), "origin": origin(), "checks": {
-                "check": {"recipe": inputs["recipes"]["check"], "return_code": 0}}, "files": host.manifest(cache)}
-            host.write(cache / "build.json", receipt)
-            verify(cache, inputs)
+            receipt = {"inputs": legacy, "origin": origin(), "checks": {
+                label: {"recipe": value, "return_code": 0} for label, value in legacy["recipes"].items()},
+                "files": host.manifest(legacy_cache)}
+            host.write(legacy_cache / "build.json", receipt)
             host.write(logs / "acceptance-build-inputs.json", inputs)
             restore(cache, logs)
+            assert all(item["migrated"] for item in host.read(logs / "acceptance-build-cache.json")["targets"].values())
+            shutil.rmtree(legacy_cache)
+            shutil.rmtree(cache / "other")
+            restore(cache, logs)
+            state = host.read(logs / "acceptance-build-cache.json")
+            assert state["status"] == "partial" and state["targets"]["check"]["status"] == "hit"
             with patch.object(sys.modules[__name__], "recipes", return_value=inputs["recipes"]), \
                     patch.object(sys.modules[__name__], "execute", side_effect=AssertionError("Cache hit rebuilt")):
                 assert run(cache, logs, "check") is None
-            for change in (lambda: (cache / "check.log").write_text("tampered"),
+            save(cache, logs)
+            assert host.read(logs / "acceptance-build-receipt.json")["incomplete"] == ["other"]
+            assert "save_check=true" in Path(env["GITHUB_OUTPUT"]).read_text()
+            assert "save_other=false" in Path(env["GITHUB_OUTPUT"]).read_text()
+            # A missing target executes independently; completed siblings remain reusable.
+            def compile_check(_root, destination, label, _command, _env):
+                (destination / (label + ".log")).write_text("current check passed\n")
+            with patch.object(sys.modules[__name__], "recipes", return_value=inputs["recipes"]), \
+                    patch.object(sys.modules[__name__], "execute", side_effect=compile_check) as compiler:
+                run(cache, logs, "other")
+                run(cache, logs, "other")
+                assert compiler.call_count == 1
+            save(cache, logs)
+            assert not host.read(logs / "acceptance-build-receipt.json")["incomplete"]
+            target = cache / "check"
+            receipt = host.read(target / "build.json")
+            for change in (lambda: (target / "check.log").write_text("tampered"),
                            lambda: receipt["origin"].update(GITHUB_RUN_ID="invalid"),
                            lambda: receipt["checks"]["check"].update(return_code=1),
                            lambda: receipt["inputs"].update(changed=True)):
-                (cache / "check.log").write_text("passed\n")
+                (target / "check.log").write_text("passed\n")
                 candidate = json.loads(json.dumps(receipt))
                 change()
-                host.write(cache / "build.json", receipt)
+                host.write(target / "build.json", receipt)
                 try:
-                    verify(cache, inputs)
+                    verify(target, inputs["targets"]["check"])
                 except (AssertionError, KeyError):
                     pass
                 else:
                     raise AssertionError("Invalid acceptance cache accepted")
                 receipt = candidate
+            private = {**legacy, "recipes": {**legacy["recipes"], "m02-native-probe-build": recipe,
+                       "review-tui-probe-build": recipe}, "instrumented_source_sha256": "core-v1",
+                       "review_instrumented_source_sha256": "tui-v1"}
+            before = target_inputs(private)
+            for field, label in (("instrumented_source_sha256", "m02-native-probe-build"),
+                                 ("review_instrumented_source_sha256", "review-tui-probe-build")):
+                after = target_inputs({**private, field: "changed"})
+                assert {name for name in before if before[name] != after[name]} == {label}
+            compiler = {"toolchain": {"rustc": "current"}, "flags": {"CFLAGS": "current"}, "native": {"libc": "current"}}
+            private["host"] = {**private["host"], "inputs": compiler}
+            before = target_inputs(private)
+            assert target_inputs(private, compiler) == before
+            for field in compiler:
+                after = target_inputs(private, {**compiler, field: "changed"})
+                assert {name for name in before if before[name] != after[name]} == {
+                    "m02-native-probe-build", "review-tui-probe-build"}
+            drift_cache = Path(directory) / "drift-cache"
+            (drift_cache / "legacy").mkdir(parents=True)
+            for label in private["recipes"]:
+                (drift_cache / "legacy" / (label + ".log")).write_text("passed\n")
+            host.write(drift_cache / "legacy/build.json", {"inputs": private, "origin": origin(),
+                "checks": {label: {"recipe": value, "return_code": 0} for label, value in private["recipes"].items()},
+                "files": host.manifest(drift_cache / "legacy")})
+            host.write(logs / "acceptance-build-inputs.json", {"legacy": private,
+                "targets": target_inputs(private, {**compiler, "native": "changed"})})
+            with patch.dict(os.environ, {"CM_ACCEPTANCE_BUILD_CACHE_DIR": str(drift_cache)}):
+                restore(cache, logs)
+            state = host.read(logs / "acceptance-build-cache.json")["targets"]
+            assert {label for label, value in state.items() if value["migrated"]} == {"check", "other"}
+            assert state["m02-native-probe-build"]["status"] == state["review-tui-probe-build"]["status"] == "miss"
 
 
 if __name__ == "__main__":
