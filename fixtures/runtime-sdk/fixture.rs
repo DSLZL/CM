@@ -661,3 +661,205 @@ impl Drop for Fixture {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cm_sdk::abi::{self, Bytes, ErrorBuffer};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::atomic::AtomicUsize;
+
+    static CANCELLED: AtomicBool = AtomicBool::new(false);
+    static FOREIGN_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static COMPLETIONS: AtomicUsize = AtomicUsize::new(0);
+    static QUIET: AtomicBool = AtomicBool::new(false);
+
+    fn test_handle(slot: u32) -> Handle {
+        Handle {
+            epoch: 1,
+            slot,
+            generation: 1,
+        }
+    }
+
+    unsafe extern "C" fn complete(
+        _: Handle,
+        completion: *const v22::Completion,
+        _: *mut ErrorBuffer,
+    ) -> u32 {
+        let completion = unsafe { &*completion };
+        if completion.request != test_handle(1) {
+            return v22::INVALID;
+        }
+        if CANCELLED.load(Ordering::Acquire) {
+            if completion.status == v22::CANCELLED && completion.flags == v22::QUIESCENT {
+                QUIET.store(true, Ordering::Release);
+            }
+            return v22::REQUEST_CANCELLED;
+        }
+        if COMPLETIONS.fetch_add(1, Ordering::AcqRel) == 0 {
+            abi::OK
+        } else {
+            v22::ALREADY_COMPLETED
+        }
+    }
+
+    unsafe extern "C" fn state_get(
+        _: Handle,
+        _: Handle,
+        _: Handle,
+        _: Bytes,
+        _: *mut v22::Buffer,
+        _: *mut ErrorBuffer,
+    ) -> u32 {
+        if CANCELLED.load(Ordering::Acquire) {
+            v22::REQUEST_CANCELLED
+        } else {
+            v22::NOT_FOUND
+        }
+    }
+
+    unsafe extern "C" fn state_set(
+        instance: Handle,
+        _: Handle,
+        scope: Handle,
+        _: Bytes,
+        value: Bytes,
+        _: *mut ErrorBuffer,
+    ) -> u32 {
+        if value.len > v22::MAX_INPUT as u64 || scope == test_handle(1) {
+            return v22::INVALID;
+        }
+        if scope == test_handle(4) {
+            FOREIGN_CALLS.fetch_add(1, Ordering::AcqRel);
+            CANCELLED.store(instance.generation == 1, Ordering::Release);
+            return instance.slot;
+        }
+        abi::OK
+    }
+
+    #[test]
+    fn cross_owner_probe_cancellation() {
+        let path = std::env::temp_dir().join(format!(
+            "cm-shutdown-probe-{}-{}.jsonl",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        writeln!(
+            file,
+            "{{\"owner\":\"other-fixture\",\"thread_scope\":{:?}}}",
+            handle(test_handle(4))
+        )
+        .unwrap();
+        drop(file);
+        // A child owns the event-log environment without mutating the test runner's.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "shutdown_probe_cases",
+                "--ignored",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env("CM_RUNTIME_EVENTS", &path)
+            .env_remove("CM_RUNTIME_OLD_HANDLE")
+            .output();
+        std::fs::remove_file(&path).unwrap();
+        let output = output.unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed;"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "invoked with a private event log by cross_owner_probe_cancellation"]
+    fn shutdown_probe_cases() {
+        for (probe_code, cancelled, expected) in [
+            (v22::WRONG_OWNER, false, Some(true)),
+            (v22::REQUEST_CANCELLED, true, Some(true)),
+            (v22::REQUEST_CANCELLED, false, Some(false)),
+            (abi::OK, false, None),
+            (v22::STALE, false, None),
+            (v22::INVALID, true, None),
+        ] {
+            CANCELLED.store(false, Ordering::Release);
+            FOREIGN_CALLS.store(0, Ordering::Release);
+            COMPLETIONS.store(0, Ordering::Release);
+            QUIET.store(false, Ordering::Release);
+            let runtime = v22::HostRuntimeApi {
+                header: v22::header::<v22::HostRuntimeApi>(),
+                instance: Handle {
+                    slot: probe_code,
+                    generation: u32::from(cancelled),
+                    ..test_handle(5)
+                },
+                complete: Some(complete),
+                state_get: Some(state_get),
+                state_set: Some(state_set),
+                reserved: 0,
+            };
+            let api = v22::HostApi {
+                base: abi::v21::HostApi {
+                    base: abi::v2::HostApi {
+                        header: v22::header::<v22::HostApi>(),
+                        capability: Bytes::from_static(v22::LIFECYCLE),
+                        host_build_id: Bytes::from_static("shutdown-probe-test"),
+                        next: None,
+                        reserved: 0,
+                    },
+                    capabilities: std::ptr::null(),
+                    capability_count: 0,
+                    reserved: 0,
+                },
+                runtime: &runtime,
+            };
+            let mut fixture = Fixture {
+                host: unsafe { Host::negotiate(&api.base.base) }.unwrap(),
+                owner: "shutdown-probe",
+                mode: "handles".into(),
+                pending: BTreeMap::new(),
+                previous: None,
+            };
+            let request = Request {
+                handle: test_handle(1),
+                mod_scope: test_handle(2),
+                thread_scope: test_handle(3),
+                turn_scope: Handle::NONE,
+                route: 1,
+                event: v22::THREAD_START,
+                input: b"{}".to_vec(),
+                thread_id: "test-thread".into(),
+                turn_id: String::new(),
+                call_id: String::new(),
+            };
+            let result = catch_unwind(AssertUnwindSafe(|| fixture.dispatch(request)));
+            assert_eq!(FOREIGN_CALLS.load(Ordering::Acquire), 1);
+            match expected {
+                Some(ok) => assert_eq!(result.unwrap().is_ok(), ok, "code {probe_code}"),
+                None => assert!(result.is_err(), "unexpected code {probe_code} was accepted"),
+            }
+            if probe_code == v22::REQUEST_CANCELLED {
+                assert_eq!(COMPLETIONS.load(Ordering::Acquire), 0);
+                assert!(fixture.previous.is_none());
+                if cancelled {
+                    fixture.cancel(test_handle(1)).unwrap();
+                    assert!(QUIET.load(Ordering::Acquire));
+                    fixture.request_release(test_handle(1)).unwrap();
+                }
+            } else if probe_code == v22::WRONG_OWNER {
+                assert_eq!(COMPLETIONS.load(Ordering::Acquire), 2);
+                assert!(fixture.previous.is_some());
+            }
+        }
+    }
+}
