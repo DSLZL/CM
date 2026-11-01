@@ -38,6 +38,34 @@ jobs:
       - name: Require hosted Linux x64 and record run identity
         run: python3 -B ci/scripts/record_run.py "$CM_CI_LOG_DIR"
 
+      - name: Inspect V02 failed consumer text evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 41287267034 -R DSLZL/CM-build-linux-x64 -n cm-linux-x64-consumer-evidence-ci-reuse-v02-20261101-1 -D "$RUNNER_TEMP/cm-v02-diagnostics"
+          python3 -B - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, "ci/scripts")
+          from mod_manifest import redact
+          root = Path(os.environ["RUNNER_TEMP"]) / "cm-v02-diagnostics"
+          for path in sorted(root.rglob("runtime-step-results.json")):
+              print("CHECKPOINT RESULTS", path.relative_to(root))
+              value = json.loads(path.read_text())
+              print(redact(json.dumps({k: v for k, v in value.items() if isinstance(v, dict) and v.get("status") != "pass"}, sort_keys=True))[:50000])
+          selected = ("m02-authoring", "m02-stdio", "m02-rejections-short-tail",
+                      "m02-cancel-sync-cancel", "m02-error-turn-error",
+                      "m03-terminal", "m03-rejections", "m04-terminal")
+          for label in selected:
+              matches = [p for p in root.rglob("*.log") if p.stem == label]
+              for path in matches:
+                  text = redact(path.read_text(errors="replace"))
+                  print("FIXTURE TRACE", path.relative_to(root))
+                  print(text[-12000:])
+          PY
+
       - name: Check publication boundary and CI scripts
         run: |
           python3 -B - <<'PY' 2>&1 | tee "$CM_CI_LOG_DIR/source-check.log"
