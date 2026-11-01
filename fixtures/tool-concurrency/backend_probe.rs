@@ -20,7 +20,7 @@ mod cm_concurrency_backend_probe {
             .bootstrap(&config)
             .await
             .err()
-            .expect("old or mismatched initialize response must fail before account/business requests");
+            .expect("old or mismatched initialize response must fail before account/business requests (CI-REUSE V05)");
         assert!(
             error.to_string().contains("capability")
                 || error.to_string().contains("[tool_concurrency]"),
