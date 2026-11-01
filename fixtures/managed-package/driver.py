@@ -88,7 +88,7 @@ def environment(directory, *, official=True):
     directory.mkdir(parents=True, exist_ok=True)
     home = directory / "shell-home"
     home.mkdir(exist_ok=True)
-    return {"PATH": "/work/m03/global:/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+    return {"PATH": str(WORK / "global") + ":/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
         "TERM": "xterm-256color", "HOME": str(home),
         "CODEX_HOME": str(OFFICIAL_PROFILE) if official else str(home),
         "CODEX_SQLITE_HOME": str(OFFICIAL_PROFILE) if official else str(home),
@@ -179,7 +179,7 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
     directory.mkdir(parents=True)
     provider = sdk.Provider(tool=tool)
     env = sdk.environment(home, directory, mode="async" if mutate else "handles")
-    env["PATH"] = "/work/m03/global:" + env["PATH"]
+    env["PATH"] = str(WORK / "global") + ":" + env["PATH"]
     env["TERM"] = "xterm-256color"
     env["CODEX_HOME"] = env["CODEX_SQLITE_HOME"] = str(OFFICIAL_PROFILE)
     token = re.sub("[^a-z0-9_-]", "-", name)
@@ -594,6 +594,8 @@ def self_check():
         base = Path(directory)
         inputs, work, evidence = (base / name for name in ("inputs", "work", "evidence"))
         work.mkdir()
+        with patch.dict(globals(), WORK=work):
+            assert environment(base / "environment")["PATH"].split(":")[0] == str(work / "global")
         for owner in ("m01-a", "m01-b"):
             (inputs / "mods" / owner).mkdir(parents=True)
         completed = []
