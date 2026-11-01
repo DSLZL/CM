@@ -171,3 +171,7 @@ fixtures/tool-concurrency/backend_probe.rs
 fixtures/tool-concurrency/core_probe.rs
 fixtures/tool-concurrency/driver.py
 fixtures/tool-concurrency/steer_probe.rs
+ci/scripts/runtime_qualification.py
+docs/platform-support.md
+fixtures/runtime-qualification/acceptance.sh
+fixtures/runtime-qualification/driver.py

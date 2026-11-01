@@ -164,7 +164,7 @@ def prepare(root, logs):
 
 def schemas(root, logs):
     """Regenerate pinned schema assets on the hosted worker before sealing Host inputs."""
-    if load_config(root)["task_id"] != "CM-G03":
+    if load_config(root)["task_id"] not in ("CM-G03", "CM-G04"):
         return
     verify_sources(root, logs)
     cfg = load_config(root)
