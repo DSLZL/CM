@@ -175,6 +175,26 @@ def mutate(home, owner, change):
     raise AssertionError("Missing fixture owner")
 
 
+def case_directory_input(work, inputs, name):
+    home = install(work / name, inputs)
+    package = home / "mods/output-fixture"
+    if name == "missing-payload":
+        (package / "payload.so").unlink()
+    elif name.endswith("executable"):
+        shutil.copyfile("/usr/bin/env", package / "payload.so")
+        mutate(home, "output-fixture", lambda m: m["binary"].update(size=(package / "payload.so").stat().st_size,
+            sha256=sha(package / "payload.so")))
+        if name == "zip-executable":
+            zip_package(package, package.with_suffix(".cmod")); shutil.rmtree(package)
+    elif name == "directory-link":
+        (package / "alias").symlink_to("payload.so")
+    elif name == "directory-hardlink":
+        os.link(package / "payload.so", package / "alias")
+    else:
+        os.mkfifo(package / "pipe")
+    return home
+
+
 @ci_progress.case()
 def rejection_cases(work, inputs, binary, evidence, selected=None):
     cases = {
@@ -207,22 +227,7 @@ def rejection_cases(work, inputs, binary, evidence, selected=None):
     for name in ("missing-payload", "ordinary-executable", "zip-executable", "directory-link", "directory-hardlink", "directory-special"):
         if selected is not None and name != selected:
             continue
-        home = install(work / name, inputs)
-        package = home / "mods/output-fixture"
-        if name == "missing-payload":
-            (package / "payload.so").unlink()
-        elif name.endswith("executable"):
-            shutil.copyfile("/usr/bin/env", package / "payload.so")
-            mutate(home, "output-fixture", lambda m: m["binary"].update(size=(package / "payload.so").stat().st_size,
-                sha256=sha(package / "payload.so")))
-            if name == "zip-executable":
-                zip_package(package, package.with_suffix(".cmod")); shutil.rmtree(package)
-        elif name == "directory-link":
-            (package / "alias").symlink_to("payload.so")
-        elif name == "directory-hardlink":
-            os.link(package / "payload.so", package / "alias")
-        else:
-            os.mkfifo(package / "pipe")
+        home = case_directory_input(work, inputs, name)
         result = metadata(binary, home, ["plan"], success=False)
         rows.append({"case": name, **result})
     if selected not in (None, "dependencies"):
@@ -279,7 +284,7 @@ def rejection_cases(work, inputs, binary, evidence, selected=None):
         "optional_selected_matching": selected_optional, "explicit_prerelease": prerelease, "build_metadata_intersection": build_metadata}
 
 
-def zip_rejections(work, inputs, binary, selected=None):
+def case_zip_inputs(work, inputs, selected=None):
     source = install(work / "zip-source", inputs)
     package = source / "mods/output-fixture"
     rows = []
@@ -322,8 +327,13 @@ def zip_rejections(work, inputs, binary, selected=None):
         elif name == "local-name": data[30] ^= 1
         elif name == "size": struct.pack_into("<I", data, central + 24, 0x7fffffff)
         path.write_bytes(data)
-        rows.append({"case": name, **metadata(binary, home, ["list"], success=False)})
+        rows.append((name, path))
     return rows
+
+
+def zip_rejections(work, inputs, binary, selected=None):
+    return [{"case": name, **metadata(binary, path.parent.parent, ["list"], success=False)}
+        for name, path in case_zip_inputs(work, inputs, selected)]
 
 
 def lock_integrity(work, inputs, binary):

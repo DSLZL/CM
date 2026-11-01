@@ -22,6 +22,7 @@ INPUTS = Path("/inputs")
 BINARY = INPUTS / "host/bin/codex"
 EVIDENCE = Path("/evidence/m02")
 PROFILE = Path("/profile/m02")
+WORK = Path("/work/m02")
 
 
 def read(path):

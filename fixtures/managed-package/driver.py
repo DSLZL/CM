@@ -142,11 +142,15 @@ def tui_configuration(arguments, directory):
     return text
 
 
-def tui_message_visible(output, token):
+def tui_text_visible(output, expected):
     # Terminal redraws position words separately; window titles are not screen output.
     text = re.sub(rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", b"", bytes(output))
     text = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", text)
-    return ("M02complete" + token).encode() in re.sub(rb"\s+", b"", text)
+    return re.sub(rb"\s+", b"", expected.encode()) in re.sub(rb"\s+", b"", text)
+
+
+def tui_message_visible(output, token):
+    return tui_text_visible(output, "M02 complete " + token)
 
 
 def tui_mcp_listener(pid):
@@ -231,7 +235,8 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
                 sdk.rows(directory / "native.jsonl")), process, "actual TUI Embedded InProcess start")
             observed = identity(process, sha(binary))
             os.write(master, expected_input.encode())
-            # A separate Enter follows the upstream 120 ms paste-suppression window.
+            sdk.core.await_barrier(lambda: tui_text_visible(output, expected_input), process, "TUI rendered complete input")
+            # Start the upstream 120 ms paste window after input was processed, not when the PTY write returned.
             time.sleep(0.2)
             os.write(master, b"\r")
         else:
@@ -257,6 +262,7 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
             mcp_listener = tui_mcp_listener(process.pid)
             sdk.core.await_barrier(lambda: tui_message_visible(output, token), process, "TUI displayed final model message")
             os.write(terminal, b"/quit")
+            sdk.core.await_barrier(lambda: tui_text_visible(output, "/quit"), process, "TUI rendered quit command")
             time.sleep(0.2)
             os.write(terminal, b"\r")
         code = process.wait(timeout=45)
@@ -404,10 +410,14 @@ def m01_rejection_inputs(work):
 @ci_progress.case()
 def rejections(home):
     result = []
-    # Reuse the exact malformed files already rejected by the current-source M01 matrix.
-    for package in m01_rejection_inputs(Path("/work/m01")):
-        result.append(reject_install(home, package, package.parents[1].name))
+    # Generate shared M01 malformed inputs within this independent case.
     import mod_manifest
+    work = WORK / "m01-rejections"
+    mod_manifest.case_zip_inputs(work / "zip", INPUTS)
+    for name in ("missing-payload", "ordinary-executable", "directory-link", "directory-hardlink", "directory-special"):
+        mod_manifest.case_directory_input(work / "rejections", INPUTS, name)
+    for package in m01_rejection_inputs(work):
+        result.append(reject_install(home, package, package.parents[1].name))
     for name, change in (
         ("target", lambda fields: fields["binary"].update(target="aarch64-unknown-linux-gnu")),
         ("cpu", lambda fields: fields["binary"].update(cpu="x86-64-v3")),
@@ -635,6 +645,9 @@ def self_check():
         listener.bind(("127.0.0.1", 0))
         listener.listen()
         assert tui_mcp_listener(os.getpid())["port"] == listener.getsockname()[1]
+    assert tui_text_visible(b"CM_M02_case\x1b[9;7H input", "CM_M02_case input")
+    assert not tui_text_visible(b"CM_M02_case", "CM_M02_case input")
+    assert not tui_text_visible(b"\x1b]0;CM_M02_case input\x07", "CM_M02_case input")
     assert tui_message_visible(b"M02 complete case", "case")
     assert tui_message_visible(b"M02\x1b[9;7Hcomplete\x1b[9;16Hcase\x1b[0m", "case")
     for output in (b"M02 complete other", b"M02 complete", b"\x1b]0;M02 complete case\x07",
