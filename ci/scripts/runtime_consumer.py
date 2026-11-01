@@ -1531,9 +1531,10 @@ def consume():
                 transactions = [[*sandbox, "--", *CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B",
                     "/fixture/fixtures/runtime-qualification/driver.py", "matrix", "missing-library", step]
                     for step, sandbox in (("prepare", base), ("reject", missing_base), ("recover", base))]
-                script = "\n".join(shlex.join(parts) for parts in transactions)
+                # Keep the shell program distinct from an absolute path in strace argv.
+                script = "set -e; " + "; ".join(shlex.join(parts) for parts in transactions)
                 results[label] = checkpoints.run(logs, label,
-                    command(label, ["/usr/bin/bash", "-e", "-c", script], sandbox=[]), 600)
+                    command(label, ["/usr/bin/bash", "-c", script], sandbox=[]), 600)
             remaining = []
             for phase in ("m03", "m04"):
                 if phase not in phase_reports:

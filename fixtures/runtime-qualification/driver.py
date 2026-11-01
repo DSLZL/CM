@@ -1,4 +1,5 @@
 """Independent G04 failure/recovery transactions in the existing strict consumer."""
+import json
 import os
 from pathlib import Path
 import shutil
@@ -27,6 +28,9 @@ def reject(command, env):
     row = {"command": command, "return_code": result.returncode, "stderr": result.stderr}
     mod_manifest.write(directory / "result.json", row)
     assert result.returncode != 0 and result.stderr, row
+    if result.stderr.startswith("{"):
+        row["diagnostic"] = json.loads(result.stderr.splitlines()[0])
+        assert row["diagnostic"]["already_native_executed"] is False, row
     for name in ("constructor-sentinel", "native.jsonl", "events.jsonl"):
         assert not (directory / name).exists(), "Rejection executed native code: " + name
     return row
@@ -42,7 +46,7 @@ def package_failure(relative, *, damage=False):
         path.unlink()
     result = reject(m.launch_command(COPY / "bin/codex", PROFILE / "active", ["exec", "unused"]),
                     m.environment(EVIDENCE / "rejection"))
-    assert "CM package [package]" in result["stderr"] and "already_native_executed=false" in result["stderr"], result
+    assert result["diagnostic"]["stage"] == result["diagnostic"]["code"] == "package", result
     result.update(stage="package_preflight", component=relative, original_sha256=before)
     return result
 
@@ -84,7 +88,7 @@ def case_loader_environment():
     env = m.environment(EVIDENCE / "rejection")
     env["LD_LIBRARY_PATH"] = str(WORK / "untrusted-libraries")
     result = reject(m.launch_command(m.BINARY, PROFILE / "active", ["exec", "unused"]), env)
-    assert "loader" in result["stderr"].lower(), result
+    assert result["diagnostic"]["stage"] == "preflight" and result["diagnostic"]["code"] == "managed_profile", result
     return {"stage": "managed_environment_preflight", **result}
 
 
@@ -99,7 +103,7 @@ def case_missing_library():
         assert removed.name in result["stderr"]
         stage = "os_dynamic_loader"
     else:
-        assert "CM package [package]" in result["stderr"] and "already_native_executed=false" in result["stderr"]
+        assert result["diagnostic"]["stage"] == result["diagnostic"]["code"] == "package", result
         stage = "package_preflight"
     return {**result, "stage": stage, "mutation": mutation}
 
