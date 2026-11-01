@@ -1619,7 +1619,18 @@ def consume():
                     check.update(status="pass", command="isolated compiler-free consumer: " + (label or phase),
                         execution_kind=next(iter(kinds)) if len(kinds) == 1 else "mixed",
                         execution_origin={name: row["origin"] for name, row in executions.items()})
+                    print("CM acceptance:", json.dumps({"report": path.name, "status": check["status"],
+                        "execution_kind": check["execution_kind"],
+                        "origin_runs": sorted({row["origin"]["GITHUB_RUN_ID"] for row in executions.values()})},
+                        sort_keys=True), flush=True)
                 report_set["status"] = "pass"
+            print("CM runtime summary:", json.dumps({"steps": len(checkpoints.results),
+                "executed": sum(row["kind"] == "executed" for row in checkpoints.results.values()),
+                "reused": sum(row["kind"] == "reused" for row in checkpoints.results.values()),
+                "audit_status": audit["status"],
+                "compiler_linker_jit_build_service_calls": audit["compiler_linker_jit_build_service_calls"],
+                "input_inventory": "pass", "isolation_probes": "pass", "canary_hits": len(canary_hits)},
+                sort_keys=True), flush=True)
             if m01_acceptance is not None:
                 write(artifact / "p04-baseline-acceptance.json", p04_acceptance)
                 write(logs / "p04-baseline-acceptance.json", p04_acceptance)
