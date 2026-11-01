@@ -549,7 +549,7 @@ def case_setup():
 def case_query(m, sdk, frozen, authored):
     missing = PROFILE / "query-missing"
     m.cm(missing, "state", "path", OWNER, success=False)
-    assert not missing.exists(), "Read-only state query created a managed home (CI-REUSE V07)"
+    assert not missing.exists(), "Read-only state query created a managed home"
     return ({}, {}, {}, {}, {}, {})
 
 

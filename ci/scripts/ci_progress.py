@@ -19,7 +19,7 @@ def emit(label, status, started):
     with OUTPUT_LOCK:
         print(PREFIX + json.dumps({"stage": label, "status": status,
             "elapsed_seconds": round(time.monotonic() - started, 3),
-            "time_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}, sort_keys=True), flush=True)
+            "time_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}), flush=True)
 
 
 @contextmanager
