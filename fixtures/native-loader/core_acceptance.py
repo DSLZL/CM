@@ -31,6 +31,7 @@ def input_digest_stats():
 
 
 def input_stamp(info):
+    assert info.st_size >= 0, "CI-REUSE V08 input metadata size is negative"
     return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
