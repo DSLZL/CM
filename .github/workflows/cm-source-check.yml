@@ -64,6 +64,12 @@ jobs:
                   text = redact(path.read_text(errors="replace"))
                   print("FIXTURE TRACE", path.relative_to(root))
                   print(text[-12000:])
+          import re
+          for path in sorted(root.rglob("*")):
+              if path.name in ("result.json", "terminal.log") and path.parent.name == "actual-tui":
+                  text = redact(path.read_text(errors="replace"))
+                  text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text).replace("\x1b", "<ESC>")
+                  print("TUI DETAILS", path.relative_to(root), text[-18000:])
           PY
 
       - name: Check publication boundary and CI scripts
