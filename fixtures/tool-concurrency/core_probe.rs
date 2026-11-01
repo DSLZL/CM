@@ -96,7 +96,7 @@ mod cm_concurrency_probe {
 
     async fn entered(receiver: &mut mpsc::UnboundedReceiver<String>, expected: &str) {
         assert_eq!(tokio::time::timeout(Duration::from_secs(10), receiver.recv()).await
-            .expect("entry timeout").expect("entry"), expected);
+            .expect("entry timeout (CI-REUSE V04)").expect("entry"), expected);
     }
 
     async fn traced(event: &str, call_id: &str) {
