@@ -195,7 +195,7 @@ impl Fixture {
         Ok(previous)
     }
 
-    fn probes(&mut self, request: &Request) {
+    fn probes(&mut self, request: &Request) -> Result<(), String> {
         let invalid_type =
             code(
                 self.host
@@ -248,6 +248,10 @@ impl Fixture {
                             self.host
                                 .set_state(request.handle, foreign, "calls", b"foreign"),
                         );
+                    // Shutdown may cancel this request before scope ownership is checked.
+                    if code == v22::REQUEST_CANCELLED {
+                        return Err("cross-owner probe request cancelled".into());
+                    }
                     assert_eq!(code, v22::WRONG_OWNER);
                     record(
                         self.owner,
@@ -295,6 +299,7 @@ impl Fixture {
             }
         }
         self.previous = Some((request.handle, request.thread_scope, request.turn_scope));
+        Ok(())
     }
 
     fn bounds(&self, request: &Request) {
@@ -374,7 +379,7 @@ impl Fixture {
             ),
         );
         if self.mode == "handles" {
-            self.probes(&request);
+            self.probes(&request)?;
         }
         if self.mode == "bounds" && request.event == v22::TOOL_CALL {
             self.bounds(&request);
