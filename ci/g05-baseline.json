@@ -18,5 +18,18 @@
   "input_artifact": {
     "id": 13139610070,
     "digest": "17b6e924ff4fc3b9328a8a18359c90305416672efb3cb45649309ed1fe3c7f98"
+  },
+  "qualification": {
+    "run_id": 41453092836,
+    "run_attempt": 1,
+    "source_sha": "f050530ced9e64bfb6b6fc5a25ff77e849cb5985",
+    "workflow_sha": "5313ea466e658725b90f489705fd3f93c9e3eada",
+    "request_id": "cm-g01-qualification-20261102-r11",
+    "input_artifact_id": 13139610070,
+    "input_artifact_sha256": "17b6e924ff4fc3b9328a8a18359c90305416672efb3cb45649309ed1fe3c7f98",
+    "consumer_artifact_id": 13146132198,
+    "consumer_artifact_sha256": "c890a0b4f86f493f4c8b71f8f90322a9f631f19a7410af3b4c3026cf9b51faaa",
+    "receipt_artifact_id": 13145557477,
+    "receipt_artifact_sha256": "80fd762b7f4677460b648d60e5975eef5fac54d12cac5e973220dc9b9bb399d4"
   }
 }

@@ -38,7 +38,7 @@ def restore_reference(*, producer=False):
             return
     import runtime_consumer as host
     pin = host.read(path)
-    source, worker, _, _, _ = policy.identities()
+    source, worker, _, workflow_sha, _ = policy.identities()
     assert (source, worker) == (pin["source_repository"], pin["worker_repository"])
     prefix = "repos/" + worker
     run = policy.api(prefix + "/actions/runs/" + str(pin["run_id"]))
@@ -46,9 +46,22 @@ def restore_reference(*, producer=False):
         pin["run_attempt"], pin["workflow_sha"], ".github/workflows/build.yml", "workflow_dispatch",
         "CM Linux x64 / " + pin["request_id"])
     jobs = policy.receipt_jobs(prefix + "/actions/runs/" + str(pin["run_id"]) + "/attempts/1/jobs?per_page=100",
-        ("build-write / linux-x64", "runtime-consumer"))
+        ("build-write / linux-x64",))
+    qualified = pin["qualification"]
+    remote = policy.verify_origin(qualified, source, worker, workflow_sha)
     directory = Path(os.environ["RUNNER_TEMP"]) / "cm-g05-reference"
     directory.mkdir()
+    with policy.download_origin_archive(worker, remote["artifacts"]["receipt"], directory / "qualification.zip") as archive:
+        receipt = policy.archive_json(archive, "worker-receipt.json")
+    ci = policy.qualification_receipt(receipt, qualified, remote["jobs"], source, worker)
+    production = ci["production_origin"]
+    assert all(production[key] == pin[key] for key in
+        ("run_id", "run_attempt", "source_sha", "workflow_sha", "request_id"))
+    assert (ci["artifact_id"], ci["artifact_sha256"]) == (
+        pin["product_artifact"]["id"], pin["product_artifact"]["digest"])
+    assert (qualified["input_artifact_id"], qualified["input_artifact_sha256"]) == (
+        pin["input_artifact"]["id"], pin["input_artifact"]["digest"])
+    (directory / "qualification.zip").unlink()
     records = {}
     for key, label in (("product_artifact", "task-artifacts"), ("input_artifact", "runtime-inputs")):
         expected = pin[key]
@@ -107,7 +120,8 @@ def restore_reference(*, producer=False):
     host.write(destination / "reference.json", {"pin": pin, "files": selected, "original_input_manifest": manifest["sha256"],
         "authors": {key: value for key, value in prior["authors"].items() if key in
             ("g02a/turn-budget", "g02b/review-before-send", "g01/a/normal")},
-        "host": prior["host"], "jobs": jobs, "product_archive_verified": producer})
+        "host": prior["host"], "jobs": jobs, "product_archive_verified": producer,
+        "qualification": {"origin": qualified, "jobs": remote["jobs"], "ci": ci}})
     for name in ("inputs.zip", "inputs.tar"):
         (directory / name).unlink()
     print(json.dumps({"stage": "g05-baseline", "status": "pass", "host": pin["host_release_id"],
