@@ -160,9 +160,7 @@ def variant(home, update, *, owner="example-tool", name="variant"):
 def rejected_variant(update, *, owner="example-tool", field=None, code=None, state=False, hook=False):
     home = install(state=state, hook=hook)
     if state:
-        note = state_path(home, owner) / "upgrade-note"
-        note.write_bytes(b"preserve nonempty old state")
-        note.chmod(0o600)
+        usable(home, state_action="write", value="old-state", name="old-state-write")
     package = variant(home, update, owner=owner)
     result = upgrade(home, variants=[package], check=True, success=False)
     error = result["result"]
@@ -418,7 +416,7 @@ def reuse(role, host):
     before = {key: inventory(BASELINE / "mods" / relative) for key, relative in
         (("a", "g02a/turn-budget"), ("b", "g02b/review-before-send")) if key in roles}
     observations = {}
-    if "a" in roles:
+    if roles == ("a",):
         sdk = module("runtime-sdk/driver.py")
         budget = module("turn-budget/driver.py")
         provider = budget.Provider(desired=2, held=True)
@@ -464,12 +462,31 @@ def reuse(role, host):
         try:
             terminal.review("CM_M02_cancelled")
             terminal.quiet()
+            if role == "ab":
+                budget = module("turn-budget/driver.py")
+                assert not budget.admissions(terminal.directory), "Cancelled review consumed the turn budget"
             terminal.send(b"\x1b")
             terminal.send(b"\x03")
             terminal.review("CM_M02_accepted")
             terminal.send(b"\r\t\r")
             terminal.quiet()
-            terminal.complete("accepted")
+            if role == "ab":
+                terminal.provider.tool = True
+                terminal.send("y")
+                terminal.wait(lambda: terminal.managed.tui_message_visible(terminal.output, "accepted"),
+                    "reviewed tool round trip")
+                terminal.wait_turns()
+                requests = budget.business_requests(terminal.provider)
+                assert len(requests) == 2 and not terminal.provider.errors, (requests, terminal.provider.errors)
+                assert all(row["token"] == "accepted" for row in requests), requests
+                admissions = budget.admissions(terminal.directory)
+                turns = {row["detail"]["turn"] for row in admissions}
+                charges = {turn: budget.charged(budget.admissions(terminal.directory, turn)) for turn in turns}
+                assert list(charges.values()).count([1, 2]) == 1, charges
+                assert all(not row["detail"].get("error") for row in admissions), admissions
+                observations["tui_budget_and_cancelled_review"] = {"admissions": admissions, "charges": charges}
+            else:
+                terminal.complete("accepted")
             assert len(terminal.reviews()) == 2
         except BaseException:
             terminal.close(False)
@@ -535,7 +552,8 @@ def case_exact_variant():
     candidate = PROFILE / "candidate"
     directory = EVIDENCE / "actual-core"
     business = core.run_case(Path("/fixture"), directory, NEW, candidate, True, scenario="parallel",
-        restrictive=True, expected_releases=1, sandboxed=True)
+        restrictive=True, expected_releases=1, sandboxed=True,
+        cm_options=module("managed-package/driver.py").launch_command(NEW, candidate, [])[1:])
     trace = core.trace_rows(directory / "core-trace.jsonl")
     assert any(row["event"] == "hook-enter" and row["detail"]["mod"] == "compose-a" for row in trace)
     assert inventory(explicit) == before
