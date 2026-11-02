@@ -1124,7 +1124,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
         normalized.append(line)
     routes = observer.kernel_route_sockets(sockets)
     tcp_connections = observer.provider_tcp_connections(tcp_metadata, ports)
-    audit_runtime_network(observer, normalized, Path("/evidence"), ports, routes, tcp_connections)
+    audit_runtime_network(observer, normalized, Path("/evidence"), ports, routes, tcp_connections, tcp_metadata)
     # Writable executable mappings are unsupported, even if no compiler was exec'd.
     assert not code_mode["unclassified"], "Unclassified runtime code generation: " + repr(code_mode["unclassified"])
     assert file_count, "File-load observer produced no records"
@@ -1154,11 +1154,27 @@ def budget_cases(producer):
     return cases
 
 
-def audit_runtime_network(observer, lines, directory, ports, routes=(), tcp_connections=()):
+def audit_runtime_network(observer, lines, directory, ports, routes=(), tcp_connections=(), socket_metadata=()):
     # Both local pair types use the same observed endpoint-inode checks; retain raw records in the report.
     normalized = [re.sub(r'(socketpair\(AF_UNIX, )SOCK_SEQPACKET(?=[|,])', r'\1SOCK_STREAM', line)
         .replace("UNIX-SEQPACKET:", "UNIX-STREAM:") for line in lines]
-    observer.audit_network(normalized, directory, ports, routes, tcp_connections)
+    accepted = set()
+    for line in socket_metadata:
+        connection = re.fullmatch(r'\d+\s+accept4?\(\d+<UNIX-STREAM:\[\d+\]>, \{sa_family=AF_UNIX\}, \[\d+(?: => \d+)?\](?:, SOCK_CLOEXEC(?:\|SOCK_NONBLOCK)?)?\) = \d+<UNIX-STREAM:\[(\d+)\]>', line)
+        if connection:
+            accepted.add(connection[1])
+    bound = set()
+    for line in socket_metadata:
+        local = re.fullmatch(r'\d+\s+getsockname\(\d+<UNIX-STREAM:\[(\d+)\]>, \{sa_family=AF_UNIX, sun_path="([^"]+)"\}, \[\d+(?: => \d+)?\]\) = 0', line)
+        if local and local[1] in accepted and Path(local[2]).is_relative_to(directory) and ".." not in Path(local[2]).parts:
+            bound.add(local[1])
+    remaining = []
+    for line in normalized:
+        reply = re.fullmatch(r'\d+\s+sendto\(\d+<UNIX-STREAM:\[(\d+)\]>, "<payload redacted>", \d+, (?:0|MSG_NOSIGNAL), NULL, 0\) = \d+', line)
+        # Namespace-limited strace can omit peers; accept replies only on accepted, scoped socket inodes.
+        if not reply or reply[1] not in bound:
+            remaining.append(line)
+    observer.audit_network(remaining, directory, ports, routes, tcp_connections)
 
 
 def check_runtime_network():
@@ -1168,6 +1184,31 @@ def check_runtime_network():
     for lines in ([pair, send], [send, pair],
             [pair.replace("UNIX:", "UNIX-SEQPACKET:"), send.replace("UNIX:", "UNIX-SEQPACKET:")]):
         audit_runtime_network(observer, lines, Path("/evidence"), set())
+    accepted = '3826 accept4(3<UNIX-STREAM:[27403]>, {sa_family=AF_UNIX}, [110 => 2], SOCK_CLOEXEC) = 5<UNIX-STREAM:[27425]>'
+    local = '3826 getsockname(5<UNIX-STREAM:[27425]>, {sa_family=AF_UNIX, sun_path="/evidence/g01/callback.sock"}, [128 => 62]) = 0'
+    reply = '3826 sendto(5<UNIX-STREAM:[27425]>, "<payload redacted>", 1, 0, NULL, 0) = 1'
+    for metadata in ([accepted, local], [local, accepted],
+            [accepted.replace('accept4(', 'accept(').replace(', SOCK_CLOEXEC)', ')'), local]):
+        audit_runtime_network(observer, [reply], Path("/evidence"), set(), socket_metadata=metadata)
+    for metadata in ([accepted], [local], [accepted.replace('[27425]', '[27426]'), local],
+            [accepted, local.replace('[27425]', '[27426]')],
+            [accepted, local.replace('/evidence/', '/outside/')],
+            [accepted, local.replace('/evidence/', '/evidence-other/')],
+            [accepted, local.replace('/evidence/', '/evidence/../outside/')],
+            [accepted.replace(' = 5<UNIX-STREAM:[27425]>', ' = -1 EAGAIN (Resource temporarily unavailable)'), local],
+            [accepted, local.replace(' = 0', ' = -1 EBADF (Bad file descriptor)')]):
+        try:
+            audit_runtime_network(observer, [reply], Path("/evidence"), set(), socket_metadata=metadata)
+        except AssertionError:
+            continue
+        raise AssertionError("Runtime audit accepted an unbound Unix reply")
+    for lines in ([reply.replace('[27425]', '[27426]')], [reply.replace('UNIX-STREAM', 'UNIX-DGRAM')],
+            [reply, '3826 connect(8<UNIX-STREAM:[99]>, {sa_family=AF_UNIX, sun_path="/outside/socket"}, 32) = 0']):
+        try:
+            audit_runtime_network(observer, lines, Path("/evidence"), set(), socket_metadata=[accepted, local])
+        except AssertionError:
+            continue
+        raise AssertionError("Runtime audit accepted an unrelated Unix peer")
     for lines in ([send], [pair, send.replace("[51]", "[53]")],
             [pair.replace("SOCK_SEQPACKET", "SOCK_DGRAM"), send],
             [pair.replace("AF_UNIX", "AF_INET"), send],
