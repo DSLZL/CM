@@ -64,7 +64,7 @@ additionally requires `[compat.exact_host]` with the Host's `build_id` and actua
 `executable_sha256`. Any declared `patch_map_sha256` must match the embedded Host
 map, including for ordinary `exact_host` packages. `advanced_hook` requires all
 three bindings and is restricted to the registered ABI-2 prepared eligibility
-policy slot. The G01 candidate is awaiting Actions qualification; detour and
+policy slot, qualified on Linux x86_64 GNU. Detour and
 arbitrary Rust hooks remain unsupported. See [runtime-hooks.md](runtime-hooks.md).
 Matching a build or ABI number does not establish a successful compatibility run.
 

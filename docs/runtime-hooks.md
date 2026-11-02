@@ -1,10 +1,14 @@
 # Exact-bound prepared policy hooks
 
-The CM-G01 candidate accepts format-3 `advanced_hook` packages for one prepared
-Core slot on Linux x86_64 GNU. Native acceptance is pending. The Host API is
+The qualified CM-G01 path accepts format-3 `advanced_hook` packages for one prepared
+Core slot on Linux x86_64 GNU. The Host API is
 0.10.0; the existing C ABI 1.0/2.0/2.1/2.2 tables are unchanged.
 
-| Request | Candidate behavior |
+Qualification: [Linux x64 Actions](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/41450818466),
+using Host build `sha256:b58511a72785bae0b17bf3159f0025b771f54ae7469809bec230c06b7b26ac8d`
+and executable SHA-256 `37c7cb71de25f29c141dfdadf95375b51071a9b00c1ffb122e4a3757c93781f4`.
+
+| Request | Qualified behavior |
 | --- | --- |
 | `core.tool_parallel_eligibility.v1` policy slot | ABI 2; before, around, replacement, after |
 | Native detour, symbol/address/signature search | Unsupported; no backend installed |
