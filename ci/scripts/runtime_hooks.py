@@ -95,12 +95,23 @@ def reports(evidence, steps, audit):
 def self_check():
     from record_run import require_hosted_linux
     require_hosted_linux()
+    import importlib.util
+    import sys
     from unittest.mock import patch
     import retry
     import runtime_cases
     root = Path(__file__).resolve().parents[2]
     before = retry.test_inputs(root, "HEAD")
     path = "fixtures/runtime-hooks/driver.py"
+    with patch.object(sys, "path", [str(root / "fixtures/native-loader"), *sys.path]):
+        spec = importlib.util.spec_from_file_location("cm_g01_report_check", root / path)
+        driver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(driver)
+    rejected = {"patch_map_sha256": {"error": "wrong digest"}}
+    with patch.object(driver, "binding", return_value=driver.report(1, "patch_map_sha256", {"error": "missing"})):
+        missing = driver.case_binding_map_missing()[1]
+    assert runtime_cases.merge(rejected, missing) == {
+        "patch_map_sha256": {"error": "wrong digest"}, "missing_patch_map_sha256": {"error": "missing"}}
     original = retry.source
     changed = original(root, "HEAD", path).replace("def case_binding_map():\n", "def case_binding_map():\n    assert False\n")
     assert changed != original(root, "HEAD", path)

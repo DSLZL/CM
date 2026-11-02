@@ -161,7 +161,8 @@ def case_binding_map_ordinary():
 
 
 def case_binding_map_missing():
-    return binding("patch_map_sha256", None, expected="compat.exact_host")
+    missing = binding("patch_map_sha256", None, expected="compat.exact_host")
+    return report(1, "missing_patch_map_sha256", missing[1]["patch_map_sha256"])
 
 
 def case_binding_other_host():
