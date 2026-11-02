@@ -76,9 +76,9 @@ pub(crate) fn identity(value: &Value) -> Result<(Option<String>, Vec<String>), S
         "flags",
         "cargo_configuration",
     ] {
-        if !map["build"][key]
+        if map["build"][key]
             .as_object()
-            .is_some_and(|value| !value.is_empty())
+            .is_none_or(|value| value.is_empty())
         {
             return Err("patch_map.build: missing compiler contract".into());
         }
