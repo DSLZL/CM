@@ -462,15 +462,14 @@ def reuse(role, host):
         try:
             terminal.review("CM_M02_cancelled")
             terminal.quiet()
-            if role == "ab":
-                budget = module("turn-budget/driver.py")
-                assert not budget.admissions(terminal.directory), "Cancelled review consumed the turn budget"
             terminal.send(b"\x1b")
             terminal.send(b"\x03")
             terminal.review("CM_M02_accepted")
             terminal.send(b"\r\t\r")
             terminal.quiet()
             if role == "ab":
+                budget = module("turn-budget/driver.py")
+                assert not budget.admissions(terminal.directory), "Cancelled review consumed the turn budget"
                 terminal.provider.tool = True
                 terminal.send("y")
                 terminal.wait(lambda: terminal.managed.tui_message_visible(terminal.output, "accepted"),
@@ -480,7 +479,7 @@ def reuse(role, host):
                 assert len(requests) == 2 and not terminal.provider.errors, (requests, terminal.provider.errors)
                 assert all(row["token"] == "accepted" for row in requests), requests
                 admissions = budget.admissions(terminal.directory)
-                turns = {row["detail"]["turn"] for row in admissions}
+                turns = {row["turn"] for row in admissions}
                 charges = {turn: budget.charged(budget.admissions(terminal.directory, turn)) for turn in turns}
                 assert list(charges.values()).count([1, 2]) == 1, charges
                 assert all(not row["detail"].get("error") for row in admissions), admissions
@@ -546,7 +545,9 @@ def case_exact_no_variant():
 
 def case_exact_variant():
     home = install(hook=True)
-    explicit = INPUTS / "mods/g01/a/normal"
+    authored = module("runtime-hooks/driver.py").install(WORK / "author-variant", ("a/normal",))
+    explicit = authored / "mods/0-a-normal"
+    assert sha(explicit / "payload.so") == sha(INPUTS / "mods/g01/a/normal/payload.so")
     before = inventory(explicit)
     result = upgrade(home, variants=[explicit])
     candidate = PROFILE / "candidate"
@@ -558,6 +559,7 @@ def case_exact_variant():
     assert any(row["event"] == "hook-enter" and row["detail"]["mod"] == "compose-a" for row in trace)
     assert inventory(explicit) == before
     return {"transaction": result, "explicit_package": before, "actual_core": business,
+        "config_fixture": tomllib.loads((explicit / "mod.toml").read_text())["config"],
         "author": mod_manifest.read(INPUTS / "producer.json")["authors"]["g01/a/normal"]}
 
 
