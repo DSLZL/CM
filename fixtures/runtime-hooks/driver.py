@@ -184,7 +184,7 @@ def case_binding_abi():
 def case_binding_target():
     home = install(PROFILE, ("a/normal",))
     change(home, "compose-a", ("binary", "target"), "aarch64-unknown-linux-gnu")
-    return report(1, "target", reject(home))
+    return report(1, "wrong_target", reject(home))
 
 
 def case_binding_slot():

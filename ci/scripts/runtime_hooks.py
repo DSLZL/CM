@@ -113,6 +113,11 @@ def self_check():
         missing = driver.case_binding_map_missing()[1]
     assert runtime_cases.merge(rejected, missing) == {
         "patch_map_sha256": {"error": "wrong digest"}, "missing_patch_map_sha256": {"error": "missing"}}
+    with patch.object(driver, "install"), patch.object(driver, "change"), patch.object(
+            driver, "reject", return_value={"error": "wrong target"}):
+        wrong_target = driver.case_binding_target()[1]
+    assert wrong_target == {"wrong_target": {"error": "wrong target"}}
+    assert "target" not in wrong_target, "Target identity belongs to consumer promotion"
     emitted = {}
     steps = {phase + "-" + case: {"status": "pass"} for phase in ("g01", "m02")
              for case in runtime_cases.GROUPS[phase]}
