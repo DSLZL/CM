@@ -111,10 +111,11 @@ def turns_settled(native):
 
 
 class Terminal:
-    def __init__(self, case, name, home, *, reviewed=True, launch_args=()):
+    def __init__(self, case, name, home, *, reviewed=True, launch_args=(), binary=None, directory=None):
         self.sdk = module("runtime-sdk/driver.py")
         self.managed = module("managed-package/driver.py")
-        self.directory = Path("/evidence/review") / case / name
+        self.directory = directory or Path("/evidence/review") / case / name
+        self.binary = binary or BINARY
         self.directory.mkdir(parents=True)
         self.home, self.reviewed = home, reviewed
         self.empty_launch_argv = not launch_args
@@ -124,7 +125,7 @@ class Terminal:
         # Handle fault probes need the SDK matrix's controlled thread lifetimes.
         self.env = self.sdk.environment(home, self.directory, mode="normal")
         self.env["TERM"] = "xterm-256color"
-        self.command = self.managed.launch_command(BINARY, home, list(launch_args))
+        self.command = self.managed.launch_command(self.binary, home, list(launch_args))
         master, slave = pty.openpty()
         self.master, self.output = master, bytearray()
         self.reader_error = None
@@ -162,7 +163,7 @@ class Terminal:
         self.identity = None
         try:
             self.wait(lambda: any(row["event"] == "backend-selected" for row in self.native()), "Embedded TUI")
-            self.identity = self.managed.identity(self.process, sha(BINARY))
+            self.identity = self.managed.identity(self.process, sha(self.binary))
         except BaseException:
             self.close(False)
             raise

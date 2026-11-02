@@ -181,3 +181,9 @@ crates/cm/src/hooks.rs
 docs/runtime-hooks.md
 fixtures/runtime-hooks/acceptance.sh
 fixtures/runtime-hooks/driver.py
+ci/g05-baseline.json
+ci/scripts/runtime_upgrade.py
+crates/cm/src/upgrade.rs
+docs/upgrade-diagnostics.md
+fixtures/compatibility/acceptance.sh
+fixtures/compatibility/driver.py

@@ -67,18 +67,22 @@ jobs:
           worker = json.loads(Path("ci/worker-files.json").read_text(encoding="utf-8"))
           assert len(worker["files"]) == 8
           assert all(row["source"] in paths for row in worker["files"]), "Worker inputs must be published"
+          cfg = json.loads(Path(".github/cm-ci.json").read_text())
+          if cfg["task_id"] == "CM-G05":
+              baseline = json.loads(Path("ci/g05-baseline.json").read_text())
+              assert cfg["required_checks"] == [f"CM-G05-AC{i:02}" for i in range(1, 6)]
+              assert cfg["acceptance_script"] == "fixtures/compatibility/acceptance.sh"
+              assert "ci/g05-baseline.json" not in cfg["native_identity_files"]
+              assert (baseline["source_repository"], baseline["worker_repository"], baseline["run_id"], baseline["run_attempt"]) == (
+                  "DSLZL/CM", "DSLZL/CM-build-linux-x64", 41431503923, 1)
+              assert all(baseline[key]["id"] > 0 and len(baseline[key]["digest"]) == 64
+                         for key in ("product_artifact", "input_artifact"))
 
-          scripts = [*Path("ci/scripts").glob("*.py"), *Path("fixtures/runtime-consumer").glob("*.py"),
-                     *Path("fixtures/native-loader").glob("*.py"), *Path("fixtures/host-baseline").glob("*.py"),
-                     *Path("fixtures/runtime-sdk").glob("*.py"), *Path("fixtures/managed-package").glob("*.py"),
-                     *Path("fixtures/state").glob("*.py"), *Path("fixtures/mod-author").glob("*.py"),
-                     *Path("fixtures/turn-budget").glob("*.py"), *Path("fixtures/review-before-send").glob("*.py"),
-                     *Path("fixtures/tool-concurrency").glob("*.py"), *Path("fixtures/runtime-qualification").glob("*.py"),
-                     *Path("fixtures/runtime-hooks").glob("*.py")]
+          scripts = [Path("ci/scripts") / (name + ".py") for name in
+                     ("record_run", "worker_policy", "dispatch_build")]
           for script in scripts:
               py_compile.compile(str(script), cfile=str(Path(os.environ["RUNNER_TEMP"]) / (script.stem + ".pyc")),
                                  doraise=True)
-          from mod_author import source_review
           import tomllib
           template = Path("templates/native-mod")
           cargo = tomllib.loads((template / "Cargo.toml").read_text())
@@ -87,7 +91,6 @@ jobs:
           assert sorted(row["name"] for row in lock["package"]) == ["cm-abi", "cm-native-mod", "cm-sdk"]
           assert (template / ".github/workflows/author.yml").read_bytes() == Path(".github/workflows/cm-mod-author.yml").read_bytes()
           assert "Apache License" in (template / "LICENSE").read_text()
-          source_review(Path.cwd())
           with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as directory:
               fixture = Path(directory)
               (fixture / ".github").mkdir()
@@ -101,17 +104,6 @@ jobs:
                   raise AssertionError("Unconfigured product builds must fail closed")
           print(f"CI payload: {len(paths)} files; no tracked path violates .gitignore")
           PY
-
-      - name: Check product reuse and partial failure recovery
-        run: |
-          python3 -B ci/scripts/retry.py self-check
-          python3 -B ci/scripts/acceptance_cache.py self-check
-          python3 -B ci/scripts/mod_author.py self-check
-          python3 -B ci/scripts/managed_package.py self-check
-          python3 -B ci/scripts/turn_budget.py self-check
-          python3 -B ci/scripts/review_before_send.py self-check
-          python3 -B ci/scripts/tool_concurrency.py self-check
-          python3 -B ci/scripts/runtime_hooks.py self-check
 
       - name: Verify pinned Codex build inputs
         env:

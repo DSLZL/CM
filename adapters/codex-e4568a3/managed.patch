@@ -14,7 +14,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 index 7bd8ec8..cd27673 100644
 --- a/codex-rs/cli/src/main.rs
 +++ b/codex-rs/cli/src/main.rs
-@@ -1017,12 +1017,51 @@ impl FeatureToggles {
+@@ -1017,12 +1017,59 @@ impl FeatureToggles {
  
  #[derive(Debug, Parser)]
  struct CmCli {
@@ -27,6 +27,14 @@ index 7bd8ec8..cd27673 100644
  
  #[derive(Debug, Parser)]
  enum CmCommand {
++    /// Check or create an independent profile for this Host from a previous Host.
++    Upgrade {
++        candidate: std::path::PathBuf,
++        #[arg(long)]
++        check: bool,
++        #[arg(long = "variant")]
++        variants: Vec<std::path::PathBuf>,
++    },
 +    /// Validate and install a precompiled package; enable a new ID next startup.
 +    Install {
 +        package: std::path::PathBuf,
@@ -66,7 +74,7 @@ index 7bd8ec8..cd27673 100644
      List,
      Plan,
      Doctor,
-@@ -1035,3 +1074,18 @@ enum CmCommand {
+@@ -1035,3 +1082,18 @@ enum CmCommand {
 +#[derive(Debug, Parser)]
 +enum CmStateCommand {
 +    Path {
@@ -85,7 +93,7 @@ index 7bd8ec8..cd27673 100644
  #[derive(Debug, Parser)]
  struct FeaturesCli {
      #[command(subcommand)]
-@@ -1067,6 +1121,29 @@ fn stage_str(stage: Stage) -> &'static str {
+@@ -1067,6 +1129,29 @@ fn stage_str(stage: Stage) -> &'static str {
  fn main() -> anyhow::Result<()> {
      codex_build_info::initialize!();
      let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
@@ -115,7 +123,7 @@ index 7bd8ec8..cd27673 100644
      arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
          // Keep the CLI dispatcher off the runtime's stack while the TUI rebuilds a thread.
          Box::pin(cli_main(arg0_paths, remote_control_disabled)).await?;
-@@ -1126,20 +1203,97 @@ async fn cli_main(
+@@ -1126,20 +1211,105 @@ async fn cli_main(
          profile: cm_profile,
          overrides: cm_set,
      };
@@ -146,6 +154,7 @@ index 7bd8ec8..cd27673 100644
 +                | CmCommand::Rollback { .. }
 +                | CmCommand::State { .. }
 +                | CmCommand::Launch { .. }
++                | CmCommand::Upgrade { .. }
 +        );
 +        let home = if let Some(home) = &command.home {
 +            home.clone()
@@ -155,6 +164,13 @@ index 7bd8ec8..cd27673 100644
 +            find_codex_home()?.to_path_buf()
 +        };
 +        let result = match &command.command {
++            CmCommand::Upgrade {
++                candidate,
++                check,
++                variants,
++            } => {
++                cm_runtime::upgrade::run(&home, candidate, *check, variants, &cm_options)
++            }
 +            CmCommand::Install { package } => cm_runtime::mod_install::run(
 +                &home,
 +                cm_runtime::mod_install::Command::Install(package),
@@ -220,7 +236,7 @@ index 7bd8ec8..cd27673 100644
              Ok(value) => println!("{}", serde_json::to_string(&value)?),
              Err(error) => {
                  eprintln!("{}", serde_json::to_string(&error)?);
-@@ -1157,7 +1311,7 @@ async fn cli_main(
+@@ -1157,7 +1327,7 @@ async fn cli_main(
      }
  
      // Metadata/helper commands never execute Mod code. Other Core entry points
@@ -229,7 +245,7 @@ index 7bd8ec8..cd27673 100644
      let cm_business = matches!(
          &subcommand,
          None | Some(Subcommand::Agents(_))
-@@ -1176,11 +1330,22 @@ async fn cli_main(
+@@ -1176,11 +1346,22 @@ async fn cli_main(
              if command.subcommand.is_none() && !command.managed_daemon && !command.remote_control
                  && matches!(command.listen, codex_app_server::AppServerTransport::Stdio));
          let cm_supported_backend = root_remote.is_none() && (local_exec || local_stdio);

@@ -31,19 +31,19 @@ def recipes(root):
         "mod-pinned-snapshot-build": (root, cargo_args(runtime, "test", cfg, cfg["test_profile"]) +
             ["--lib", "--no-run", "--message-format=json"], target / "host", "cm_runtime"),
     }
-    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01"):
+    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
         probe = Path(os.environ["RUNNER_TEMP"]) / "cm-m02-native-probe-source"
         specs["m02-native-probe-build"] = (probe, ["cargo", "test", "--locked", "--manifest-path",
             "codex-rs/Cargo.toml", "--target", TARGET, "--profile", cfg["test_profile"],
             "--package", "codex-core", "--lib", "--no-run", "--message-format=json"],
             target / "m02-native-probe", "codex_core")
-    if cfg["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01"):
+    if cfg["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
         probe = Path(os.environ["RUNNER_TEMP"]) / "cm-review-tui-probe-source"
         specs["review-tui-probe-build"] = (probe, ["cargo", "test", "--locked", "--manifest-path",
             "codex-rs/Cargo.toml", "--target", TARGET, "--profile", cfg["test_profile"],
             "-p", "codex-tui", "--lib", "--no-run", "--message-format=json"],
             target / "review-tui-probe", "codex_tui")
-    if cfg["task_id"] in ("CM-G03", "CM-G04", "CM-G01"):
+    if cfg["task_id"] in ("CM-G03", "CM-G04", "CM-G01", "CM-G05"):
         specs["g03-local-backend-contract"] = (root, cargo_args({**unit, "packages": ["codex-app-server"]},
             "test", cfg, cfg["test_profile"]) + ["--lib", "cm_tool_concurrency_origin_tests::", "--", "--nocapture"],
             target / "host", None)

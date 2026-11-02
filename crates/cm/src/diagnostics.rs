@@ -23,6 +23,33 @@ fn optional(value: &Option<String>) -> Option<&str> {
     value.as_deref().map(identifier)
 }
 
+fn compatibility_dimension(error: &LoadError) -> &'static str {
+    let field = error.field.as_deref().unwrap_or("");
+    if field.starts_with("compat.exact_host") || field == "compat.prepared_slot" {
+        "exact_host"
+    } else if field.starts_with("compat.abi") || field == "binary.entry" || error.code == "abi" {
+        "abi"
+    } else if field == "compat.host_api_min" {
+        "host_api"
+    } else if field == "binary.target" || field == "binary.cpu" || error.code == "target" {
+        "target_cpu"
+    } else if field == "binary.glibc_min" {
+        "system"
+    } else if field == "binary.native" || error.code == "installation" {
+        "native_package"
+    } else if error.code.starts_with("state") {
+        "state"
+    } else if error.code == "unknown_capability" {
+        "capability"
+    } else if error.code.starts_with("contribution") || error.code == "hook_unsupported" {
+        "protocol_resource"
+    } else if error.graph.is_some() || matches!(error.code.as_str(), "conflict" | "declared_conflict") {
+        "selection_graph"
+    } else {
+        "input"
+    }
+}
+
 pub(crate) fn error(error: &LoadError) -> Value {
     let related_contributions: Vec<_> = error
         .related_contributions
@@ -43,6 +70,14 @@ pub(crate) fn error(error: &LoadError) -> Value {
             "unchanged inputs matching the selected generation and lock",
             "Restore the intended inputs; refresh the lock explicitly only after review.",
         ),
+        "upgrade_source_lock" => (
+            "the original configuration profile and overrides reproducing the source lock",
+            "Use the source profile's original --cm-profile and --cm-set options; do not rewrite its lock.",
+        ),
+        "upgrade_destination" => (
+            "a new independent private candidate directory",
+            "Choose an empty destination outside both Host packages, the source and the official profile.",
+        ),
         code if code.starts_with("state") => (
             "compatible owned state and an available runtime lease",
             "Stop this home's runtimes and inspect state/checkpoints before an explicit retry.",
@@ -62,6 +97,7 @@ pub(crate) fn error(error: &LoadError) -> Value {
     };
     json!({
         "stage": identifier(&error.stage), "code": identifier(&error.code),
+        "compatibility_dimension": compatibility_dimension(error),
         "already_native_executed": error.already_native_executed,
         "mod_id": optional(&error.mod_id), "contribution": optional(&error.contribution),
         "related_contributions": related_contributions,
@@ -119,6 +155,27 @@ pub(crate) fn metadata(mut value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compatibility_dimensions_use_structured_context() {
+        for (code, field, expected) in [
+            ("manifest_parse", "compat.exact_host.build_id", "exact_host"),
+            ("manifest_parse", "compat.abi_minor", "abi"),
+            ("manifest_parse", "binary.entry", "abi"),
+            ("host_api", "compat.host_api_min", "host_api"),
+            ("manifest_parse", "binary.cpu", "target_cpu"),
+            ("manifest_parse", "binary.glibc_min", "system"),
+            ("package_input", "binary.native", "native_package"),
+            ("state_compatibility", "state", "state"),
+            ("unknown_capability", "manifest", "capability"),
+            ("contribution_contract", "manifest", "protocol_resource"),
+            ("declared_conflict", "manifest", "selection_graph"),
+        ] {
+            let mut failure = LoadError::input(code, "example-tool", "untrusted text");
+            failure.field = Some(field.into());
+            assert_eq!(error(&failure)["compatibility_dimension"], expected);
+        }
+    }
 
     #[test]
     fn public_errors_omit_untrusted_text_and_control_sequences() {

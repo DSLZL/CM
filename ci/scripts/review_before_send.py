@@ -42,7 +42,7 @@ def restore_reference():
     import host
     import worker_policy as policy
     from linux_ci import load_config
-    if load_config(Path(os.environ["CM_SOURCE_DIR"]))["task_id"] not in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01"):
+    if load_config(Path(os.environ["CM_SOURCE_DIR"]))["task_id"] not in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
         return
     source, worker, _, workflow, _ = policy.identities()
     remote = policy.verify_origin(REFERENCE_ORIGIN, source, worker, workflow)
@@ -145,7 +145,7 @@ def native_probe_source(root):
     with (tui / "app/tests.rs").open("a") as stream:
         stream.write('\n#[path = "tests/cm_review_probe.rs"]\nmod cm_review_probe;\n')
     from linux_ci import load_config
-    if load_config(root)["task_id"] in ("CM-G03", "CM-G04", "CM-G01"):
+    if load_config(root)["task_id"] in ("CM-G03", "CM-G04", "CM-G01", "CM-G05"):
         shutil.copyfile(root / "fixtures/tool-concurrency/backend_probe.rs", tui / "app_server_session/cm_concurrency_backend.rs")
         with (tui / "app_server_session.rs").open("a") as stream:
             stream.write('\n#[cfg(test)]\ninclude!("app_server_session/cm_concurrency_backend.rs");\n')

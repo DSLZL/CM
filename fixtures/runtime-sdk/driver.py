@@ -179,13 +179,14 @@ def command(directory, endpoint, transport="stdio", mode="new", thread_id=None, 
 
 
 class Client:
-    def __init__(self, directory, home, provider, mode="handles", old_handle=None, *, launch_home=None):
+    def __init__(self, directory, home, provider, mode="handles", old_handle=None, *, launch_home=None, binary=None):
         self.directory = directory
         directory.mkdir(parents=True)
         self.provider = provider
         self.command = command(directory, provider.endpoint)
+        self.command[0] = str(binary or BINARY)
         if launch_home is not None:
-            self.command = [str(BINARY), "cm", "--home", str(launch_home), "launch", "--", *self.command[1:]]
+            self.command = [str(binary or BINARY), "cm", "--home", str(launch_home), "launch", "--", *self.command[1:]]
         self.stderr = (directory / "stderr.log").open("w")
         self.process = subprocess.Popen(self.command, env=environment(home, directory, mode, old_handle),
             cwd=directory, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr,

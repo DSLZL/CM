@@ -168,24 +168,31 @@ impl BinaryManifest {
         {
             return Err("identity: invalid format/id/SemVer".into());
         }
-        if abi.abi_minor_min > abi.abi_minor_max
-            || abi.abi_minor_max > minor_max
-            || semver::Version::parse(&abi.host_api_min).is_err()
-        {
-            return Err("compat: invalid ABI interval or Host API SemVer".into());
+        if abi.abi_minor_min > abi.abi_minor_max || abi.abi_minor_max > minor_max {
+            return Err("compat.abi_minor: invalid or unsupported ABI interval".into());
+        }
+        if semver::Version::parse(&abi.host_api_min).is_err() {
+            return Err("compat.host_api_min: invalid Host API SemVer".into());
         }
         let entry = if abi.abi_major == 1 {
             "cm_mod_entry_v1"
         } else {
             "cm_mod_entry_v2"
         };
-        if self.binary.entry != entry
-            || !self.binary.path.ends_with(".so")
-            || self.binary.target != loader::TARGET
-            || self.binary.cpu != "x86-64"
-            || system_version(&self.binary.glibc_min).is_none()
-        {
-            return Err("binary: unsupported entry/path/target/CPU/glibc declaration".into());
+        if self.binary.entry != entry {
+            return Err("binary.entry: unsupported ABI entry".into());
+        }
+        if !self.binary.path.ends_with(".so") {
+            return Err("binary.path: unsupported payload path".into());
+        }
+        if self.binary.target != loader::TARGET {
+            return Err("binary.target: unsupported target".into());
+        }
+        if self.binary.cpu != "x86-64" {
+            return Err("binary.cpu: unsupported CPU baseline".into());
+        }
+        if system_version(&self.binary.glibc_min).is_none() {
+            return Err("binary.glibc_min: invalid system declaration".into());
         }
         loader::payload_path(std::path::Path::new("/package"), &self.binary.path)?;
         if self.contributions.is_empty()

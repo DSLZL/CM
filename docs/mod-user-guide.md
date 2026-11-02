@@ -7,6 +7,7 @@ There is no local toolchain or per-combination build service in this flow.
 
 Keep an independent home for this exact Host. The official Codex home stays separate;
 automatic profile adoption between different Host builds is unsupported.
+For a prepared new Host, use the explicit [upgrade candidate workflow](upgrade-diagnostics.md).
 
 ```sh
 /opt/cm/bin/codex cm-host-identity

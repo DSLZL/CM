@@ -45,6 +45,15 @@ impl HostIdentity {
     pub(crate) fn read(executable: &Path) -> Result<Self, LoadError> {
         let value: serde_json::Value = serde_json::from_str(IDENTITY)
             .map_err(|e| LoadError::input("host_identity", "", &e.to_string()))?;
+        let executable_sha256 = loader::executable_hash(executable)
+            .map_err(|e| LoadError::input("host_identity", "", &e))?;
+        Self::from_record(&value, executable_sha256)
+    }
+
+    pub(crate) fn from_record(
+        value: &serde_json::Value,
+        executable_sha256: String,
+    ) -> Result<Self, LoadError> {
         let field = |name: &str| -> Result<String, LoadError> {
             value[name]
                 .as_str()
@@ -55,12 +64,11 @@ impl HostIdentity {
             serde_json::from_value(value["capabilities"].clone())
                 .map_err(|e| LoadError::input("host_identity", "", &e.to_string()))?;
         capabilities.sort();
-        let (patch_map_sha256, prepared_slots) = crate::hooks::identity(&value)
+        let (patch_map_sha256, prepared_slots) = crate::hooks::identity(value)
             .map_err(|e| LoadError::input("host_identity", "", &e))?;
         Ok(Self {
             build_id: field("host_build_id")?,
-            executable_sha256: loader::executable_hash(executable)
-                .map_err(|e| LoadError::input("host_identity", "", &e))?,
+            executable_sha256,
             target: loader::TARGET.into(),
             api_version: field("host_api_version")?,
             capabilities,
@@ -164,6 +172,20 @@ impl PreparedPlan {
     }
 
     pub(crate) fn revalidate(&self) -> Result<(), LoadError> {
+        self.revalidate_inputs()?;
+        let current = HostIdentity::read(Path::new("/proc/self/exe"))
+            .map_err(|e| LoadError::input("input_drift", "", &e.to_string()))?;
+        if current != self.plan.host {
+            return Err(LoadError::input(
+                "input_drift",
+                "",
+                "current Host differs from the planned Host",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn revalidate_inputs(&self) -> Result<(), LoadError> {
         let drift = |owner: &str, text: &str| LoadError::input("input_drift", owner, text);
         if let Some(managed) = &self.managed {
             managed.revalidate()?;
@@ -183,11 +205,6 @@ impl PreparedPlan {
             && exists(&self.home.join("cm-runtime.toml")).map_err(|e| drift("", &e))?
         {
             return Err(drift("", "previously absent configuration now exists"));
-        }
-        let current = HostIdentity::read(Path::new("/proc/self/exe"))
-            .map_err(|e| drift("", &e.to_string()))?;
-        if current != self.plan.host {
-            return Err(drift("", "current Host differs from the planned Host"));
         }
         Ok(())
     }
@@ -782,6 +799,34 @@ fn prepare_snapshot(
     options: &crate::config::Options,
     managed: Option<crate::profile::Snapshot>,
 ) -> Result<PreparedPlan, LoadError> {
+    prepare_selection(home, executable, options, managed, &BTreeMap::new(), None)
+}
+
+pub(crate) fn prepare_upgrade(
+    home: &Path,
+    options: &crate::config::Options,
+    source: &crate::profile::Snapshot,
+    variants: &BTreeMap<String, (PathBuf, String)>,
+    host: Option<HostIdentity>,
+) -> Result<PreparedPlan, LoadError> {
+    prepare_selection(
+        home,
+        Path::new("/proc/self/exe"),
+        options,
+        Some(source.clone()),
+        variants,
+        host,
+    )
+}
+
+fn prepare_selection(
+    home: &Path,
+    executable: &Path,
+    options: &crate::config::Options,
+    managed: Option<crate::profile::Snapshot>,
+    variants: &BTreeMap<String, (PathBuf, String)>,
+    host: Option<HostIdentity>,
+) -> Result<PreparedPlan, LoadError> {
     let inventory = if managed.is_none() {
         Some(loader::inventory(home).map_err(|e| failure("inventory", "", None, &e))?)
     } else {
@@ -791,7 +836,10 @@ fn prepare_snapshot(
         snapshot
             .packages()
             .into_iter()
-            .map(|(id, path, sha)| (id, path, Some(sha)))
+            .map(|(id, path, sha)| {
+                let (path, sha) = variants.get(&id).cloned().unwrap_or((path, sha));
+                (id, path, Some(sha))
+            })
             .collect()
     } else {
         inventory
@@ -941,7 +989,10 @@ fn prepare_snapshot(
         .collect();
     let mut plan = resolve(
         &selected,
-        HostIdentity::read(executable)?,
+        match host {
+            Some(identity) => identity,
+            None => HostIdentity::read(executable)?,
+        },
         ConfigIdentity {
             present: config_present,
             sha256: config_sha,
@@ -970,9 +1021,11 @@ fn prepare_snapshot(
     for id in &plan.initialization_order {
         let candidate = candidates.remove(id).unwrap();
         let hooks = candidate.manifest.hooks();
-        let (module, inputs) = candidate
-            .prepare()
-            .map_err(|e| resource_error(failure("package_input", id, None, &e), &hooks))?;
+        let (module, inputs) = candidate.prepare().map_err(|e| {
+            let mut error = failure("package_input", id, None, &e);
+            error.field = Some("binary.native".into());
+            resource_error(error, &hooks)
+        })?;
         pins.extend(inputs.into_iter().map(|pin| (id.clone(), pin)));
         modules.insert(id.clone(), module);
     }

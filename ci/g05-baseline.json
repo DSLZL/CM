@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "source_repository": "DSLZL/CM",
+  "worker_repository": "DSLZL/CM-build-linux-x64",
+  "source_sha": "2bb816b20c2de52e65b855e15a9969bc332a89d5",
+  "workflow_sha": "5313ea466e658725b90f489705fd3f93c9e3eada",
+  "run_id": 41431503923,
+  "run_attempt": 1,
+  "request_id": "cm-g01-qualification-20261102-r7",
+  "host_release_id": "cm-host-0.12.0-g01",
+  "host_build_id": "sha256:b58511a72785bae0b17bf3159f0025b771f54ae7469809bec230c06b7b26ac8d",
+  "executable_sha256": "37c7cb71de25f29c141dfdadf95375b51071a9b00c1ffb122e4a3757c93781f4",
+  "patch_map_sha256": "26aa9a621dd9980376680e66baefb6e88e966c68e6eaa9ccc2ea01e7d2973528",
+  "product_artifact": {
+    "id": 13138213707,
+    "digest": "278023b3ad0cfa879e171a308984e7927f6b20612c856db31590b5bdb4d6b373"
+  },
+  "input_artifact": {
+    "id": 13139610070,
+    "digest": "17b6e924ff4fc3b9328a8a18359c90305416672efb3cb45649309ed1fe3c7f98"
+  }
+}

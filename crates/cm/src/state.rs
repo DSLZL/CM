@@ -283,13 +283,22 @@ struct Store {
 
 impl Store {
     fn open(home: &Path, exclusive: bool) -> Result<Self> {
+        Self::open_mode(home, exclusive, true)
+    }
+
+    fn open_mode(home: &Path, exclusive: bool, initialize: bool) -> Result<Self> {
+        let child = |parent: &Directory, name: &str| {
+            if initialize {
+                parent.child(name)
+            } else {
+                open_child(parent, name).map_err(|error| error.to_string())
+            }
+        };
         let home =
             Directory::open(home).map_err(|_| failure("state_ownership", "unsafe CM home"))?;
-        let state = home
-            .child("state")
+        let state = child(&home, "state")
             .map_err(|_| failure("state_ownership", "unsafe state parent"))?;
-        let root = state
-            .child("cm-files-v1")
+        let root = child(&state, "cm-files-v1")
             .map_err(|_| failure("state_ownership", "unsafe state namespace"))?;
         let identity_path = root.path.join("identity.json");
         if !present(&identity_path)?
@@ -306,7 +315,8 @@ impl Store {
             libc::openat(
                 root.file.as_raw_fd(),
                 c".lease".as_ptr(),
-                libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                libc::O_RDWR | libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC
+                    | if initialize { libc::O_CREAT } else { 0 },
                 0o600,
             )
         };
@@ -334,6 +344,9 @@ impl Store {
             ));
         }
         if !present(&identity_path)? {
+            if !initialize {
+                return Err(failure("state_ownership", "source state has no home identity"));
+            }
             let home_metadata = home.file.metadata().map_err(io)?;
             let state_metadata = root.file.metadata().map_err(io)?;
             let identity = Identity {
@@ -362,11 +375,9 @@ impl Store {
         let identity: Identity = serde_json::from_slice(&bytes)
             .map_err(|_| failure("state_ownership", "invalid state home identity"))?;
         identity.validate(&bytes, &home, &root, &lease)?;
-        let trees = root
-            .child("trees")
+        let trees = child(&root, "trees")
             .map_err(|_| failure("state_ownership", "unsafe working trees"))?;
-        let checkpoints = root
-            .child("checkpoints")
+        let checkpoints = child(&root, "checkpoints")
             .map_err(|_| failure("state_ownership", "unsafe checkpoints"))?;
         let result = Self {
             home,
@@ -507,6 +518,127 @@ impl Guard {
         for pin in &self.pins {
             pin.revalidate()?;
         }
+        Ok(())
+    }
+}
+
+pub(crate) struct UpgradeState {
+    guard: Guard,
+    view: Option<View>,
+}
+
+impl UpgradeState {
+    pub(crate) fn capture(home: &Path, view: Option<&View>) -> Result<Option<Self>> {
+        if view.is_none() && !present(&home.join("state/cm-files-v1"))? {
+            return Ok(None);
+        }
+        if let Some(view) = view {
+            view.validate()?;
+        }
+        if view.is_some_and(|view| !view.cleanups.is_empty()) {
+            return Err(failure(
+                "state_ownership",
+                "finish pending state cleanup before upgrade",
+            ));
+        }
+        let store = Store::open_mode(home, true, false)?;
+        let pins = view
+            .map(|view| {
+                let tree = store.tree(view)?;
+                capture_tree(&tree, &view.owners).map(|captured| captured.pins)
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let result = Self {
+            guard: Guard { store, pins },
+            view: view.cloned(),
+        };
+        result.revalidate()?;
+        Ok(Some(result))
+    }
+
+    pub(crate) fn objects(&self) -> Vec<(String, String)> {
+        self.view
+            .iter()
+            .flat_map(|view| &view.owners)
+            .map(|(id, owner)| (id.clone(), owner.object_sha256.clone()))
+            .collect()
+    }
+
+    pub(crate) fn revalidate(&self) -> Result<()> {
+        self.guard.revalidate()
+    }
+
+    pub(crate) fn check_contracts(&self, contracts: &BTreeMap<String, Owner>) -> Result<()> {
+        let Some(view) = &self.view else {
+            return self.revalidate();
+        };
+        let tree = self.guard.store.tree(view)?;
+        for (id, next) in contracts {
+            if let Some(old) = view.owners.get(id)
+                && !old.compatible(next)
+                && !empty_owner(&tree, id, old)?
+            {
+                return Err(failure(
+                    "state_compatibility",
+                    "source state schema/version differs; no inverse migration is declared",
+                )
+                .owner(id, None));
+            }
+        }
+        self.revalidate()
+    }
+
+    pub(crate) fn copy_into(&mut self, transaction: &mut Transaction) -> Result<()> {
+        let Some(source_view) = &self.view else {
+            return self.revalidate();
+        };
+        exclusive(transaction)?;
+        let target = transaction
+            .state_guard
+            .as_ref()
+            .expect("candidate state guard");
+        let source = self.guard.store.tree(source_view)?;
+        let temporary = profile::temporary("upgrade-state");
+        let stage = target
+            .store
+            .trees
+            .child(&temporary)
+            .map_err(|_| failure("state_ownership", "cannot prepare candidate state"))?;
+        let mut view = new_view(&target.store)?;
+        view.owners = source_view.owners.clone();
+        let result = (|| {
+            let mut copied = Capture::default();
+            for (id, owner) in &view.owners {
+                capture_owner(&source, Some(&stage), id, owner, &mut copied)?;
+            }
+            self.guard.pins.extend(copied.pins);
+            self.revalidate()?;
+            target.revalidate()?;
+            fault(1)?;
+            let tree = random_id()?;
+            if !target
+                .store
+                .trees
+                .publish(&temporary, &tree)
+                .map_err(|_| failure("state_ownership", "cannot publish candidate state"))?
+            {
+                return Err(failure("state_ownership", "candidate state identity collision"));
+            }
+            Ok(tree)
+        })();
+        if result.is_err() {
+            let _ = profile::discard(&target.store.trees, &temporary);
+        }
+        view.tree = result?;
+        let captured = capture_tree(&target.store.tree(&view)?, &view.owners)?;
+        transaction
+            .state_guard
+            .as_mut()
+            .expect("candidate state guard")
+            .pins
+            .extend(captured.pins);
+        set_view(transaction, view);
         Ok(())
     }
 }
@@ -1917,6 +2049,101 @@ mod tests {
         }
         set_view(&mut transaction, view);
         (transaction, generation, generation_id, id)
+    }
+
+    #[test]
+    fn upgrade_state_copy_has_fresh_identity_and_retains_unselected_owners() {
+        let source = Home::new();
+        let target = Home::new();
+        let (transaction, generation, _, _) = restore_fixture(&source);
+        let host = transaction.host.clone();
+        drop(transaction);
+        let mut captured = UpgradeState::capture(&source.0, generation.state.as_ref())
+            .unwrap()
+            .unwrap();
+        let mut candidate = Transaction::begin_candidate(&target.0, host).unwrap();
+        captured.copy_into(&mut candidate).unwrap();
+        let old = generation.state.unwrap();
+        let new = candidate.next.state.as_ref().unwrap();
+        assert_ne!(old.home_id, new.home_id);
+        assert_ne!(old.tree, new.tree);
+        assert_eq!(old.owners, new.owners);
+        let original = captured.guard.store.tree(&old).unwrap();
+        let copied = candidate
+            .state_guard
+            .as_ref()
+            .unwrap()
+            .store
+            .tree(new)
+            .unwrap();
+        assert_eq!(
+            capture_tree(&original, &old.owners).unwrap().entries,
+            capture_tree(&copied, &new.owners).unwrap().entries
+        );
+        let relative = "example-tool/notes/1/value";
+        let a = original.path.join(relative);
+        let b = copied.path.join(relative);
+        assert_ne!(
+            fs::metadata(&a).unwrap().ino(),
+            fs::metadata(&b).unwrap().ino()
+        );
+        fs::write(b, b"new candidate data").unwrap();
+        assert_eq!(fs::read(a).unwrap(), b"example-tool");
+        captured.revalidate().unwrap();
+    }
+
+    #[test]
+    fn upgrade_state_copy_faults_preserve_source_and_leave_no_active_candidate() {
+        for point in [1, 3] {
+            let source = Home::new();
+            let target = Home::new();
+            let (transaction, generation, _, _) = restore_fixture(&source);
+            let host = transaction.host.clone();
+            drop(transaction);
+            let mut captured = UpgradeState::capture(&source.0, generation.state.as_ref())
+                .unwrap()
+                .unwrap();
+            let mut candidate = Transaction::begin_candidate(&target.0, host).unwrap();
+            FAULT.set(point);
+            let result = captured.copy_into(&mut candidate);
+            FAULT.set(0);
+            assert!(result.is_err());
+            assert!(candidate.next.state.is_none());
+            assert!(!target.0.join("cm-profile.json").exists());
+            let store = &candidate.state_guard.as_ref().unwrap().store;
+            assert!(
+                names(&store.trees)
+                    .unwrap()
+                    .iter()
+                    .all(|name| !name.ends_with(".tmp"))
+            );
+            captured.revalidate().unwrap();
+        }
+    }
+
+    #[test]
+    fn upgrade_state_busy_incompatible_and_changed_inputs_fail_closed() {
+        let source = Home::new();
+        let (transaction, generation, _, _) = restore_fixture(&source);
+        assert!(UpgradeState::capture(&source.0, generation.state.as_ref()).is_err());
+        drop(transaction);
+        let captured = UpgradeState::capture(&source.0, generation.state.as_ref())
+            .unwrap()
+            .unwrap();
+        assert!(
+            captured
+                .check_contracts(&BTreeMap::from([("example-tool".into(), owner(2))]))
+                .is_err()
+        );
+        let tree = captured
+            .guard
+            .store
+            .tree(generation.state.as_ref().unwrap())
+            .unwrap();
+        let path = tree.path.join("example-tool/notes/1/value");
+        fs::rename(&path, tree.path.join("replaced-inode")).unwrap();
+        fs::write(path, b"example-tool").unwrap();
+        assert!(captured.revalidate().is_err());
     }
 
     #[test]

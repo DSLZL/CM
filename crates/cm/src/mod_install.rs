@@ -22,7 +22,7 @@ pub enum Command<'a> {
     Scan,
 }
 
-fn ingest(
+pub(crate) fn ingest(
     transaction: &mut Transaction,
     input: &Path,
     replacement: Option<(&str, &str)>,

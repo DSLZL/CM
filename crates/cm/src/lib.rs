@@ -36,6 +36,7 @@ pub mod state;
 pub mod tool_concurrency;
 pub mod tool_policy;
 pub mod tui_review;
+pub mod upgrade;
 
 use loader::registration::RegistrationSet;
 

@@ -139,6 +139,7 @@ pub(crate) struct Active {
     pub generation: String,
 }
 
+#[derive(Clone)]
 pub(crate) struct Snapshot {
     pub generation: Generation,
     pub host: ManagedHost,
@@ -236,6 +237,14 @@ pub(crate) fn snapshot_for(home: &Path, honor_launch: bool) -> Result<Option<Sna
     if !managed(home)? {
         return Ok(None);
     }
+    let (active, active_pin) = read_active(home)?;
+    if active.host != crate::package::managed_identity()? {
+        return Err(failure("active descriptor/Host identity mismatch"));
+    }
+    snapshot_record(home, honor_launch, active, active_pin).map(Some)
+}
+
+fn read_active(home: &Path) -> Result<(Active, InputPin), LoadError> {
     let (bytes, active_pin) =
         loader::read_input(&home.join("cm-profile.json"), LIMIT).map_err(|e| failure(&e))?;
     let active: Active =
@@ -244,10 +253,18 @@ pub(crate) fn snapshot_for(home: &Path, honor_launch: bool) -> Result<Option<Sna
         || active.domain != "cm.profile.v1"
         || !loader::digest(&active.generation)
         || canonical(&active) != bytes
-        || active.host != crate::package::managed_identity()?
     {
         return Err(failure("active descriptor/Host identity mismatch"));
     }
+    Ok((active, active_pin))
+}
+
+fn snapshot_record(
+    home: &Path,
+    honor_launch: bool,
+    active: Active,
+    active_pin: InputPin,
+) -> Result<Snapshot, LoadError> {
     let generation_id = match std::env::var_os("CM_MANAGED_GENERATION").filter(|_| honor_launch) {
         Some(value) => {
             if std::env::var_os("CM_MANAGED_HOME").as_deref() != Some(home.as_os_str()) {
@@ -281,7 +298,76 @@ pub(crate) fn snapshot_for(home: &Path, honor_launch: bool) -> Result<Option<Sna
     let mut result = Snapshot::candidate(home, active.host, generation)?;
     result.generation_id = generation_id;
     result.pins.extend([active_pin, generation_pin]);
-    Ok(Some(result))
+    Ok(result)
+}
+
+pub(crate) struct UpgradeSource {
+    pub snapshot: Snapshot,
+    pub package: crate::package::PackagePin,
+    root: Directory,
+    writer: File,
+}
+
+impl UpgradeSource {
+    pub(crate) fn open(home: &Path) -> Result<Self, LoadError> {
+        if !managed(home)? {
+            return Err(failure("upgrade source must be an existing managed profile"));
+        }
+        let root = Directory::open(home).map_err(|e| failure(&e))?;
+        let writer = writer_file(&root, false).map_err(|e| failure(&e))?;
+        acquire_writer(&writer).map_err(|e| failure(&e))?;
+        let (active, pin) = read_active(home)?;
+        let package = crate::package::PackagePin::capture(&active.host)?;
+        let snapshot = snapshot_record(home, false, active, pin)?;
+        Ok(Self {
+            snapshot,
+            package,
+            root,
+            writer,
+        })
+    }
+
+    pub(crate) fn revalidate(&self) -> Result<(), LoadError> {
+        self.root.check().map_err(|e| failure(&e))?;
+        let current = writer_file(&self.root, false).map_err(|e| failure(&e))?;
+        if identity(&self.writer)? != identity(&current)? {
+            return Err(failure("source write lock identity changed"));
+        }
+        self.snapshot.revalidate()?;
+        self.package.revalidate()
+    }
+}
+
+fn writer_file(root: &Directory, create: bool) -> Result<File, String> {
+    let fd = unsafe {
+        libc::openat(
+            root.file.as_raw_fd(),
+            c".cm-write.lock".as_ptr(),
+            libc::O_RDWR | libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC
+                | if create { libc::O_CREAT } else { 0 },
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err("profile write lock is absent or unsafe".into());
+    }
+    let file = unsafe { File::from_raw_fd(fd) };
+    let metadata = file.metadata().map_err(|e| e.to_string())?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err("profile write lock is busy or unsafe".into());
+    }
+    Ok(file)
+}
+
+fn acquire_writer(file: &File) -> Result<(), String> {
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err("profile write lock is busy or unsafe".into());
+    }
+    Ok(())
 }
 
 pub(crate) struct Directory {
@@ -438,8 +524,7 @@ impl Transaction {
         {
             directory.check().map_err(|e| failure(&e))?;
         }
-        let current_lock = loader::open_at(&self.root.file, OsStr::new(".cm-write.lock"), false)
-            .map_err(|e| failure(&e))?;
+        let current_lock = writer_file(&self.root, false).map_err(|e| failure(&e))?;
         if identity(&self.lock)? != identity(&current_lock)? {
             return Err(failure("write lock identity changed"));
         }
@@ -455,6 +540,14 @@ impl Transaction {
     }
 
     pub(crate) fn begin(home: &Path, host: ManagedHost) -> Result<Self, LoadError> {
+        Self::begin_mode(home, host, false)
+    }
+
+    pub(crate) fn begin_candidate(home: &Path, host: ManagedHost) -> Result<Self, LoadError> {
+        Self::begin_mode(home, host, true)
+    }
+
+    fn begin_mode(home: &Path, host: ManagedHost, fresh: bool) -> Result<Self, LoadError> {
         let result = (|| -> Result<Self, String> {
             if !home.is_absolute() || home == Path::new("/") {
                 return Err("CM home must be an absolute independent directory".into());
@@ -485,6 +578,9 @@ impl Transaction {
                 parent.sync_all().map_err(|e| e.to_string())?;
             }
             let raw = loader::open_directory(home)?;
+            if fresh && managed(home).map_err(|e| e.to_string())? {
+                return Err("upgrade destination is already managed".into());
+            }
             if !managed(home).map_err(|e| e.to_string())? {
                 if std::fs::read_dir(format!("/proc/self/fd/{}", raw.as_raw_fd()))
                     .map_err(|e| e.to_string())?
@@ -506,28 +602,8 @@ impl Transaction {
                 root.file.sync_all().map_err(|e| e.to_string())?;
             }
             let root = Directory::open(home)?;
-            let lock_name = c".cm-write.lock";
-            let fd = unsafe {
-                libc::openat(
-                    root.file.as_raw_fd(),
-                    lock_name.as_ptr(),
-                    libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                    0o600,
-                )
-            };
-            if fd < 0 {
-                return Err(std::io::Error::last_os_error().to_string());
-            }
-            let lock = unsafe { File::from_raw_fd(fd) };
-            let metadata = lock.metadata().map_err(|e| e.to_string())?;
-            if !metadata.is_file()
-                || metadata.nlink() != 1
-                || metadata.uid() != unsafe { libc::geteuid() }
-                || metadata.mode() & 0o077 != 0
-                || unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0
-            {
-                return Err("profile write lock is busy or unsafe".into());
-            }
+            let lock = writer_file(&root, true)?;
+            acquire_writer(&lock)?;
             let store = root.child("store")?;
             let objects = store.child("objects")?;
             let generations = store.child("generations")?;
@@ -573,8 +649,16 @@ impl Transaction {
     }
 
     pub(crate) fn commit(
+        self,
+        options: &crate::config::Options,
+    ) -> Result<serde_json::Value, LoadError> {
+        self.commit_checked(options, |_| Ok(()))
+    }
+
+    pub(crate) fn commit_checked(
         mut self,
         options: &crate::config::Options,
+        check: impl Fn(&crate::runtime_plan::PreparedPlan) -> Result<(), LoadError>,
     ) -> Result<serde_json::Value, LoadError> {
         let config = self.root.path.join("cm-runtime.toml");
         self.next.validate().map_err(|e| failure(&e))?;
@@ -640,6 +724,7 @@ impl Transaction {
             if let Some(guard) = &self.state_guard {
                 guard.revalidate()?;
             }
+            check(&prepared)?;
             let source = CString::new(name.as_str()).expect("temporary name");
             if unsafe {
                 libc::renameat(
@@ -790,5 +875,32 @@ mod tests {
         assert_eq!(std::fs::read(home.join("old")).unwrap(), b"old");
         assert_eq!(std::fs::read(home.join("new")).unwrap(), b"new");
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn upgrade_commit_revalidates_source_at_publication() {
+        let home = root();
+        let source = root();
+        let path = source.join("source-input");
+        std::fs::write(&path, b"pinned source").unwrap();
+        let pin = loader::read_input(&path, LIMIT).unwrap().1;
+        let transaction = Transaction::begin_candidate(&home, host()).unwrap();
+        std::fs::rename(&path, source.join("old-inode")).unwrap();
+        std::fs::write(&path, b"pinned source").unwrap();
+        let checked = std::cell::Cell::new(false);
+        assert!(
+            transaction
+                .commit_checked(&crate::config::Options::default(), |_| {
+                    checked.set(true);
+                    pin.revalidate().map_err(|e| failure(&e))
+                })
+                .is_err()
+        );
+        assert!(checked.get());
+        assert!(!home.join("cm-profile.json").exists());
+        assert_eq!(std::fs::read(&path).unwrap(), b"pinned source");
+        assert!(Transaction::begin_candidate(&home, host()).is_err());
+        std::fs::remove_dir_all(home).unwrap();
+        std::fs::remove_dir_all(source).unwrap();
     }
 }
