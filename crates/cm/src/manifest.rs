@@ -413,7 +413,12 @@ mod tests {
         manifest.kind = ModKind::ExactHost;
         host.patch_map_sha256 = None;
         assert!(manifest.compatible(&host).is_err());
-        manifest.compat.exact_host.as_mut().unwrap().patch_map_sha256 = None;
+        manifest
+            .compat
+            .exact_host
+            .as_mut()
+            .unwrap()
+            .patch_map_sha256 = None;
         manifest.validate().unwrap();
         manifest.compatible(&host).unwrap();
         manifest.kind = ModKind::AdvancedHook;
