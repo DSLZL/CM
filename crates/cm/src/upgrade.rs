@@ -96,7 +96,12 @@ impl Destination {
         } else {
             match std::fs::symlink_metadata(&self.path) {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                _ => return Err(failure("input_drift", "candidate appeared or became unsafe")),
+                _ => {
+                    return Err(failure(
+                        "input_drift",
+                        "candidate appeared or became unsafe",
+                    ));
+                }
             }
         }
         Ok(())
@@ -107,7 +112,9 @@ fn lock(plan: &runtime_plan::PreparedPlan) -> String {
     loader::hash(&mod_lock::canonical(plan.plan()))
 }
 
-fn revalidate_objects(objects: &[(PathBuf, loader::InstallationSnapshot)]) -> Result<(), LoadError> {
+fn revalidate_objects(
+    objects: &[(PathBuf, loader::InstallationSnapshot)],
+) -> Result<(), LoadError> {
     for (path, snapshot) in objects {
         for pin in &snapshot.pins {
             pin.revalidate().map_err(|e| failure("input_drift", &e))?;
@@ -115,10 +122,7 @@ fn revalidate_objects(objects: &[(PathBuf, loader::InstallationSnapshot)]) -> Re
         if let Some(tree) = &snapshot.tree
             && loader::directory_entries(path).as_ref() != Ok(tree)
         {
-            return Err(failure(
-                "input_drift",
-                "retained object inventory changed",
-            ));
+            return Err(failure("input_drift", "retained object inventory changed"));
         }
     }
     Ok(())
@@ -187,7 +191,10 @@ pub fn run(
             || overlaps(&input, source_root)
             || overlaps(&input, target_root)
         {
-            return Err(failure("upgrade_variant", "variant overlaps protected inputs"));
+            return Err(failure(
+                "upgrade_variant",
+                "variant overlaps protected inputs",
+            ));
         }
         let snapshot = loader::installation_snapshot(&input)?;
         let Some(old) = source.snapshot.generation.installed.get(&snapshot.id) else {
@@ -278,7 +285,10 @@ pub fn run(
         transaction.next.enabled.clear();
         mod_install::ingest(&mut transaction, path, None)?;
         if transaction.next.installed.get(&snapshot.id) != Some(&snapshot.sha256) {
-            return Err(failure("input_drift", "retained object changed during copy"));
+            return Err(failure(
+                "input_drift",
+                "retained object changed during copy",
+            ));
         }
     }
     transaction.next.installed.clear();
@@ -339,9 +349,7 @@ mod tests {
             "/tmp/source/child",
             "/tmp/../candidate",
         ] {
-            assert!(
-                Destination::capture(Path::new(path), Path::new("/tmp/source"), &[]).is_err()
-            );
+            assert!(Destination::capture(Path::new(path), Path::new("/tmp/source"), &[]).is_err());
         }
         assert!(
             Destination::capture(

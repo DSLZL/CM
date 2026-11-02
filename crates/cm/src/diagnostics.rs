@@ -43,7 +43,9 @@ fn compatibility_dimension(error: &LoadError) -> &'static str {
         "capability"
     } else if error.code.starts_with("contribution") || error.code == "hook_unsupported" {
         "protocol_resource"
-    } else if error.graph.is_some() || matches!(error.code.as_str(), "conflict" | "declared_conflict") {
+    } else if error.graph.is_some()
+        || matches!(error.code.as_str(), "conflict" | "declared_conflict")
+    {
         "selection_graph"
     } else {
         "input"

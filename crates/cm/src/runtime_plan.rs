@@ -64,8 +64,8 @@ impl HostIdentity {
             serde_json::from_value(value["capabilities"].clone())
                 .map_err(|e| LoadError::input("host_identity", "", &e.to_string()))?;
         capabilities.sort();
-        let (patch_map_sha256, prepared_slots) = crate::hooks::identity(value)
-            .map_err(|e| LoadError::input("host_identity", "", &e))?;
+        let (patch_map_sha256, prepared_slots) =
+            crate::hooks::identity(value).map_err(|e| LoadError::input("host_identity", "", &e))?;
         Ok(Self {
             build_id: field("host_build_id")?,
             executable_sha256,

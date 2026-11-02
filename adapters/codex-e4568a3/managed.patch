@@ -123,7 +123,7 @@ index 7bd8ec8..cd27673 100644
      arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
          // Keep the CLI dispatcher off the runtime's stack while the TUI rebuilds a thread.
          Box::pin(cli_main(arg0_paths, remote_control_disabled)).await?;
-@@ -1126,20 +1211,105 @@ async fn cli_main(
+@@ -1126,20 +1211,103 @@ async fn cli_main(
          profile: cm_profile,
          overrides: cm_set,
      };
@@ -168,9 +168,7 @@ index 7bd8ec8..cd27673 100644
 +                candidate,
 +                check,
 +                variants,
-+            } => {
-+                cm_runtime::upgrade::run(&home, candidate, *check, variants, &cm_options)
-+            }
++            } => cm_runtime::upgrade::run(&home, candidate, *check, variants, &cm_options),
 +            CmCommand::Install { package } => cm_runtime::mod_install::run(
 +                &home,
 +                cm_runtime::mod_install::Command::Install(package),
@@ -236,7 +234,7 @@ index 7bd8ec8..cd27673 100644
              Ok(value) => println!("{}", serde_json::to_string(&value)?),
              Err(error) => {
                  eprintln!("{}", serde_json::to_string(&error)?);
-@@ -1157,7 +1327,7 @@ async fn cli_main(
+@@ -1157,7 +1325,7 @@ async fn cli_main(
      }
  
      // Metadata/helper commands never execute Mod code. Other Core entry points
@@ -245,7 +243,7 @@ index 7bd8ec8..cd27673 100644
      let cm_business = matches!(
          &subcommand,
          None | Some(Subcommand::Agents(_))
-@@ -1176,11 +1346,22 @@ async fn cli_main(
+@@ -1176,11 +1344,22 @@ async fn cli_main(
              if command.subcommand.is_none() && !command.managed_daemon && !command.remote_control
                  && matches!(command.listen, codex_app_server::AppServerTransport::Stdio));
          let cm_supported_backend = root_remote.is_none() && (local_exec || local_stdio);

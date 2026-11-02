@@ -246,12 +246,14 @@ pub(crate) struct PackagePin {
 
 impl PackagePin {
     pub(crate) fn capture(host: &ManagedHost) -> Result<Self, LoadError> {
-        let invalid = || LoadError::input("upgrade_package", "", "Host identity or package changed");
+        let invalid =
+            || LoadError::input("upgrade_package", "", "Host identity or package changed");
         if host.target != loader::TARGET
             || !loader::digest(&host.executable_sha256)
             || !loader::digest(&host.inventory_sha256)
             || host.executable.file_name() != Some(std::ffi::OsStr::new("codex"))
-            || host.executable.parent().and_then(Path::file_name) != Some(std::ffi::OsStr::new("bin"))
+            || host.executable.parent().and_then(Path::file_name)
+                != Some(std::ffi::OsStr::new("bin"))
         {
             return Err(invalid());
         }
@@ -261,8 +263,9 @@ impl PackagePin {
             .and_then(Path::parent)
             .ok_or_else(invalid)?;
         loader::open_directory(root).map_err(|_| invalid())?;
-        let (bytes, inventory) = loader::read_input(&root.join("cm-runtime-files.json"), 4 * 1024 * 1024)
-            .map_err(|_| invalid())?;
+        let (bytes, inventory) =
+            loader::read_input(&root.join("cm-runtime-files.json"), 4 * 1024 * 1024)
+                .map_err(|_| invalid())?;
         let record: Inventory = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
         if inventory.sha256 != host.inventory_sha256
             || record.files.len() > 4096
@@ -278,7 +281,8 @@ impl PackagePin {
             .map(|path| file_identity(path))
             .collect::<Result<Vec<_>, _>>()?;
         validate_at(&host.executable, false)?;
-        if loader::executable_hash(&host.executable).map_err(|_| invalid())? != host.executable_sha256
+        if loader::executable_hash(&host.executable).map_err(|_| invalid())?
+            != host.executable_sha256
             || paths
                 .iter()
                 .map(|path| file_identity(path))

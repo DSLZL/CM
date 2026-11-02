@@ -296,8 +296,8 @@ impl Store {
         };
         let home =
             Directory::open(home).map_err(|_| failure("state_ownership", "unsafe CM home"))?;
-        let state = child(&home, "state")
-            .map_err(|_| failure("state_ownership", "unsafe state parent"))?;
+        let state =
+            child(&home, "state").map_err(|_| failure("state_ownership", "unsafe state parent"))?;
         let root = child(&state, "cm-files-v1")
             .map_err(|_| failure("state_ownership", "unsafe state namespace"))?;
         let identity_path = root.path.join("identity.json");
@@ -315,7 +315,10 @@ impl Store {
             libc::openat(
                 root.file.as_raw_fd(),
                 c".lease".as_ptr(),
-                libc::O_RDWR | libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC
+                libc::O_RDWR
+                    | libc::O_NONBLOCK
+                    | libc::O_NOFOLLOW
+                    | libc::O_CLOEXEC
                     | if initialize { libc::O_CREAT } else { 0 },
                 0o600,
             )
@@ -345,7 +348,10 @@ impl Store {
         }
         if !present(&identity_path)? {
             if !initialize {
-                return Err(failure("state_ownership", "source state has no home identity"));
+                return Err(failure(
+                    "state_ownership",
+                    "source state has no home identity",
+                ));
             }
             let home_metadata = home.file.metadata().map_err(io)?;
             let state_metadata = root.file.metadata().map_err(io)?;
@@ -623,7 +629,10 @@ impl UpgradeState {
                 .publish(&temporary, &tree)
                 .map_err(|_| failure("state_ownership", "cannot publish candidate state"))?
             {
-                return Err(failure("state_ownership", "candidate state identity collision"));
+                return Err(failure(
+                    "state_ownership",
+                    "candidate state identity collision",
+                ));
             }
             Ok(tree)
         })();

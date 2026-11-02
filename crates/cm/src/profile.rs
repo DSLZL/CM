@@ -311,7 +311,9 @@ pub(crate) struct UpgradeSource {
 impl UpgradeSource {
     pub(crate) fn open(home: &Path) -> Result<Self, LoadError> {
         if !managed(home)? {
-            return Err(failure("upgrade source must be an existing managed profile"));
+            return Err(failure(
+                "upgrade source must be an existing managed profile",
+            ));
         }
         let root = Directory::open(home).map_err(|e| failure(&e))?;
         let writer = writer_file(&root, false).map_err(|e| failure(&e))?;
@@ -343,7 +345,10 @@ fn writer_file(root: &Directory, create: bool) -> Result<File, String> {
         libc::openat(
             root.file.as_raw_fd(),
             c".cm-write.lock".as_ptr(),
-            libc::O_RDWR | libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC
+            libc::O_RDWR
+                | libc::O_NONBLOCK
+                | libc::O_NOFOLLOW
+                | libc::O_CLOEXEC
                 | if create { libc::O_CREAT } else { 0 },
             0o600,
         )
