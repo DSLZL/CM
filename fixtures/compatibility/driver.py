@@ -552,8 +552,9 @@ def case_exact_variant():
     result = upgrade(home, variants=[explicit])
     candidate = PROFILE / "candidate"
     directory = EVIDENCE / "actual-core"
+    # compose-a preserves Core parallel eligibility; compose-b is the serial policy fixture.
     business = core.run_case(Path("/fixture"), directory, NEW, candidate, True, scenario="parallel",
-        restrictive=True, expected_releases=1, sandboxed=True,
+        restrictive=False, expected_releases=1, sandboxed=True,
         cm_options=module("managed-package/driver.py").launch_command(NEW, candidate, [])[1:])
     trace = core.trace_rows(directory / "core-trace.jsonl")
     assert any(row["event"] == "hook-enter" and row["detail"]["mod"] == "compose-a" for row in trace)
