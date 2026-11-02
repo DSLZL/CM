@@ -82,7 +82,7 @@ def reports(evidence, steps, audit):
         "arbitrary_layout_inline_async_signature": {"capability_status": "unsupported", "experiment_status": "pass",
             "rejection_cases": ["unsupported-layout", "unsupported-inline", "unsupported-async", "unsupported-signature"],
             "implemented": False}}
-    matrix.update(arbitrary_source_L4=False, program_complete=False, release_ready=False)
+    matrix.update(arbitrary_source_L4=False, program_complete=False)
     matrix["native_trust"] = "same process privileges; abort, invalid pointers and stuck callbacks can terminate or hang Host"
     matrix["hot_unload"] = "unsupported; disabling takes effect in a fresh process"
     write(evidence / REPORTS[0], matrix)
@@ -98,6 +98,7 @@ def self_check():
     import importlib.util
     import sys
     from unittest.mock import patch
+    import mod_manifest
     import retry
     import runtime_cases
     root = Path(__file__).resolve().parents[2]
@@ -112,6 +113,15 @@ def self_check():
         missing = driver.case_binding_map_missing()[1]
     assert runtime_cases.merge(rejected, missing) == {
         "patch_map_sha256": {"error": "wrong digest"}, "missing_patch_map_sha256": {"error": "missing"}}
+    emitted = {}
+    steps = {phase + "-" + case: {"status": "pass"} for phase in ("g01", "m02")
+             for case in runtime_cases.GROUPS[phase]}
+    with patch.object(mod_manifest, "read", side_effect=lambda path: {}), patch.object(
+            mod_manifest, "write", side_effect=lambda path, value: emitted.__setitem__(path.name, value)):
+        reports(root, steps, {"status": "pass", "compiler_linker_jit_build_service_calls": 0})
+    assert "release_ready" not in emitted[REPORTS[0]], "Release status belongs to consumer promotion"
+    assert emitted[REPORTS[0]]["arbitrary_source_L4"] is False
+    assert emitted[REPORTS[4]]["build_fallback"] is False
     original = retry.source
     changed = original(root, "HEAD", path).replace("def case_binding_map():\n", "def case_binding_map():\n    assert False\n")
     assert changed != original(root, "HEAD", path)
