@@ -1168,10 +1168,14 @@ def audit_runtime_network(observer, lines, directory, ports, routes=(), tcp_conn
         local = re.fullmatch(r'\d+\s+getsockname\(\d+<UNIX-STREAM:\[(\d+)\]>, \{sa_family=AF_UNIX, sun_path="([^"]+)"\}, \[\d+(?: => \d+)?\]\) = 0', line)
         if local and local[1] in accepted and Path(local[2]).is_relative_to(directory) and ".." not in Path(local[2]).parts:
             bound.add(local[1])
+    for line in normalized:
+        connected = re.fullmatch(r'\d+\s+connect\(\d+<UNIX-STREAM:\[(\d+)\]>, \{sa_family=AF_UNIX, sun_path="([^"]+)"\}, \d+\) = 0', line)
+        if connected and Path(connected[2]).is_relative_to(directory) and ".." not in Path(connected[2]).parts:
+            bound.add(connected[1])
     remaining = []
     for line in normalized:
         reply = re.fullmatch(r'\d+\s+sendto\(\d+<UNIX-STREAM:\[(\d+)\]>, "<payload redacted>", \d+, (?:0|MSG_NOSIGNAL), NULL, 0\) = \d+', line)
-        # Namespace-limited strace can omit peers; accept replies only on accepted, scoped socket inodes.
+        # Namespace-limited strace can omit peers on either end; require the exact scoped connection inode.
         if not reply or reply[1] not in bound:
             remaining.append(line)
     observer.audit_network(remaining, directory, ports, routes, tcp_connections)
@@ -1190,6 +1194,19 @@ def check_runtime_network():
     for metadata in ([accepted, local], [local, accepted],
             [accepted.replace('accept4(', 'accept(').replace(', SOCK_CLOEXEC)', ')'), local]):
         audit_runtime_network(observer, [reply], Path("/evidence"), set(), socket_metadata=metadata)
+    connected = '11304 connect(4<UNIX-STREAM:[146207]>, {sa_family=AF_UNIX, sun_path="/evidence/g01/callback.sock"}, 62) = 0'
+    sent = '11304 sendto(4<UNIX-STREAM:[146207]>, "<payload redacted>", 17, MSG_NOSIGNAL, NULL, 0) = 17'
+    for lines in ([connected, sent], [sent, connected], [connected, sent.replace('11304 ', '11305 ')]):
+        audit_runtime_network(observer, lines, Path("/evidence"), set())
+    for connection in (None, connected.replace(' = 0', ' = -1 ECONNREFUSED (Connection refused)'),
+            connected.replace('[146207]', '[146208]'), connected.replace('/evidence/', '/outside/'),
+            connected.replace('/evidence/', '/evidence-other/'),
+            connected.replace('/evidence/', '/evidence/../outside/'), connected.replace('UNIX-STREAM', 'UNIX-DGRAM')):
+        try:
+            audit_runtime_network(observer, ([connection] if connection else []) + [sent], Path("/evidence"), set())
+        except AssertionError:
+            continue
+        raise AssertionError("Runtime audit accepted an unbound Unix client")
     for metadata in ([accepted], [local], [accepted.replace('[27425]', '[27426]'), local],
             [accepted, local.replace('[27425]', '[27426]')],
             [accepted, local.replace('/evidence/', '/outside/')],
