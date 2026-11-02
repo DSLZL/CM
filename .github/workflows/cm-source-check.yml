@@ -73,7 +73,8 @@ jobs:
                      *Path("fixtures/runtime-sdk").glob("*.py"), *Path("fixtures/managed-package").glob("*.py"),
                      *Path("fixtures/state").glob("*.py"), *Path("fixtures/mod-author").glob("*.py"),
                      *Path("fixtures/turn-budget").glob("*.py"), *Path("fixtures/review-before-send").glob("*.py"),
-                     *Path("fixtures/tool-concurrency").glob("*.py"), *Path("fixtures/runtime-qualification").glob("*.py")]
+                     *Path("fixtures/tool-concurrency").glob("*.py"), *Path("fixtures/runtime-qualification").glob("*.py"),
+                     *Path("fixtures/runtime-hooks").glob("*.py")]
           for script in scripts:
               py_compile.compile(str(script), cfile=str(Path(os.environ["RUNNER_TEMP"]) / (script.stem + ".pyc")),
                                  doraise=True)
@@ -110,6 +111,7 @@ jobs:
           python3 -B ci/scripts/turn_budget.py self-check
           python3 -B ci/scripts/review_before_send.py self-check
           python3 -B ci/scripts/tool_concurrency.py self-check
+          python3 -B ci/scripts/runtime_hooks.py self-check
 
       - name: Verify pinned Codex build inputs
         env:

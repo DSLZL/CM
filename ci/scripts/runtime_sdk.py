@@ -81,10 +81,10 @@ def native_probe_source(root):
     with (core / "src/thread_manager_tests.rs").open("a") as stream:
         stream.write('\ninclude!("cm_runtime_native.rs");\n')
         from linux_ci import load_config
-        if load_config(root)["task_id"] in ("CM-G02A", "CM-G02B", "CM-G03", "CM-G04"):
+        if load_config(root)["task_id"] in ("CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01"):
             shutil.copyfile(root / "fixtures/turn-budget/scope_probe.rs", core / "src/cm_turn_budget.rs")
             stream.write('include!("cm_turn_budget.rs");\n')
-        if load_config(root)["task_id"] in ("CM-G03", "CM-G04"):
+        if load_config(root)["task_id"] in ("CM-G03", "CM-G04", "CM-G01"):
             shutil.copyfile(root / "fixtures/tool-concurrency/core_probe.rs", core / "src/cm_concurrency_probe.rs")
             stream.write('include!("cm_concurrency_probe.rs");\n')
             shutil.copyfile(root / "fixtures/tool-concurrency/steer_probe.rs", core / "src/session/cm_concurrency_steer.rs")

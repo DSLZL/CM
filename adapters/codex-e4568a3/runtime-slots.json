@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "domain": "cm.prepared-slots.v1",
+  "backend": "prepared_slots",
+  "upstream": "e4568a3538c9cab6627d64ff8cdfc7d98b79b7db",
+  "adapter": "codex-e4568a3",
+  "bridge_contract": 1,
+  "target": "x86_64-unknown-linux-gnu",
+  "slots": [
+    {
+      "id": "core.tool_parallel_eligibility.v1",
+      "capability": "core.tool_parallel_eligibility.compose.v1",
+      "resource": "core.tool_parallel_eligibility.v1",
+      "kinds": ["before", "around", "replacement", "after"],
+      "abi_major": 2,
+      "abi_minor_min": 0,
+      "abi_minor_max": 2,
+      "continuation_contract": "cm.policy-next.v1",
+      "thread_contract": "synchronous-owner-thread.v1",
+      "cancellation_contract": "first-failure-drain.v1"
+    }
+  ]
+}

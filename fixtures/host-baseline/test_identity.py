@@ -61,6 +61,7 @@ class IdentityTests(unittest.TestCase):
             "native_tools": {**inputs["native_tools"], "changed-tool": {"sha256": "4" * 64}},
             "native": {**inputs["native"], "v8": {"archive": "different verified artifact"}},
             "helper": {**inputs["helper"], "sha256": "5" * 64},
+            "runtime_hooks": {**inputs["runtime_hooks"], "changed-contract": 2},
         }
         for key, value in changes.items():
             with self.subTest(input=key):
@@ -71,6 +72,21 @@ class IdentityTests(unittest.TestCase):
         self.assertNotEqual(baseline, self.pin["host_release_id"])
         self.assertNotIn("artifact_sha256", self.sealed)
         self.assertNotIn("mod_set", inputs)
+
+    def test_prepared_map_is_sealed_without_a_self_reference(self):
+        identity = host.build_identity(self.pin, self.sealed["inputs"], "0" * 64)
+        mapping = identity["patch_map"]
+        self.assertEqual(identity["patch_map_sha256"], host.digest(mapping))
+        self.assertEqual(mapping, self.sealed["inputs"]["runtime_hooks"])
+        self.assertEqual(mapping["build"]["flags"], self.sealed["inputs"]["flags"])
+        self.assertEqual(mapping["build"]["profile_definitions"],
+            host.tomllib.loads((ROOT / host.HOST / "codex-rs/Cargo.toml").read_text())["profile"])
+        self.assertEqual(mapping["descriptor"]["backend"], "prepared_slots")
+        self.assertNotIn("host_build_id", mapping)
+        self.assertNotIn("executable_sha256", mapping)
+        self.assertNotIn("patch_map_sha256", mapping)
+        for path, digest in mapping["source_fingerprints"].items():
+            self.assertEqual(digest, host.sha(ROOT / host.HOST / path))
 
     def test_missing_inputs_and_invalid_paths_are_rejected(self):
         for key in self.sealed["inputs"]:

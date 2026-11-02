@@ -285,19 +285,46 @@ impl BinaryManifest {
     }
 
     pub(crate) fn compatible(&self, host: &HostIdentity) -> Result<(), String> {
-        if self.kind == ModKind::AdvancedHook {
-            return Err("kind: advanced_hook is unsupported until G01 qualification".into());
-        }
         let minimum =
             semver::Version::parse(&self.compat.host_api_min).map_err(|_| "compat.host_api_min")?;
         if semver::Version::parse(&host.api_version).map_err(|_| "Host API identity")? < minimum {
             return Err("compat.host_api_min: Host API is too old".into());
         }
-        if let Some(exact) = &self.compat.exact_host
-            && (exact.build_id != host.build_id
-                || exact.executable_sha256 != host.executable_sha256)
+        if let Some(exact) = &self.compat.exact_host {
+            if exact.build_id != host.build_id {
+                return Err("compat.exact_host.build_id: Host build differs".into());
+            }
+            if exact.executable_sha256 != host.executable_sha256 {
+                return Err("compat.exact_host.executable_sha256: Host executable differs".into());
+            }
+            if let Some(map) = &exact.patch_map_sha256
+                && host.patch_map_sha256.as_ref() != Some(map)
+            {
+                return Err(
+                    "compat.exact_host.patch_map_sha256: Host map differs or is absent".into(),
+                );
+            }
+        }
+        if self.kind == ModKind::AdvancedHook
+            && (self.compat.abi_major != 2
+                || !host
+                    .prepared_slots
+                    .iter()
+                    .any(|slot| slot == crate::hooks::SLOT)
+                || self.compat.required_capabilities != [crate::hooks::CAPABILITY]
+                || self.contributions.iter().any(|item| {
+                    item.resource != crate::hooks::SLOT
+                        || item.capability != crate::hooks::CAPABILITY
+                        || !matches!(
+                            item.kind,
+                            loader::Kind::Before
+                                | loader::Kind::Around
+                                | loader::Kind::Replacement
+                                | loader::Kind::After
+                        )
+                }))
         {
-            return Err("compat.exact_host: Host build or executable digest differs".into());
+            return Err("compat.prepared_slot: only the registered ABI-2 eligibility policy slot is supported".into());
         }
         let actual = unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) }
             .to_str()
@@ -315,7 +342,8 @@ impl BinaryManifest {
             "state": self.state, "provenance": self.provenance,
             "config": self.config.as_ref().map(Contract::identity),
             "qualification": {"declared": true, "verified": false,
-                "unsupported": self.kind == ModKind::AdvancedHook},
+                "backend": if self.kind == ModKind::AdvancedHook {"prepared_slots"} else {"sdk"},
+                "unsupported": false},
         })
     }
 }
@@ -337,6 +365,65 @@ fn system_version(value: &str) -> Option<(u32, u32)> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_maps_and_advanced_slots_are_checked_without_native_loading() {
+        let mut host = HostIdentity {
+            build_id: format!("sha256:{}", "a".repeat(64)),
+            executable_sha256: "b".repeat(64),
+            target: loader::TARGET.into(),
+            api_version: "0.10.0".into(),
+            capabilities: vec![crate::hooks::CAPABILITY.into()],
+            abis: vec!["2.0".into()],
+            patch_map_sha256: Some("c".repeat(64)),
+            prepared_slots: vec![crate::hooks::SLOT.into()],
+        };
+        let mut manifest: BinaryManifest = serde_json::from_value(serde_json::json!({
+            "format_version": 3, "id": "hook-fixture", "version": "1.0.0", "kind": "advanced_hook",
+            "binary": {"path": "payload.so", "size": 1, "sha256": "d".repeat(64),
+                "target": loader::TARGET, "entry": "cm_mod_entry_v2", "glibc_min": "2.17", "cpu": "x86-64"},
+            "compat": {"abi_major": 2, "abi_minor_min": 0, "abi_minor_max": 2, "host_api_min": "0.10.0",
+                "required_capabilities": [crate::hooks::CAPABILITY], "exact_host": {
+                    "build_id": host.build_id, "executable_sha256": host.executable_sha256,
+                    "patch_map_sha256": host.patch_map_sha256}},
+            "contributions": [{"id": "around", "kind": "around", "capability": crate::hooks::CAPABILITY,
+                "resource": crate::hooks::SLOT}],
+            "provenance": {"repository": "https://github.com/DSLZL/CM", "revision": "e".repeat(40),
+                "license": "Apache-2.0", "release_notes": "binding regression"}
+        }))
+        .unwrap();
+        manifest.validate().unwrap();
+        manifest.compatible(&host).unwrap();
+        for field in ["build", "executable", "map", "missing-map", "slot"] {
+            let mut other = host.clone();
+            match field {
+                "build" => other.build_id = format!("sha256:{}", "0".repeat(64)),
+                "executable" => other.executable_sha256 = "0".repeat(64),
+                "map" => other.patch_map_sha256 = Some("0".repeat(64)),
+                "missing-map" => other.patch_map_sha256 = None,
+                "slot" => other.prepared_slots.clear(),
+                _ => unreachable!(),
+            }
+            assert!(manifest.compatible(&other).is_err(), "{field}");
+        }
+        manifest.contributions[0].resource = "unknown.slot".into();
+        assert!(manifest.compatible(&host).is_err());
+        manifest.contributions[0].resource = crate::hooks::SLOT.into();
+        manifest.kind = ModKind::ExactHost;
+        host.patch_map_sha256 = None;
+        assert!(manifest.compatible(&host).is_err());
+        manifest.compat.exact_host.as_mut().unwrap().patch_map_sha256 = None;
+        manifest.validate().unwrap();
+        manifest.compatible(&host).unwrap();
+        manifest.kind = ModKind::AdvancedHook;
+        assert!(manifest.validate().is_err());
+        manifest.kind = ModKind::Sdk;
+        manifest.compat.exact_host = None;
+        manifest.validate().unwrap();
+        manifest.compatible(&host).unwrap();
+    }
+
     #[test]
     fn semver_prereleases_and_build_metadata_use_the_locked_library() {
         let req = semver::VersionReq::parse(">=1.2.3, <2.0.0").unwrap();

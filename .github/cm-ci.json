@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "configured": true,
-  "task_id": "CM-G04",
+  "task_id": "CM-G01",
   "required_checks": [
-    "CM-G04-AC01",
-    "CM-G04-AC02",
-    "CM-G04-AC03",
-    "CM-G04-AC04",
-    "CM-G04-AC05"
+    "CM-G01-AC01",
+    "CM-G01-AC02",
+    "CM-G01-AC03",
+    "CM-G01-AC04",
+    "CM-G01-AC05"
   ],
   "target": "x86_64-unknown-linux-gnu",
   "rust_toolchain": "1.95.0",
@@ -37,12 +37,14 @@
       "no_default_features": false
     }
   ],
-  "acceptance_script": "fixtures/runtime-qualification/acceptance.sh",
+  "acceptance_script": "fixtures/runtime-hooks/acceptance.sh",
   "cargo_config_files": [
     "adapters/codex-e4568a3/host/codex-rs/.cargo/config.toml"
   ],
   "native_identity_files": [
     "adapters/codex-e4568a3/source.json",
+    "adapters/codex-e4568a3/runtime-slots.json",
+    "crates/cm/src/hooks.rs",
     "adapters/codex-e4568a3/cli.patch",
     "crates/cm/src/host_identity.rs",
     "adapters/codex-e4568a3/native.patch",

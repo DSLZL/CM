@@ -192,7 +192,7 @@ def cli_arguments(binary, cwd, endpoint, sandboxed=False):
 @ci_progress.case("directory")
 def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mode="",
              extra_env=None, command_prefix=(), expected_releases=1, restrictive=None,
-             sandboxed=False, long_output=False, requested_limit=None, cm_options=()):
+             sandboxed=False, long_output=False, requested_limit=None, cm_options=(), on_handler=None):
     assert os.uname().sysname == "Linux" and os.uname().machine == "x86_64"
     restrictive = mod_loaded if restrictive is None else restrictive
     directory.mkdir(parents=True)
@@ -294,6 +294,8 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
                 assert return_code != 0, "Required policy failure must fail the real Core invocation"
             else:
                 await_barrier(lambda: tools.has("A:entered"), process, "actual A handler")
+                if on_handler is not None:
+                    on_handler(process)
                 if scenario == "cancel-executing":
                     await_barrier(initial_response_sent.is_set, process, "provider finished A response")
                     process.send_signal(signal.SIGINT)

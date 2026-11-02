@@ -48,6 +48,16 @@
               "items": {
                 "type": "string"
               }
+            },
+            "patch_map_sha256": {
+              "type": ["string", "null"],
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "prepared_slots": {
+              "type": "array",
+              "items": {"const": "core.tool_parallel_eligibility.v1"},
+              "maxItems": 1,
+              "uniqueItems": true
             }
           },
           "required": [
@@ -56,7 +66,9 @@
             "target",
             "api_version",
             "capabilities",
-            "abis"
+            "abis",
+            "patch_map_sha256",
+            "prepared_slots"
           ]
         },
         "config": {

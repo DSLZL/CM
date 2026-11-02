@@ -8,8 +8,9 @@
     "codex-rs/Cargo.lock": "319fbf5f0e3f1217f09e3bdeeae5bbd6b9da208e30495d7f5eb3102a76474812",
     "codex-rs/rust-toolchain.toml": "570656042681cfd8795403a455baf9a33035331a07db0645e866bbcea89a3d64"
   },
-  "host_release_id": "cm-host-0.11.0-g03",
-  "host_api_version": "0.9.0",
+  "host_release_id": "cm-host-0.12.0-g01",
+  "host_api_version": "0.10.0",
+  "runtime_slots": "runtime-slots.json",
   "capabilities": [
     "core.tool_parallel_eligibility.v1",
     "core.tool_parallel_eligibility.compose.v1",
@@ -23,7 +24,7 @@
     "core.turn_tool_concurrency.v1"
   ],
   "protocol_source": "codex-rs/protocol",
-  "stage": "turn-tool-concurrency",
+  "stage": "prepared-runtime-hooks",
   "official_asset": {
     "url": "https://github.com/openai/codex/releases/download/rust-v0.163.0/codex-x86_64-unknown-linux-musl.tar.gz",
     "sha256": "beb339e8ecd9ba057a6bb2dc81ad8ca474812edfbf0fc5056ca818797648dde4",
@@ -40,6 +41,7 @@
     "crates/cm/src/loader/elf.rs": "codex-rs/cm/src/loader/elf.rs",
     "crates/cm/src/loader/native.rs": "codex-rs/cm/src/loader/native.rs",
     "crates/cm/src/lib.rs": "codex-rs/cm/src/lib.rs",
+    "crates/cm/src/hooks.rs": "codex-rs/cm/src/hooks.rs",
     "crates/cm/src/tool_policy.rs": "codex-rs/cm/src/tool_policy.rs",
     "crates/cm/examples/native_probe.rs": "codex-rs/cm/examples/native_probe.rs",
     "crates/cm-abi/src/v2.rs": "codex-rs/cm-abi/src/v2.rs",

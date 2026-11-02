@@ -68,3 +68,8 @@ Changes to Python cases do not enter the Host build identity. Valid producer
 and unrelated checkpoint results remain reusable. A change to the actual outer
 audit contract invalidates affected checkpoints even when the Host is unchanged.
 This qualification does not complete the parent integration or release gate.
+
+The G01 prepared-slot candidate changes the Host loader and embedded identity.
+Its new Host and Hook contract require their own Actions qualification; the G04
+run above remains evidence for its recorded executable and environment only.
+See [runtime-hooks.md](runtime-hooks.md) for the supported slot and rejection boundary.

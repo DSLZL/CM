@@ -79,6 +79,37 @@
   ],
   "allOf": [
     {
+      "if": {"properties": {"kind": {"const": "sdk"}}, "required": ["kind"]},
+      "then": {"properties": {"compat": {"not": {"required": ["exact_host"]}}}}
+    },
+    {
+      "if": {"properties": {"kind": {"enum": ["exact_host", "advanced_hook"]}}, "required": ["kind"]},
+      "then": {"properties": {"compat": {"required": ["exact_host"]}}}
+    },
+    {
+      "if": {"properties": {"kind": {"const": "advanced_hook"}}, "required": ["kind"]},
+      "then": {
+        "properties": {
+          "compat": {
+            "properties": {
+              "abi_major": {"const": 2},
+              "required_capabilities": {"const": ["core.tool_parallel_eligibility.compose.v1"]},
+              "exact_host": {"required": ["patch_map_sha256"]}
+            }
+          },
+          "contributions": {
+            "items": {
+              "properties": {
+                "kind": {"enum": ["before", "around", "replacement", "after"]},
+                "capability": {"const": "core.tool_parallel_eligibility.compose.v1"},
+                "resource": {"const": "core.tool_parallel_eligibility.v1"}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "if": {
         "properties": {
           "compat": {
@@ -475,5 +506,5 @@
       ]
     }
   },
-  "description": "JSON view of mod.toml; Rust additionally checks SemVer, ABI/entry/minor intervals, Host/system/capability and ownership relationships, canonical paths, digests and all config constraints. Formats 1/2 retain their grammar. advanced_hook remains unsupported."
+  "description": "JSON view of mod.toml; Rust additionally checks SemVer, ABI/entry/minor intervals, Host/system/capability and ownership relationships, canonical paths, digests and all config constraints. Formats 1/2 retain their grammar. advanced_hook accepts only the exact-bound ABI-2 prepared eligibility policy slot; detour and arbitrary Rust hooks are unsupported."
 }

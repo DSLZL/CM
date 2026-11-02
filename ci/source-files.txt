@@ -175,3 +175,9 @@ ci/scripts/runtime_qualification.py
 docs/platform-support.md
 fixtures/runtime-qualification/acceptance.sh
 fixtures/runtime-qualification/driver.py
+adapters/codex-e4568a3/runtime-slots.json
+ci/scripts/runtime_hooks.py
+crates/cm/src/hooks.rs
+docs/runtime-hooks.md
+fixtures/runtime-hooks/acceptance.sh
+fixtures/runtime-hooks/driver.py

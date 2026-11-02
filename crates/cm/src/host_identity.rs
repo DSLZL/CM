@@ -20,7 +20,9 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing Host build identity"))?;
         assert_eq!(build_id.len(), "sha256:".len() + 64);
         assert!(build_id.starts_with("sha256:"));
-        assert_eq!(identity["stage"], "turn-tool-concurrency");
+        assert_eq!(identity["stage"], "prepared-runtime-hooks");
+        assert_eq!(identity["patch_map"]["descriptor"]["backend"], "prepared_slots");
+        assert_eq!(identity["patch_map_sha256"].as_str().unwrap().len(), 64);
         assert_eq!(
             identity["capabilities"],
             serde_json::json!([

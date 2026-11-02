@@ -31,6 +31,10 @@ pub(crate) fn error(error: &LoadError) -> Value {
         .map(|value| identifier(value))
         .collect();
     let (expected, next) = match error.code.as_str() {
+        "hook_unsupported" => (
+            "the exact Host's registered ABI-2 prepared eligibility policy slot",
+            "Use a prepared-slot Mod matching cm-host-identity. Detour, layout, inline, async and signature hooks are unsupported.",
+        ),
         "backend" => (
             "local Embedded execution",
             "Use this Host's local cm launch; remote backends are unsupported.",

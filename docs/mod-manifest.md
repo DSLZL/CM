@@ -61,9 +61,12 @@ SHA and build provenance. Archive SHA is outside the archive to avoid self hashi
 
 `sdk` uses the Host's explicit ABI, API and full capability IDs. `exact_host`
 additionally requires `[compat.exact_host]` with the Host's `build_id` and actual
-`executable_sha256`. `advanced_hook` also requires `patch_map_sha256`; it remains
-unsupported until a separate G01 qualification. Matching a build or ABI number
-does not establish a successful compatibility run.
+`executable_sha256`. Any declared `patch_map_sha256` must match the embedded Host
+map, including for ordinary `exact_host` packages. `advanced_hook` requires all
+three bindings and is restricted to the registered ABI-2 prepared eligibility
+policy slot. The G01 candidate is awaiting Actions qualification; detour and
+arbitrary Rust hooks remain unsupported. See [runtime-hooks.md](runtime-hooks.md).
+Matching a build or ABI number does not establish a successful compatibility run.
 
 The binary uses `abi_minor_min` as its native entry protocol; `abi_minor_max`
 describes its declared upper bound. Both must belong to the current Host's

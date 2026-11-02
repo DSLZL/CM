@@ -91,6 +91,8 @@ def cm_manifest(root):
 def product_manifest(root):
     pin = read(root / ADAPTER / "source.json")
     paths = {ADAPTER + "/source.json", *(ADAPTER + "/" + name for name in pin["patches"]), *pin["overlay"]}
+    if "runtime_slots" in pin:
+        paths.add(ADAPTER + "/" + pin["runtime_slots"])
     published = {entry["path"]: entry for entry in cm_manifest(root)}
     if not paths <= published.keys():
         raise RuntimeError("Host product inputs must be reviewed publication inputs")
@@ -164,7 +166,7 @@ def prepare(root, logs):
 
 def schemas(root, logs):
     """Regenerate pinned schema assets on the hosted worker before sealing Host inputs."""
-    if load_config(root)["task_id"] not in ("CM-G03", "CM-G04"):
+    if load_config(root)["task_id"] not in ("CM-G03", "CM-G04", "CM-G01"):
         return
     verify_sources(root, logs)
     cfg = load_config(root)
@@ -336,7 +338,7 @@ def identity_inputs(root, logs):
              for unit in cfg["units"]]
     native_tools = {name: {key: value for key, value in tool.items() if key != "path"}
                     for name, tool in compatibility["native"].items()}
-    return {
+    inputs = {
         "source": provenance["host_manifest_sha256"], "cm_inputs": manifest_digest(product_manifest(root)),
         "lock": provenance["host_lock_sha256"], "target": cfg["target"],
         "toolchain": {"declared": cfg["rust_toolchain"], "rustc": compatibility["rustc"], "cargo": compatibility["cargo"]},
@@ -347,15 +349,35 @@ def identity_inputs(root, logs):
         "native": read(root / ADAPTER / "inputs/native.json"),
         "helper": read(logs / "host-helper.json"),
     }
+    inputs["runtime_hooks"] = hook_map(root, inputs)
+    return inputs
+
+
+def hook_map(root, inputs):
+    pin = read(root / ADAPTER / "source.json")
+    descriptor = read(root / ADAPTER / pin["runtime_slots"])
+    if (descriptor["backend"] != "prepared_slots" or descriptor["upstream"] != pin["commit"]
+            or descriptor["target"] != inputs["target"]):
+        raise RuntimeError("Prepared-slot descriptor differs from the actual Host inputs")
+    paths = ("codex-rs/core/src/tools/parallel.rs", "codex-rs/cm/src/tool_policy.rs",
+             "codex-rs/cm/src/loader/registration.rs", "codex-rs/cm-abi/src/lib.rs",
+             "codex-rs/cm-abi/src/v2.rs", "codex-rs/Cargo.toml")
+    profiles = tomllib.loads((root / HOST / "codex-rs/Cargo.toml").read_text())["profile"]
+    # Final patched source plus exact ELF binding; this is not a machine-code detour proof.
+    return {"schema_version": 1, "domain": "cm.hook-map.v1", "descriptor": descriptor,
+            "source_fingerprints": {path: sha(root / HOST / path) for path in paths},
+            "build": {**{key: inputs[key] for key in
+                         ("target", "toolchain", "profiles", "flags", "cargo_configuration")},
+                      "profile_definitions": profiles}}
 
 
 def build_identity(pin, inputs, protocol):
     required = {"source", "cm_inputs", "lock", "target", "toolchain", "profiles", "units",
-                "flags", "cargo_configuration", "native_tools", "native", "helper"}
+                "flags", "cargo_configuration", "native_tools", "native", "helper", "runtime_hooks"}
     if set(inputs) != required or any(inputs[key] in (None, "", []) for key in required - {"flags"}):
         raise RuntimeError("Incomplete Host build inputs")
     if any(not isinstance(inputs[key], dict) or not inputs[key] for key in (
-        "toolchain", "profiles", "cargo_configuration", "native_tools", "native", "helper"
+        "toolchain", "profiles", "cargo_configuration", "native_tools", "native", "helper", "runtime_hooks"
     )):
         raise RuntimeError("Incomplete structured Host input")
     if set(inputs["toolchain"]) != {"declared", "rustc", "cargo"} or not all(inputs["toolchain"].values()):
@@ -365,7 +387,8 @@ def build_identity(pin, inputs, protocol):
     return {"schema_version": 1, "host_release_id": pin["host_release_id"],
             "host_build_id": "sha256:" + digest(inputs), "host_api_version": pin["host_api_version"],
             "capabilities": pin["capabilities"], "protocol_contract_id": "sha256:" + protocol,
-            "stage": pin["stage"], "inputs": inputs}
+            "stage": pin["stage"], "patch_map": inputs["runtime_hooks"],
+            "patch_map_sha256": digest(inputs["runtime_hooks"]), "inputs": inputs}
 
 
 def seal(root, logs):

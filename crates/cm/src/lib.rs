@@ -19,6 +19,7 @@ use serde_json::json;
 
 pub mod config;
 mod diagnostics;
+mod hooks;
 pub mod launcher;
 mod loader;
 mod manifest;

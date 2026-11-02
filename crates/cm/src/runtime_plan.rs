@@ -37,6 +37,8 @@ pub struct HostIdentity {
     pub api_version: String,
     pub capabilities: Vec<String>,
     pub abis: Vec<String>,
+    pub patch_map_sha256: Option<String>,
+    pub prepared_slots: Vec<String>,
 }
 
 impl HostIdentity {
@@ -53,6 +55,8 @@ impl HostIdentity {
             serde_json::from_value(value["capabilities"].clone())
                 .map_err(|e| LoadError::input("host_identity", "", &e.to_string()))?;
         capabilities.sort();
+        let (patch_map_sha256, prepared_slots) = crate::hooks::identity(&value)
+            .map_err(|e| LoadError::input("host_identity", "", &e))?;
         Ok(Self {
             build_id: field("host_build_id")?,
             executable_sha256: loader::executable_hash(executable)
@@ -61,6 +65,8 @@ impl HostIdentity {
             api_version: field("host_api_version")?,
             capabilities,
             abis: vec!["1.0".into(), "2.0".into(), "2.1".into(), "2.2".into()],
+            patch_map_sha256,
+            prepared_slots,
         })
     }
 }
@@ -305,9 +311,14 @@ fn resolve(
     for (id, (manifest, manifest_sha256)) in selected {
         loader::check_manifest(manifest).map_err(|e| failure("manifest_contract", id, None, &e))?;
         if let Some(binary) = &manifest.binary_manifest {
-            binary
-                .compatible(&host)
-                .map_err(|e| failure("compatibility", id, None, &e))?;
+            binary.compatible(&host).map_err(|e| {
+                let code = if e.starts_with("compat.prepared_slot") {
+                    "hook_unsupported"
+                } else {
+                    "compatibility"
+                };
+                failure(code, id, None, &e)
+            })?;
         }
         if reserved(id) {
             return Err(failure("reserved_name", id, None, "reserved Mod namespace"));
@@ -1041,6 +1052,8 @@ license = "Apache-2.0"
                 api_version: api.into(),
                 capabilities: vec![capability.into()],
                 abis: vec!["2.2".into()],
+                patch_map_sha256: None,
+                prepared_slots: Vec::new(),
             };
             let config = ConfigIdentity {
                 present: false,
