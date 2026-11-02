@@ -43,9 +43,14 @@ def install(home, variants=("a/normal", "b/normal"), *, probe=False, reverse=Fal
         package = home / "mods" / (str(index) + "-" + variant.replace("/", "-"))
         shutil.copytree(INPUTS / "mods/g01" / variant, package)
         fields = tomllib.loads((package / "mod.toml").read_text())
+        # The reused composition payload requires a version marker in its config.
+        fields["config"] = {"schema_version": 1,
+            "schema": {"type": "object", "additionalProperties": False, "required": ["format_version"],
+                "properties": {"format_version": {"type": "integer", "minimum": 3, "maximum": 3}}},
+            "defaults": {"format_version": 3}}
         if probe:
             fields["compat"]["exact_host"]["executable_sha256"] = mod_manifest.sha(PROBE)
-            mod_manifest.manifest(package, fields)
+        mod_manifest.manifest(package, fields)
         selected.append(fields["id"])
     mod_manifest.selection(home, sorted(selected))
     return home
@@ -93,7 +98,9 @@ def reject(home, *, binary=BINARY, field=None, code=None):
     (directory / "stdout.log").write_text(result.stdout)
     (directory / "stderr.log").write_text(result.stderr)
     mod_manifest.write(directory / "result.json", value)
-    errors = [json.loads(line) for line in result.stderr.splitlines() if line.startswith("{")]
+    errors = [row["detail"] for row in value["trace"] if row["event"] == "startup-failed"]
+    if not errors:
+        errors = [json.loads(line) for line in result.stderr.splitlines() if line.startswith("{")]
     assert result.returncode != 0 and errors, result.stderr
     error = errors[-1]
     value["error"] = error
@@ -125,7 +132,7 @@ def case_qualification_matrix():
     assert descriptor["backend"] == "prepared_slots" and descriptor["target"] == mod_manifest.TARGET
     assert [slot["id"] for slot in descriptor["slots"]] == ["core.tool_parallel_eligibility.v1"]
     assert identity["patch_map"]["build"]["flags"] == identity["inputs"]["flags"]
-    prepared = mod_manifest.read(INPUTS / "fixture/g01-producer.json")
+    prepared = mod_manifest.read(Path("/fixture/g01-producer.json"))
     assert prepared["original_query_count"] == prepared["bridge_count"] == 1
     return report(0, "embedded_identity", {"identity": identity, "executable_sha256": mod_manifest.sha(BINARY),
         "source_contract": prepared, "boundary": "source fingerprints and exact ELF; no detour machine-code proof"})
@@ -159,7 +166,7 @@ def case_binding_map_missing():
 
 def case_binding_other_host():
     home = install(PROFILE, ("a/normal",))
-    prior = mod_manifest.read(INPUTS / "fixture/g01-producer.json")["previous_host"]
+    prior = mod_manifest.read(Path("/fixture/g01-producer.json"))["previous_host"]
     binary = Path(prior["path"])
     assert binary.name == BINARY.name and mod_manifest.sha(binary) == prior["executable_sha256"]
     assert mod_manifest.sha(binary) != mod_manifest.sha(BINARY)
@@ -328,11 +335,11 @@ def case_next_thread():
 
 
 def case_ordinary_reentry():
-    previous = mod_manifest.read(INPUTS / "fixture/m02-native-probe.json")
+    previous = mod_manifest.read(Path("/fixture/m02-native-probe.json"))
     value = previous["ordinary_reentry"]
     assert value["status"] == "pass" and value["private_instrumented_test_binary"]
     assert previous["cli_executable_sha256"] == producer()["host"]["executable_sha256"]
-    trace = core.trace_rows(INPUTS / "fixture/m02-native-trace.jsonl")
+    trace = core.trace_rows(Path("/fixture/m02-native-trace.jsonl"))
     attempts = [row for row in trace if row["event"] == "runtime-native-reentry-probe"]
     assert len(attempts) == value["attempts"] > 0
     assert all(not row["detail"]["callback_entered"] for row in attempts)
