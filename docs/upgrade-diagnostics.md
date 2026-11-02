@@ -1,7 +1,9 @@
 # Prepare a profile for a new Host
 
-CM-G05 is an implementation candidate awaiting Linux x64 qualification. The new
-command prepares an independent profile for the packaged Host that executes it.
+CM-G05 passed its recorded Linux GNU x86_64 upgrade cases in the
+[qualification run](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/41527027753)
+and the [unchanged-input warm run](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/41528312220).
+The command prepares an independent profile for the packaged Host that executes it.
 Keep both versioned Host packages and the old profile until you have checked the
 candidate's behavior and data. Actions artifacts identify exact builds; they are
 not a public Release or a claim that every Mod combination is supported.
