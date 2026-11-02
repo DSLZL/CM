@@ -93,7 +93,7 @@ struct ThreadHolder {
     level: String,
     scope: Result<Scope, LoadError>,
     turns: Mutex<BTreeMap<String, Scope>>,
-    ended: AtomicBool,
+    ended: tokio::sync::Mutex<bool>,
 }
 struct TurnHolder {
     level: String,
@@ -163,9 +163,12 @@ impl Adapter {
     async fn thread_event(&self, store: &ExtensionData, event: u32, input: Value) {
         let result = async {
             let holder = thread(store)?;
-            if event == v22::THREAD_STOP && holder.ended.swap(true, Ordering::AcqRel) {
+            // Core can emit idle after delivering turn completion to a client already shutting down.
+            let mut ended = holder.ended.lock().await;
+            if *ended {
                 return Ok(());
             }
+            *ended = event == v22::THREAD_STOP;
             let scope = holder.scope.as_ref().map_err(Clone::clone)?;
             if event == v22::THREAD_STOP {
                 scope.begin_close()?;
@@ -216,7 +219,7 @@ impl<C: Send + Sync> ThreadLifecycleContributor<C> for Adapter {
                 level: input.thread_store.level_id().into(),
                 scope: scope.clone(),
                 turns: Mutex::new(BTreeMap::new()),
-                ended: AtomicBool::new(false),
+                ended: tokio::sync::Mutex::new(false),
             });
             if let Ok(scope) = scope {
                 self.lifecycle(&scope, v22::THREAD_START, json!({"persistent_thread_state_available": input.persistent_thread_state_available,

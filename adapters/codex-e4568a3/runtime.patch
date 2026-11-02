@@ -2,7 +2,7 @@ diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
 index 7d41578..2d19797 100644
 --- a/codex-rs/Cargo.lock
 +++ b/codex-rs/Cargo.lock
-@@ -1902,6 +1902,18 @@ checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
+@@ -1902,6 +1902,19 @@ checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
  name = "cm-abi"
  version = "0.1.0"
  
@@ -16,12 +16,13 @@ index 7d41578..2d19797 100644
 + "codex-protocol",
 + "codex-tools",
 + "serde_json",
++ "tokio",
 +]
 +
  [[package]]
  name = "cm-runtime"
  version = "0.1.0"
-@@ -1917,6 +1929,13 @@ dependencies = [
+@@ -1917,6 +1930,13 @@ dependencies = [
   "zip",
  ]
  
@@ -35,7 +36,7 @@ index 7d41578..2d19797 100644
  [[package]]
  name = "cobs"
  version = "0.3.0"
-@@ -2115,6 +2134,7 @@ dependencies = [
+@@ -2115,6 +2135,7 @@ dependencies = [
   "base64 0.22.1",
   "chrono",
   "clap",

@@ -76,10 +76,35 @@ async fn cm_runtime_native_scopes() {
     for thread in [&parent, &child, &empty, &explicit] {
         crate::cm_runtime_check(thread.thread.session.services.thread_extension_data.level_id()).expect("scope gate");
     }
+    let session = &parent.thread.session;
+    for contributor in registry.thread_lifecycle_contributors() {
+        tokio::join!(
+            contributor.on_thread_idle(codex_extension_api::ThreadIdleInput {
+                cause: codex_extension_api::ThreadIdleCause::Completed,
+                session_store: &session.services.session_extension_data,
+                thread_store: &session.services.thread_extension_data,
+            }),
+            contributor.on_thread_stop(codex_extension_api::ThreadStopInput {
+                session_store: &session.services.session_extension_data,
+                thread_store: &session.services.thread_extension_data,
+            }),
+        );
+    }
     let shutdown = manager.shutdown_all_threads_bounded(Duration::from_secs(10)).await;
     assert!(shutdown.submit_failed.is_empty() && shutdown.timed_out.is_empty());
+    for contributor in registry.thread_lifecycle_contributors() {
+        contributor.on_thread_idle(codex_extension_api::ThreadIdleInput {
+            cause: codex_extension_api::ThreadIdleCause::Completed,
+            session_store: &session.services.session_extension_data,
+            thread_store: &session.services.thread_extension_data,
+        }).await;
+        contributor.on_thread_stop(codex_extension_api::ThreadStopInput {
+            session_store: &session.services.session_extension_data,
+            thread_store: &session.services.thread_extension_data,
+        }).await;
+    }
+    crate::cm_runtime_check(session.services.thread_extension_data.level_id()).expect("late idle and duplicate stop");
     guard.finish().expect("native quiescence");
-    let session = &parent.thread.session;
     let executor = registry.tool_contributors().iter().flat_map(|contributor| contributor.tools(
         &session.services.session_extension_data, &session.services.thread_extension_data))
         .find(|tool| tool.tool_name().name == "example-tool__echo").expect("actual CM tool proxy");
@@ -106,7 +131,7 @@ async fn cm_runtime_native_scopes() {
         "parent":parent.thread_id.to_string(),"local_child":child.thread_id.to_string(),
         "isolated_empty":empty.thread_id.to_string(),"isolated_explicit":explicit.thread_id.to_string(),
         "shared_inherited_registry":true,"independent_explicit_registry":true,
-        "isolated_default_empty":true,"shutdown":true,
+        "isolated_default_empty":true,"shutdown":true,"concurrent_idle_stop":true,"late_idle_and_duplicate_stop":true,
         "actual_tool_registry_collision_rejected":true,"actual_world_state_collision_rejected":true,
         "tool_collision_diagnostic":tool_collision,
         "boundary":"separate native Core integration executable; not the packaged CLI H"});
