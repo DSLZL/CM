@@ -144,19 +144,28 @@ impl Observer {
 impl ModelResponseInterceptor for Observer {
     fn intercept(self: Box<Self>, stream: ModelResponseStream) -> ModelResponseStream {
         Box::pin(futures::stream::unfold(
-            (Some(stream), self, 0_u64, false),
-            |(mut upstream, observer, sequence, completed)| async move {
+            (Some(stream), self, 0_u64),
+            |(mut upstream, observer, sequence)| async move {
                 let event = upstream.as_mut()?.next().await;
-                let finished =
-                    completed || matches!(event, Some(Ok(ResponseEvent::Completed { .. })));
-                let result = if event.is_none() && !completed {
-                    Err(error("response ended before completion"))
-                } else {
-                    match sequence.checked_add(1) {
-                        Some(sequence) => observer.acknowledge(sequence, event.as_ref()).await,
-                        None => Err(error("response sequence exhausted")),
+                let terminal = matches!(event, Some(Ok(ResponseEvent::Completed { .. }) | Err(_)));
+                let result = async {
+                    let event = event
+                        .as_ref()
+                        .ok_or_else(|| error("response ended before completion"))?;
+                    let sequence = sequence
+                        .checked_add(1)
+                        .ok_or_else(|| error("response sequence exhausted"))?;
+                    observer.acknowledge(sequence, Some(event)).await?;
+                    if matches!(event, Ok(ResponseEvent::Completed { .. })) {
+                        // Core may close the turn as soon as Completed is delivered.
+                        let sequence = sequence
+                            .checked_add(1)
+                            .ok_or_else(|| error("response sequence exhausted"))?;
+                        observer.acknowledge(sequence, None).await?;
                     }
-                };
+                    Ok::<(), LoadError>(())
+                }
+                .await;
                 if let Err(error) = result {
                     if let Ok(scope) = &observer.scope {
                         scope.fail(error.clone());
@@ -164,10 +173,13 @@ impl ModelResponseInterceptor for Observer {
                     drop(upstream.take());
                     return Some((
                         Err(ModelResponseError::Stream(error.to_string())),
-                        (None, observer, sequence, finished),
+                        (None, observer, sequence),
                     ));
                 }
-                event.map(|event| (event, (upstream, observer, sequence + 1, finished)))
+                if terminal {
+                    drop(upstream.take());
+                }
+                event.map(|event| (event, (upstream, observer, sequence + 1)))
             },
         ))
     }

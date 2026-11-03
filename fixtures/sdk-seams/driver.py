@@ -562,7 +562,7 @@ def case_stream_slow_mod():
 
 def case_stream_slow_consumer():
     value = protocol("stream-probe-slow-consumer")
-    assert value["protocol"]["upstream_polls"] == 4
+    assert value["protocol"]["upstream_polls"] == 3
     return report(4, "no_prefetch_without_consumer_demand", value)
 
 
@@ -635,8 +635,8 @@ def case_cli_completion():
     script = WORK / "completion.bash"
     script.write_text(results["bash"]["stdout"])
     argv = ["/bin/bash", "--noprofile", "--norc", "-c",
-        'source "$1"; COMP_WORDS=(codex cm run sdk-a); COMP_CWORD=3; _codex; printf "%s\\n" "${COMPREPLY[@]}"; '
-        'printf "CM_G06_CHILD\\n"; COMP_WORDS=(codex cm run sdk-a__hello --h); COMP_CWORD=4; _codex; printf "%s\\n" "${COMPREPLY[@]}"',
+        'source "$1"; COMP_WORDS=(codex cm run sdk-a); COMP_CWORD=3; _codex codex sdk-a run; printf "%s\\n" "${COMPREPLY[@]}"; '
+        'printf "CM_G06_CHILD\\n"; COMP_WORDS=(codex cm run sdk-a__hello --h); COMP_CWORD=4; _codex codex --h sdk-a__hello; printf "%s\\n" "${COMPREPLY[@]}"',
         "cm-completion-test", str(script)]
     run = subprocess.run(argv, capture_output=True, text=True, check=True, timeout=30,
                          env=environment(home, EVIDENCE / "bash-real"))
@@ -706,6 +706,7 @@ def tui_notice(*, reviewed):
     directory = EVIDENCE / "pty"
     terminal = review.Terminal("g06", "notice", home, reviewed=reviewed, directory=directory,
         extra_env={"CM_SEAMS_EVENTS": str(directory / "events.jsonl")})
+    listener = None
     try:
         if reviewed:
             terminal.review("/sdk-a__notice")
@@ -723,6 +724,7 @@ def tui_notice(*, reviewed):
         terminal.wait(lambda: terminal.managed.tui_text_visible(terminal.output, "sdk-a UI notice-v1"), "bounded UI notice visible")
         assert len(decoded(directory, kind=18)) == 1
         assert not terminal.provider.requests, "A native notice must not send a model turn"
+        listener = terminal.managed.tui_mcp_listener(terminal.process.pid)
         if reviewed:
             terminal.review("/quit")
             terminal.send("y")
@@ -736,11 +738,15 @@ def tui_notice(*, reviewed):
         assert sum(row["event"] == "tui-command-applied" for row in terminal.native()) == 1
         value = {"production_cli_sha256": mod_manifest.sha(BINARY), "command": terminal.command,
             "return_code": terminal.process.returncode, "reviewed": reviewed, "model_requests": terminal.provider.requests,
-            "applied_once": True, **settled(directory)}
+            "applied_once": True, "tui_mcp_listener": listener, **settled(directory)}
         assert any(row["event"] == "stopped" for row in value["native"])
         return value
     finally:
         terminal.close(False)
+        if listener is not None:
+            record = json.loads((directory / "result.json").read_text())
+            record["tui_mcp_listener"] = listener
+            mod_manifest.write(directory / "result.json", record)
 
 
 def case_tui_slash():

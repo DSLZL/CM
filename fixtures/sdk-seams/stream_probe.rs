@@ -44,6 +44,7 @@ pub async fn sdk_stream_probe(home: &std::path::Path, case: &str) {
         request: "private-logical-request".into(),
         attempt: 1,
     };
+    let observer_count = observer.contributions.len();
     let mut stream = Box::new(observer).intercept(upstream);
     let mut first = Box::pin(stream.next());
     assert!(futures::poll!(&mut first).is_pending());
@@ -100,9 +101,34 @@ pub async fn sdk_stream_probe(home: &std::path::Path, case: &str) {
             stream.next().await,
             Some(Ok(ResponseEvent::Completed { .. }))
         ));
+        assert!(
+            dropped.load(AtomicOrdering::Acquire),
+            "Completed retained upstream until another poll"
+        );
+        let dispatches = std::fs::read_to_string(&events)
+            .expect("stream events")
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("stream event"))
+            .filter(|row| row["event"] == "dispatch" && row["kind"] == v23::STREAM_EVENT)
+            .count();
+        assert_eq!(dispatches, 4 * observer_count, "missing terminal stream ACK");
         assert!(stream.next().await.is_none());
         drop(stream);
         assert!(dropped.load(AtomicOrdering::Acquire));
+        let observer = Observer {
+            scope: Ok(scope.clone()),
+            contributions: runtime::ordered_contributions(Kind::ResponseStream)
+                .expect("ordered streams"),
+            request: "private-transport-retry".into(),
+            attempt: 1,
+        };
+        let upstream = Box::pin(futures::stream::iter([Err(ModelResponseError::Stream(
+            "transport interrupted".into(),
+        ))]));
+        let mut retry = Box::new(observer).intercept(upstream);
+        assert!(matches!(retry.next().await, Some(Err(_))));
+        assert!(retry.next().await.is_none());
+        scope.check().expect("transport error poisoned native scope");
     }
     scope.close().expect("cooperative ACK drain");
     thread.close().expect("thread drain");

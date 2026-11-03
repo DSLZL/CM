@@ -664,6 +664,20 @@ def self_check():
             "port": "8080", "listener_inode": "81", "accepted_socket_inodes": ["71"]}
         m04_tui = tui | {"command": [*tui["command"][:3], "/profile/m04/terminal/tui", "launch", "--"]}
         assert bind_tui_mcp_listener(m04_tui, metadata, bound, observer) == bind_tui_mcp_listener(tui, metadata, bound, observer)
+        for case in ("tui-slash", "tui-ui-owner", "legacy-abc"):
+            sdk_tui = tui | {"command": [*tui["command"][:3], "/profile/g06/" + case + "/tui", "launch", "--"],
+                "provider_requests": []}
+            assert bind_tui_mcp_listener(sdk_tui, metadata, bound, observer) == bind_tui_mcp_listener(tui, metadata, bound, observer)
+            for change in ({"provider_requests": tui["provider_requests"]},
+                           {"command": [*sdk_tui["command"][:3], "/profile/g06/unbound/tui", "launch", "--"]},
+                           {"identity": {**tui["identity"], "executable_sha256": "0" * 64}},
+                           {"tui_mcp_listener": {"inode": "82", "port": 8080}},
+                           {"tui_mcp_listener": {"inode": "81", "port": 8081}}):
+                try:
+                    bind_tui_mcp_listener(sdk_tui | change, metadata, bound, observer)
+                except AssertionError:
+                    continue
+                raise AssertionError("Unbound notice-only TUI listener accepted: " + repr(change))
         image_tui = tui | {"command": [*tui["command"][:3], "/profile/review/entry-coverage/cli-image", "launch", "--",
             "--image", "/profile/review/entry-coverage/probe-0/review.png", "--", "CM_M02_cli-image"], "empty_launch_argv": False}
         assert bind_tui_mcp_listener(image_tui, metadata, bound, observer) == bind_tui_mcp_listener(tui, metadata, bound, observer)
@@ -1083,16 +1097,20 @@ def bind_tui_mcp_listener(record, metadata, bound_hosts, observer):
         assert command[0] == "/inputs/host/bin/codex"
     initial_image = command[3] == "/profile/review/entry-coverage/cli-image"
     concurrency = command[3] == "/profile/concurrency/value-flow/tui"
+    sdk_notice = re.fullmatch(r"/profile/g06/(?:tui-slash|tui-ui-owner|legacy-abc)/tui", command[3])
     expected = (["launch", "--", "--tool-concurrency", "2"] if concurrency else
         ["launch", "--", "--image", "/profile/review/entry-coverage/probe-0/review.png", "--", "CM_M02_cli-image"]
         if initial_image else ["launch", "--"])
     assert command[4:] == expected
-    assert upgrade or concurrency or command[3] in ("/profile/m03/terminal/tui", "/profile/m04/terminal/tui") or re.fullmatch(
+    assert upgrade or concurrency or sdk_notice or command[3] in ("/profile/m03/terminal/tui", "/profile/m04/terminal/tui") or re.fullmatch(
         r"/profile/review/(?:nondestructive|invalidation|key-events|entry-coverage|queue-lifecycle|plug-and-play)/[a-z0-9-]+", command[3])
     assert record["tui"] and record["empty_launch_argv"] is (not (initial_image or concurrency))
     assert record["identity"]["proc_exe"] == command[0]
     assert record["identity"]["executable_sha256"] == bound_hosts[command[0]]
-    assert any(item.get("name") == "mcp__codex_worktrees" for request in record["provider_requests"] for item in request["tools"])
+    if sdk_notice:
+        assert not record["provider_requests"], "SDK notice unexpectedly sent a model turn"
+    else:
+        assert any(item.get("name") == "mcp__codex_worktrees" for request in record["provider_requests"] for item in request["tools"])
     listener = record["tui_mcp_listener"]
     inode, port = listener["inode"], str(listener["port"])
     assert re.fullmatch(r"[1-9][0-9]*", inode) and 0 < int(port) < 65536
