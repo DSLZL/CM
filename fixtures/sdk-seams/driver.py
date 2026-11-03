@@ -548,7 +548,9 @@ def case_stream_tool_call():
     value = tool_run()
     result = stream_trace(value)
     kinds = [row["event"]["kind"] for row in decoded(EVIDENCE / "real") for row in [row["input"]]]
-    assert all(kind in kinds for kind in ("tool_call_added", "tool_call_delta", "tool_call_done"))
+    assert kinds.index("tool_call_added") < kinds.index("tool_call_done")
+    deltas = [row for row in value["provider_events"] if row["event"]["type"] == "response.function_call_arguments.delta"]
+    assert len(deltas) == 2 and "tool_call_delta" not in kinds
     actual = [row for row in value["native"] if row["event"] == "runtime-original-tool-start"]
     assert len(actual) == 1 and actual[0]["detail"]["call_id"] == "sdk-real-call"
     return report(4, "generated_tool_boundary_and_actual_handler_are_distinct", result)
@@ -562,7 +564,7 @@ def case_stream_slow_mod():
 
 def case_stream_slow_consumer():
     value = protocol("stream-probe-slow-consumer")
-    assert value["protocol"]["upstream_polls"] == 3
+    assert value["protocol"]["upstream_polls"] == 4
     return report(4, "no_prefetch_without_consumer_demand", value)
 
 

@@ -26,8 +26,13 @@ pub async fn sdk_stream_probe(home: &std::path::Path, case: &str) {
             0 => Some(Ok(ResponseEvent::Created {
                 response_id: Some("private-response".into()),
             })),
-            1 => Some(Ok(ResponseEvent::OutputTextDelta("unchanged".into()))),
-            2 => Some(Ok(ResponseEvent::Completed {
+            1 => Some(Ok(ResponseEvent::ToolCallInputDelta {
+                item_id: "private-tool-item".into(),
+                call_id: Some("private-tool-call".into()),
+                delta: "unchanged-input".into(),
+            })),
+            2 => Some(Ok(ResponseEvent::OutputTextDelta("unchanged".into()))),
+            3 => Some(Ok(ResponseEvent::Completed {
                 response_id: "private-response".into(),
                 token_usage: None,
                 usage_metadata: None,
@@ -95,6 +100,9 @@ pub async fn sdk_stream_probe(home: &std::path::Path, case: &str) {
             );
         }
         assert!(
+            matches!(stream.next().await, Some(Ok(ResponseEvent::ToolCallInputDelta { delta, .. })) if delta == "unchanged-input")
+        );
+        assert!(
             matches!(stream.next().await, Some(Ok(ResponseEvent::OutputTextDelta(text))) if text == "unchanged")
         );
         assert!(matches!(
@@ -111,7 +119,7 @@ pub async fn sdk_stream_probe(home: &std::path::Path, case: &str) {
             .map(|line| serde_json::from_str::<Value>(line).expect("stream event"))
             .filter(|row| row["event"] == "dispatch" && row["kind"] == v23::STREAM_EVENT)
             .count();
-        assert_eq!(dispatches, 4 * observer_count, "missing terminal stream ACK");
+        assert_eq!(dispatches, 5 * observer_count, "missing terminal stream ACK");
         assert!(stream.next().await.is_none());
         drop(stream);
         assert!(dropped.load(AtomicOrdering::Acquire));

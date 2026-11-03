@@ -58,11 +58,16 @@ runtime。取消后的完成只能确认 quiescence，不能复活结果；本�
 HTTP、WebSocket 和 fallback 共用该逻辑身份；这不表示所有这些后端已获产品资格。
 观察者识别 created、completed、工具 item/delta/done、文本字节数、opaque、error
 和 stream_end，不向 Mod 暴露原流对象，也不接受替换或追加 provider event。
+工具 delta 仅来自实际 `ToolCallInputDelta`；固定上游从 custom-tool 输入分片产生它，
+JSON function 的参数分片不产生该事件。真实 JSON 工具验证开始/结束，private probe
+单独验证输入 delta 的 metadata 与原样透传。
 标识符最多 512 字节，输入包含 version、request_id、attempt、sequence、event。
 
 每拉取一项，按已提交 DAG 等待各 Mod 返回精确
 `{"version":1,"ack":<sequence>}`，再透传原事件。无预取队列；消费者暂停时不会
 继续拉取上游，消费者 drop 会取消待完成 native 请求并释放原流。
+completed 和 stream_end 均确认后才透传终止事件并释放上游；传输错误确认后结束
+本次观察，是否重试仍由真实客户端决定。
 缺少 completed 的干净 EOF、错误 ACK、未知字段或版本必须失败。
 当前支持声明仅为 metadata 观察与背压，不包含任意 provider 改写或通用流 SDK。
 
