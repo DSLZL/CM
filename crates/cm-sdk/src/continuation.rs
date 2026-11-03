@@ -6,6 +6,86 @@ pub enum NextPoll {
     Ready { status: u32, result: Vec<u8> },
 }
 
+impl Host {
+    fn next_api(self) -> Result<v23::ContinuationApi, Error> {
+        self.continuation.ok_or_else(|| Error {
+            code: v22::INVALID,
+            message: "ABI 2.3 continuation unavailable".into(),
+        })
+    }
+
+    pub fn next_start(self, request: Handle) -> Result<Handle, Error> {
+        let api = self.next_api()?;
+        let mut task = Handle::NONE;
+        call(|error| unsafe {
+            (api.start.expect("negotiated start"))(self.instance, request, &mut task, error)
+        })?;
+        if task == Handle::NONE {
+            return Err(Error {
+                code: v22::INVALID,
+                message: "null next task".into(),
+            });
+        }
+        Ok(task)
+    }
+
+    pub fn next_poll(self, request: Handle, task: Handle) -> Result<NextPoll, Error> {
+        let api = self.next_api()?;
+        let mut storage = vec![0; v22::MAX_RESULT];
+        let mut output = v23::NextOutput {
+            header: v23::header::<v23::NextOutput>(),
+            status: v23::PENDING,
+            reserved: 0,
+            result: v22::Buffer {
+                data: storage.as_mut_ptr(),
+                capacity: storage.len() as u64,
+                len: 0,
+            },
+        };
+        call(|error| unsafe {
+            (api.poll.expect("negotiated poll"))(self.instance, request, task, &mut output, error)
+        })?;
+        if output.header.struct_size != size_of::<v23::NextOutput>() as u32
+            || output.header.major != 2
+            || output.header.minor != 3
+            || output.reserved != 0
+            || output.result.data != storage.as_mut_ptr()
+            || output.result.capacity != storage.len() as u64
+            || output.result.len > output.result.capacity
+            || ![v22::SUCCEEDED, v22::FAILED, v22::CANCELLED, v23::PENDING].contains(&output.status)
+            || (output.status == v23::PENDING && output.result.len != 0)
+        {
+            return Err(Error {
+                code: v22::INVALID,
+                message: "invalid next output".into(),
+            });
+        }
+        storage.truncate(output.result.len as usize);
+        Ok(if output.status == v23::PENDING {
+            NextPoll::Pending
+        } else {
+            NextPoll::Ready {
+                status: output.status,
+                result: storage,
+            }
+        })
+    }
+
+    pub fn next_cancel(self, request: Handle, task: Handle) -> Result<(), Error> {
+        let api = self.next_api()?;
+        call(|error| unsafe {
+            (api.cancel.expect("negotiated cancel"))(self.instance, request, task, error)
+        })
+    }
+
+    pub fn next_release(self, request: Handle, task: Handle) -> Result<(), Error> {
+        let api = self.next_api()?;
+        call(|error| unsafe {
+            (api.release.expect("negotiated release"))(self.instance, request, task, error)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,85 +249,5 @@ mod tests {
             legacy.next_start(Handle::NONE).unwrap_err().code,
             v22::INVALID
         );
-    }
-}
-
-impl Host {
-    fn next_api(self) -> Result<v23::ContinuationApi, Error> {
-        self.continuation.ok_or_else(|| Error {
-            code: v22::INVALID,
-            message: "ABI 2.3 continuation unavailable".into(),
-        })
-    }
-
-    pub fn next_start(self, request: Handle) -> Result<Handle, Error> {
-        let api = self.next_api()?;
-        let mut task = Handle::NONE;
-        call(|error| unsafe {
-            (api.start.expect("negotiated start"))(self.instance, request, &mut task, error)
-        })?;
-        if task == Handle::NONE {
-            return Err(Error {
-                code: v22::INVALID,
-                message: "null next task".into(),
-            });
-        }
-        Ok(task)
-    }
-
-    pub fn next_poll(self, request: Handle, task: Handle) -> Result<NextPoll, Error> {
-        let api = self.next_api()?;
-        let mut storage = vec![0; v22::MAX_RESULT];
-        let mut output = v23::NextOutput {
-            header: v23::header::<v23::NextOutput>(),
-            status: v23::PENDING,
-            reserved: 0,
-            result: v22::Buffer {
-                data: storage.as_mut_ptr(),
-                capacity: storage.len() as u64,
-                len: 0,
-            },
-        };
-        call(|error| unsafe {
-            (api.poll.expect("negotiated poll"))(self.instance, request, task, &mut output, error)
-        })?;
-        if output.header.struct_size != size_of::<v23::NextOutput>() as u32
-            || output.header.major != 2
-            || output.header.minor != 3
-            || output.reserved != 0
-            || output.result.data != storage.as_mut_ptr()
-            || output.result.capacity != storage.len() as u64
-            || output.result.len > output.result.capacity
-            || ![v22::SUCCEEDED, v22::FAILED, v22::CANCELLED, v23::PENDING].contains(&output.status)
-            || (output.status == v23::PENDING && output.result.len != 0)
-        {
-            return Err(Error {
-                code: v22::INVALID,
-                message: "invalid next output".into(),
-            });
-        }
-        storage.truncate(output.result.len as usize);
-        Ok(if output.status == v23::PENDING {
-            NextPoll::Pending
-        } else {
-            NextPoll::Ready {
-                status: output.status,
-                result: storage,
-            }
-        })
-    }
-
-    pub fn next_cancel(self, request: Handle, task: Handle) -> Result<(), Error> {
-        let api = self.next_api()?;
-        call(|error| unsafe {
-            (api.cancel.expect("negotiated cancel"))(self.instance, request, task, error)
-        })
-    }
-
-    pub fn next_release(self, request: Handle, task: Handle) -> Result<(), Error> {
-        let api = self.next_api()?;
-        call(|error| unsafe {
-            (api.release.expect("negotiated release"))(self.instance, request, task, error)
-        })
     }
 }
