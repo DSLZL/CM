@@ -36,10 +36,10 @@ pub(super) fn graph() -> Result<&'static Graph, cm_runtime::LoadError> {
                     home = Some(std::path::PathBuf::from(value));
                 } else if let Some(value) = value("--cm-profile") {
                     options.profile = value.into_string().ok();
-                } else if let Some(value) = value("--cm-set") {
-                    if let Ok(value) = value.into_string() {
-                        options.overrides.push(value);
-                    }
+                } else if let Some(value) = value("--cm-set")
+                    && let Ok(value) = value.into_string()
+                {
+                    options.overrides.push(value);
                 }
                 index += 1;
             }
