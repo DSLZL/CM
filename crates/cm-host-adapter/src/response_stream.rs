@@ -126,7 +126,7 @@ impl Observer {
             .await?;
             let value: Value = serde_json::from_slice(&output)
                 .map_err(|_| error("invalid stream acknowledgement JSON"))?;
-            if !value.as_object().is_some_and(|object| object.len() == 2)
+            if value.as_object().is_none_or(|object| object.len() != 2)
                 || value["version"] != 1
                 || value["ack"].as_u64() != Some(sequence)
             {
