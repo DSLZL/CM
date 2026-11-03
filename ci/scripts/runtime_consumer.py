@@ -440,6 +440,29 @@ def copy_evidence(source, destination):
         target.write_text(mod_manifest.redact(data.decode("utf-8")), encoding="utf-8")
 
 
+def report_audit(audit, evidence):
+    # Keep the complete per-case audit once, rather than embedding it in every report.
+    return {**{key: value for key, value in audit.items() if key not in ("steps", "executions")},
+        "step_count": len(audit["steps"]), "execution_count": len(audit["executions"]),
+        "evidence": {"path": "outer-runtime-audit.json", "sha256": sha(evidence / "outer-runtime-audit.json")}}
+
+
+def report_audit_self_check():
+    with tempfile.TemporaryDirectory() as directory:
+        evidence, exported = Path(directory) / "source", Path(directory) / "exported"
+        for status in ("pass", "failed"):
+            audit = {"status": status, "compiler_linker_jit_build_service_calls": 0 if status == "pass" else None,
+                "steps": {"case": {"executions": ["trace" * 10000]}}, "executions": ["trace" * 10000]}
+            write(evidence / "outer-runtime-audit.json", audit)
+            summary = report_audit(audit, evidence)
+            assert summary["status"] == status
+            assert summary["compiler_linker_jit_build_service_calls"] == audit["compiler_linker_jit_build_service_calls"]
+            assert summary["step_count"] == summary["execution_count"] == 1
+            assert len(json.dumps(summary)) < 1024, "Report repeated the complete audit"
+            copy_evidence(evidence, exported)
+            assert sha(exported / summary["evidence"]["path"]) == summary["evidence"]["sha256"]
+
+
 @ci_progress.case()
 def check_evidence_redaction(paths):
     import mod_manifest
@@ -453,6 +476,7 @@ def check_evidence_redaction(paths):
 def self_check():
     from unittest.mock import patch
     ci_progress.self_check()
+    report_audit_self_check()
     for raises in (False, True):
         barrier = threading.Barrier(3)
         finished = []
@@ -1548,6 +1572,7 @@ def consume():
         "runtime-package-integrity.json", "zero-build-failure-matrix.json", "empty-host-independent-install.json"), 1)]}
     sys.path.insert(0, str(inputs / "fixture/ci/scripts"))
     import mod_manifest
+    report_audit_self_check()
     m01_acceptance = None
     if not m05_only and producer["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         m01_acceptance = {"schema_version": 1, "task_id": "CM-M01", "target": TARGET, "status": "not_run",
@@ -1832,7 +1857,7 @@ def consume():
             common = {"provenance": provenance(), "producer_job": producer["producer_job"],
                 "consumer_job": os.environ["GITHUB_JOB"], "consumer_cache_mode": "none", "target": TARGET,
                 "host": producer["host"], "input_manifest_sha256": manifest["sha256"], "rootfs_sha256": closure["sha256"],
-                "outer_audit": audit, "release_ready": False}
+                "outer_audit": report_audit(audit, evidence), "release_ready": False}
             common["production_origin"] = origin
             common["test_build_origins"] = validation.get("test_builds", {})
             common["runtime_steps"] = {label: {k: v for k, v in row.items() if k != "audit"} for label, row in checkpoints.results.items()}
