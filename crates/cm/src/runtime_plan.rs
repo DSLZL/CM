@@ -64,6 +64,12 @@ impl HostIdentity {
             serde_json::from_value(value["capabilities"].clone())
                 .map_err(|e| LoadError::input("host_identity", "", &e.to_string()))?;
         capabilities.sort();
+        // Pre-2.3 packages omitted this field; preserve their original lock identity.
+        let abis = match value.get("abis") {
+            Some(abis) => serde_json::from_value(abis.clone())
+                .map_err(|e| LoadError::input("host_identity", "", &e.to_string()))?,
+            None => vec!["1.0".into(), "2.0".into(), "2.1".into(), "2.2".into()],
+        };
         let (patch_map_sha256, prepared_slots) =
             crate::hooks::identity(value).map_err(|e| LoadError::input("host_identity", "", &e))?;
         Ok(Self {
@@ -72,13 +78,7 @@ impl HostIdentity {
             target: loader::TARGET.into(),
             api_version: field("host_api_version")?,
             capabilities,
-            abis: vec![
-                "1.0".into(),
-                "2.0".into(),
-                "2.1".into(),
-                "2.2".into(),
-                "2.3".into(),
-            ],
+            abis,
             patch_map_sha256,
             prepared_slots,
         })
@@ -789,6 +789,10 @@ fn resolve(
                 | "sampling_budget"
                 | "submit_review"
                 | "tool_concurrency"
+                | "tool_continuation"
+                | "response_stream"
+                | "cli_command"
+                | "tui_command"
         ) || !order.is_empty()
         {
             phases.insert(name.into(), order);
@@ -1095,6 +1099,36 @@ fn prepare_selection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn historical_host_records_and_empty_phases_preserve_lock_identity() {
+        let mut record = serde_json::json!({
+            "host_build_id": format!("sha256:{}", "a".repeat(64)),
+            "host_api_version": "0.10.0",
+            "capabilities": []
+        });
+        let hash = "b".repeat(64);
+        let host = HostIdentity::from_record(&record, hash.clone()).unwrap();
+        assert_eq!(host.abis, ["1.0", "2.0", "2.1", "2.2"]);
+        let config = ConfigIdentity {
+            present: false,
+            sha256: None,
+            mods: BTreeMap::new(),
+        };
+        let plan = resolve(&BTreeMap::new(), host, config, BTreeMap::new()).unwrap();
+        assert_eq!(
+            plan.phases.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["after", "before", "body", "legacy_filter"]
+        );
+        record["abis"] = serde_json::json!(["1.0", "2.0", "2.1", "2.2", "2.3"]);
+        let current = HostIdentity::from_record(&record, hash.clone()).unwrap();
+        assert_eq!(
+            current.abis,
+            ["1.0", "2.0", "2.1", "2.2", "2.3"]
+        );
+        record["abis"] = serde_json::json!([23]);
+        assert!(HostIdentity::from_record(&record, hash).is_err());
+    }
 
     fn policy_manifest(id: &str, capability: &str, kind: &str, api: &str) -> Manifest {
         let hash = "a".repeat(64);

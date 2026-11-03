@@ -22,6 +22,10 @@ mod tests {
         assert!(build_id.starts_with("sha256:"));
         assert_eq!(identity["stage"], "experimental-sdk-seams");
         assert_eq!(
+            identity["abis"],
+            serde_json::json!(["1.0", "2.0", "2.1", "2.2", "2.3"])
+        );
+        assert_eq!(
             identity["patch_map"]["descriptor"]["backend"],
             "prepared_slots"
         );

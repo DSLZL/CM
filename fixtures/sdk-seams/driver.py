@@ -175,6 +175,8 @@ class Provider:
                                   "call_id": "sdk-real-call", "output_index": 0, "delta": part})
                         send({"type": "response.output_item.done", "output_index": 0, "item": item})
                     else:
+                        send({"type": "response.output_item.added", "output_index": 0, "item": {
+                            "type": "message", "id": "sdk-message", "role": "assistant", "content": []}})
                         for _ in range(provider.chunks):
                             send({"type": "response.output_text.delta", "item_id": "sdk-message", "output_index": 0,
                                   "content_index": 0, "delta": "CM_G06_STREAM"})
@@ -630,11 +632,13 @@ def case_cli_completion():
     script = WORK / "completion.bash"
     script.write_text(results["bash"]["stdout"])
     argv = ["/bin/bash", "--noprofile", "--norc", "-c",
-        'source "$1"; COMP_WORDS=(codex cm run sdk-a); COMP_CWORD=3; _codex; printf "%s\\n" "${COMPREPLY[@]}"',
+        'source "$1"; COMP_WORDS=(codex cm run sdk-a); COMP_CWORD=3; _codex; printf "%s\\n" "${COMPREPLY[@]}"; '
+        'printf "CM_G06_CHILD\\n"; COMP_WORDS=(codex cm run sdk-a__hello --h); COMP_CWORD=4; _codex; printf "%s\\n" "${COMPREPLY[@]}"',
         "cm-completion-test", str(script)]
     run = subprocess.run(argv, capture_output=True, text=True, check=True, timeout=30,
                          env=environment(home, EVIDENCE / "bash-real"))
     assert "sdk-a__hello" in run.stdout.splitlines(), run.stdout
+    assert run.stdout.split("CM_G06_CHILD\n")[1].splitlines() == ["--help"], run.stdout
     no_native(events(EVIDENCE / "bash-real"))
     return report(5, "generated_shells_and_actual_bash_completion", {"scripts": results, "bash": {"command": argv, "stdout": run.stdout}})
 
@@ -688,10 +692,14 @@ def case_command_actual_drift():
 
 def tui_notice(*, reviewed):
     review = module("review-before-send/driver.py")
-    home = install(PROFILE / "tui")
+    PROFILE.mkdir(parents=True, exist_ok=True)
+    home = PROFILE / "tui"
+    installed = command(home, ["cm", "--home", home, "install", INPUTS / "mods/g06/a/v1"], EVIDENCE / "install-a")
+    no_native(installed)
     if reviewed:
-        shutil.copytree(INPUTS / "mods/g02b/review-before-send", home / "mods" / review.OWNER)
-        mod_manifest.selection(home, ["sdk-a", review.OWNER])
+        installed = command(home, ["cm", "--home", home, "install", INPUTS / "mods/g02b/review-before-send"],
+                            EVIDENCE / "install-b")
+        no_native(installed)
     directory = EVIDENCE / "pty"
     terminal = review.Terminal("g06", "notice", home, reviewed=reviewed, directory=directory,
         extra_env={"CM_SEAMS_EVENTS": str(directory / "events.jsonl")})
@@ -796,7 +804,7 @@ def case_independent_disable_delete():
 
 def case_legacy_abc():
     home = PROFILE / "old-ac"
-    home.mkdir()
+    home.mkdir(parents=True)
     owners = ("org.example.turn-budget", "org.example.tool-concurrency")
     for owner, path in zip(owners, ("g02a/turn-budget", "g03/tool-concurrency")):
         shutil.copytree(INPUTS / "mods" / path, home / "mods" / owner)

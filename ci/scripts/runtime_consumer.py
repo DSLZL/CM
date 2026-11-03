@@ -703,6 +703,48 @@ def self_check():
                 pass
             else:
                 raise AssertionError("Unpinned Host bytes accepted: " + name)
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        probe = "/inputs/probes/cm-sdk-c-abi"
+        actual = root / ("rootfs" + probe)
+        actual.parent.mkdir(parents=True)
+        actual.write_bytes(b"independent SDK ABI probe")
+        producer = {"sdk_seams": {"c_probe_sha256": sha(actual),
+            "private_core_probe": "/inputs/probes/cm-concurrency-core"}, "concurrency": {}}
+        for key, name in (("probe", "cm-concurrency-core"), ("backend_probe", "cm-concurrency-backend")):
+            binary = actual.with_name(name)
+            binary.write_bytes(name.encode())
+            producer["concurrency"][key] = {"path": "/inputs/probes/" + name,
+                "sha256": sha(binary), "separate_from_cli": True, "names": ["existing_protocol"]}
+        write(root / "rootfs/inputs/producer.json", producer)
+        call = '1 execve("' + probe + '", ["' + probe + '", "/inputs/mods/g06/a/v1/payload.so", "valid"], 0x1) = 0'
+        assert bind_sdk_probes([call], root) == [probe]
+        for invalid in (call.replace('"valid"', '"unbound"'),
+                        call.replace('/a/v1/', '/b/v1/'), call.replace('"valid"]', '"valid", "extra"]')):
+            try:
+                bind_sdk_probes([invalid], root)
+            except AssertionError:
+                continue
+            raise AssertionError("SDK ABI probe escaped its exact invocation")
+        core_call = '1 execve("/inputs/probes/cm-concurrency-core", ["/inputs/probes/cm-concurrency-core", "--ignored", "--exact", "thread_manager::tests::cm_sdk_seams_protocol", "--nocapture"], 0x1) = 0'
+        assert bind_concurrency_probes([core_call], root) == [
+            "/inputs/probes/cm-concurrency-core", "/inputs/probes/cm-concurrency-backend"]
+        del producer["sdk_seams"]
+        write(root / "rootfs/inputs/producer.json", producer)
+        try:
+            bind_concurrency_probes([core_call], root)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("SDK Core probe accepted without SDK producer metadata")
+        producer["sdk_seams"] = {"c_probe_sha256": "0" * 64}
+        write(root / "rootfs/inputs/producer.json", producer)
+        try:
+            bind_sdk_probes([call], root)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("SDK ABI probe byte drift accepted")
     observer.audit_network([
         '1 socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC|SOCK_NONBLOCK, 0, [7<UNIX-STREAM:[161700->161701]>, 8<UNIX-STREAM:[161701->161700]>]) = 0'
     ], Path("/metadata"), ())
@@ -1072,7 +1114,8 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
                "ci/scripts/mod_manifest.py", "ci/scripts/runtime_sdk.py", "ci/scripts/managed_package.py",
                "ci/scripts/runtime_state.py", "ci/scripts/mod_author.py", "fixtures/turn-budget/driver.py",
                "fixtures/review-before-send/driver.py", "fixtures/tool-concurrency/driver.py",
-               "fixtures/runtime-qualification/driver.py", "fixtures/runtime-hooks/driver.py", "fixtures/compatibility/driver.py")
+               "fixtures/runtime-qualification/driver.py", "fixtures/runtime-hooks/driver.py", "fixtures/compatibility/driver.py",
+               "fixtures/sdk-seams/driver.py")
     network = []
     sockets = []
     tcp_metadata = []
@@ -1119,9 +1162,10 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
     native_probes = bind_review_probes(executions, consumer_root or directory.parent)
     concurrency_probes = bind_concurrency_probes(executions, consumer_root or directory.parent)
     hook_probes = bind_hook_probes(executions, consumer_root or directory.parent)
+    sdk_probes = bind_sdk_probes(executions, consumer_root or directory.parent)
     code_mode = bind_code_mode(process_calls, executable_memory, evidence, consumer_root or directory.parent, result_paths)
     observer.audit_executions(executions, python_scripts=scripts, sandbox_aliases=aliases,
-        bwrap_executions=bwrap_executions, native_probes=[*native_probes, *concurrency_probes, *hook_probes, *code_mode["executables"]])
+        bwrap_executions=bwrap_executions, native_probes=[*native_probes, *concurrency_probes, *hook_probes, *sdk_probes, *code_mode["executables"]])
     ports = set()
     tui_listeners = []
     for path in sorted(evidence.rglob("result.json") if result_paths is None else result_paths):
@@ -1153,6 +1197,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
         "native_review_probes": native_probes,
         "native_concurrency_probes": concurrency_probes,
         "native_hook_probes": hook_probes,
+        "native_sdk_probes": sdk_probes,
         "normal_business_interpreter": code_mode,
         "provider_tcp_connections": sorted(tcp_connections), "provider_tcp_metadata": tcp_metadata,
         "tui_mcp_listener": next((row for row in tui_listeners if row["evidence"] == "m03/terminal/actual-tui/result.json"), None),
@@ -1391,7 +1436,8 @@ def bind_hook_probes(executions, root):
 
 
 def bind_concurrency_probes(executions, root):
-    concurrency = read(root / "rootfs/inputs/producer.json").get("concurrency")
+    producer = read(root / "rootfs/inputs/producer.json")
+    concurrency = producer.get("concurrency")
     if concurrency is None:
         return []
     result = []
@@ -1400,11 +1446,32 @@ def bind_concurrency_probes(executions, root):
         probe = concurrency[key]
         assert probe["path"] == expected and probe["separate_from_cli"]
         assert sha(root / "rootfs" / probe["path"].lstrip("/")) == probe["sha256"]
+        names = list(probe["names"])
+        if key == "probe" and producer.get("sdk_seams"):
+            assert producer["sdk_seams"]["private_core_probe"] == expected
+            names.append("thread_manager::tests::cm_sdk_seams_protocol")
         for line in executions:
             if 'execve("' + probe["path"] + '"' in line:
-                assert '"--ignored"' in line and '"--exact"' in line and any('"' + name + '"' in line for name in probe["names"]), line
+                assert '"--ignored"' in line and '"--exact"' in line and any('"' + name + '"' in line for name in names), line
         result.append(probe["path"])
     return result
+
+
+def bind_sdk_probes(executions, root):
+    sdk = read(root / "rootfs/inputs/producer.json").get("sdk_seams")
+    if sdk is None:
+        return []
+    probe = "/inputs/probes/cm-sdk-c-abi"
+    assert sha(root / ("rootfs" + probe)) == sdk["c_probe_sha256"]
+    modes = ("valid", "major", "minor", "old-minor", "short-prefix", "short-tail", "huge",
+        "null-host", "misaligned", "null-runtime", "runtime-short", "runtime-minor", "runtime-reserved",
+        "null-complete", "null-state-get", "null-state-set", "null-next", "next-short", "next-minor",
+        "next-reserved", "null-start", "null-poll", "null-cancel", "null-release")
+    for line in executions:
+        if 'execve("' + probe + '"' in line:
+            assert re.search(r', \["' + re.escape(probe) + r'", "/inputs/mods/g06/a/v1/payload[.]so", "(?:'
+                + "|".join(modes) + r')"\], ', line), line
+    return [probe]
 
 
 def bind_review_probes(executions, root):

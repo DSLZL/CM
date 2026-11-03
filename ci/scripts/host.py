@@ -391,7 +391,7 @@ def build_identity(pin, inputs, protocol):
         raise RuntimeError("Missing actual Cargo build units")
     return {"schema_version": 1, "host_release_id": pin["host_release_id"],
             "host_build_id": "sha256:" + digest(inputs), "host_api_version": pin["host_api_version"],
-            "capabilities": pin["capabilities"], "protocol_contract_id": "sha256:" + protocol,
+            "capabilities": pin["capabilities"], "abis": pin["abis"], "protocol_contract_id": "sha256:" + protocol,
             "stage": pin["stage"], "patch_map": inputs["runtime_hooks"],
             "patch_map_sha256": digest(inputs["runtime_hooks"]), "inputs": inputs}
 

@@ -88,6 +88,36 @@ pub(super) fn try_parse() -> Result<MultitoolCli, clap::Error> {
     MultitoolCli::from_arg_matches_mut(&mut matches)
 }
 
+pub(super) fn completion(shell: clap_complete::Shell) -> Result<String, clap::Error> {
+    let mut app = command()?;
+    let mut names = Vec::new();
+    if matches!(shell, clap_complete::Shell::Bash) {
+        // Pinned Bash generation splits command paths on the SDK name separator `__`.
+        app = app.mut_subcommand("cm", |cm| {
+            cm.mut_subcommand("run", |mut run| {
+                let registered: Vec<_> = run
+                    .get_subcommands()
+                    .map(|child| child.get_name().to_owned())
+                    .collect();
+                for (index, name) in registered.into_iter().enumerate() {
+                    let temporary = format!("cmcompletion:{index}:");
+                    run = run.mut_subcommand(&name, |child| child.name(temporary.clone()));
+                    names.push((temporary, name));
+                }
+                run
+            })
+        });
+    }
+    let mut output = Vec::new();
+    clap_complete::generate(shell, &mut app, "codex", &mut output);
+    let mut output = String::from_utf8(output)
+        .map_err(|error| clap::Error::raw(clap::error::ErrorKind::Io, error.to_string()))?;
+    for (temporary, name) in names {
+        output = output.replace(&temporary, &name);
+    }
+    Ok(output)
+}
+
 pub(super) fn parse() -> MultitoolCli {
     try_parse().unwrap_or_else(|error| error.exit())
 }
