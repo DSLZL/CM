@@ -52,6 +52,7 @@ pub async fn sdk_stream_probe(home: &std::path::Path, case: &str) {
     while !std::fs::read_to_string(&events)
         .unwrap_or_default()
         .contains("\"event\":\"waiting\"")
+    {
         assert!(Instant::now() < deadline, "native stream barrier");
         tokio::task::yield_now().await;
     }
