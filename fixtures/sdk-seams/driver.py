@@ -643,7 +643,7 @@ def case_cli_completion():
     run = subprocess.run(argv, capture_output=True, text=True, check=True, timeout=30,
                          env=environment(home, EVIDENCE / "bash-real"))
     assert "sdk-a__hello" in run.stdout.splitlines(), run.stdout
-    assert run.stdout.split("CM_G06_CHILD\n")[1].splitlines() == ["--help"], run.stdout
+    assert run.stdout.split("CM_G06_CHILD\n")[1].splitlines() == ["--home", "--help"], run.stdout
     no_native(events(EVIDENCE / "bash-real"))
     return report(5, "generated_shells_and_actual_bash_completion", {"scripts": results, "bash": {"command": argv, "stdout": run.stdout}})
 
