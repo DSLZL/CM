@@ -137,7 +137,10 @@ pub async fn run() {
                 .is_ok_and(|state| state.started_returned)
         })
         .await;
-        if case == "cancel-before" || case == "cancel-queued" {
+        if case == "order-reentry" {
+            assert!(request.take().expect("request").await.is_ok());
+            assert_eq!(calls.load(Ordering::Acquire), 0);
+        } else if case == "cancel-before" || case == "cancel-queued" {
             parent.cancel(false);
             assert!(request.take().expect("request").await.is_err());
             assert_eq!(

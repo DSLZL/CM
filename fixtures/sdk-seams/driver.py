@@ -263,6 +263,8 @@ def protocol(case):
     barrier = directory / "barrier"
     barrier.mkdir(parents=True)
     mode = "cancel-before" if case in ("cancel-before", "cancel-queued") else case
+    if case == "order-reentry":
+        mode = "zero"
     extra = {"CM_SEAMS_PROFILE": str(home), "CM_SEAMS_PROBE_CASE": case,
         "CM_SEAMS_PROBE_REPORT": str(directory / "protocol.json"),
         "RUST_MIN_STACK": str(64 * 1024 * 1024), "CM_SEAMS_MODE": mode,
@@ -427,7 +429,8 @@ def case_noncooperative():
     value = command(home, ["cm", "--home", home, "run", "sdk-a__hello"], EVIDENCE / "pinned", good=False,
                     extra={"CM_SEAMS_MODE": "noncooperative", "CM_SEAMS_MODE_KIND": "17"}, timeout=100)
     settled(EVIDENCE / "pinned", pinned=True)
-    assert "pinned" in value["stderr"] or any("pinned" in json.dumps(row) for row in value["native"])
+    assert any(row["event"] == "runtime-request-cancel" and row["detail"]["timeout"] for row in value["native"])
+    assert any(row["event"] == "waiting" for row in value["mods"])
     return report(2, "noncooperative_library_retained_until_process_exit", value)
 
 

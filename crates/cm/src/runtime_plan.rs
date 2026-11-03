@@ -1122,10 +1122,7 @@ mod tests {
         );
         record["abis"] = serde_json::json!(["1.0", "2.0", "2.1", "2.2", "2.3"]);
         let current = HostIdentity::from_record(&record, hash.clone()).unwrap();
-        assert_eq!(
-            current.abis,
-            ["1.0", "2.0", "2.1", "2.2", "2.3"]
-        );
+        assert_eq!(current.abis, ["1.0", "2.0", "2.1", "2.2", "2.3"]);
         record["abis"] = serde_json::json!([23]);
         assert!(HostIdentity::from_record(&record, hash).is_err());
     }
