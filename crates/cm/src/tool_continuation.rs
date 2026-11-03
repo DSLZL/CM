@@ -142,6 +142,7 @@ impl Continuation {
             }
         };
         self.task.set(task).map_err(|_| v22::INVALID)?;
+        let request_handle = request.handle();
         let next = Arc::clone(self);
         let request = Arc::clone(request);
         let executor = self.runtime.clone();
@@ -174,7 +175,7 @@ impl Continuation {
         });
         event(
             "runtime-next-consumed",
-            json!({"request": handle_json(request.handle()), "task": handle_json(task)}),
+            json!({"request": handle_json(request_handle), "task": handle_json(task)}),
         );
         Ok(task)
     }
