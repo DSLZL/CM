@@ -45,9 +45,11 @@ pub(super) fn graph() -> Result<&'static Graph, cm_runtime::LoadError> {
             }
             let home = match home {
                 Some(home) => home,
-                None => find_codex_home().map_err(|error| {
-                    cm_runtime::LoadError::input("command_graph", "", &error.to_string())
-                })?,
+                None => find_codex_home()
+                    .map_err(|error| {
+                        cm_runtime::LoadError::input("command_graph", "", &error.to_string())
+                    })?
+                    .to_path_buf(),
             };
             Graph::prepare(&home, &options)
         })
