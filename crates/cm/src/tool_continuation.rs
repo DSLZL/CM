@@ -117,8 +117,7 @@ impl Continuation {
         drop(parent);
         let allocate = (|| {
             let hub = hub().map_err(|_| v22::INVALID)?;
-            let result = hub
-                .tables
+            hub.tables
                 .lock()
                 .map_err(|_| v22::INVALID)?
                 .insert(
@@ -129,8 +128,7 @@ impl Continuation {
                         continuation: Arc::clone(self),
                     },
                 )
-                .map_err(|_| v22::LIMIT);
-            result
+                .map_err(|_| v22::LIMIT)
         })();
         let task = match allocate {
             Ok(task) => task,

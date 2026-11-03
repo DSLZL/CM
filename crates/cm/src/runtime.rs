@@ -1560,10 +1560,10 @@ unsafe extern "C" fn complete(
         if let Some(error) = protocol_error {
             request.latch(error);
         }
-        if child_pending {
-            if let Some(next) = &request.continuation {
-                next.cancel();
-            }
+        if child_pending
+            && let Some(next) = &request.continuation
+        {
+            next.cancel();
         }
         event(
             "runtime-complete",
