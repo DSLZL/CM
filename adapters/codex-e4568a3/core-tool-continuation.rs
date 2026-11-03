@@ -155,12 +155,11 @@ fn layer(
                         "keep requires a completed next",
                     ));
                 }
-                let result = saved
+                saved
                     .lock()
                     .map_err(|_| fail(&scope, &contribution, "poisoned original result"))?
                     .take()
-                    .ok_or_else(|| fail(&scope, &contribution, "original result missing"))?;
-                result
+                    .ok_or_else(|| fail(&scope, &contribution, "original result missing"))?
             }
             Decision::Text {
                 version: 1,
