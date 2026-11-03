@@ -108,7 +108,7 @@ def reject(home, *, metadata=False):
 
 
 def decoded(directory, kind=16):
-    return [{**row, "input": json.loads(bytes.fromhex(row["input_hex"]).decode("utf-8"))}
+    return [{**row, "input": json.loads(bytes.fromhex(row["input_hex"]))}
             for row in events(directory)["mods"] if row["event"] == "dispatch" and row["kind"] == kind]
 
 
