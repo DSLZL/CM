@@ -621,7 +621,7 @@ def case_cli_help():
         value = command(home, args, EVIDENCE / str(index))
         no_native(value)
         if index < 2:
-            assert "sdk-a__hello" in value["stdout"]
+            assert "sdk-a__impossible_help_probe" in value["stdout"]
         results.append(value)
     return report(5, "metadata_help_and_existing_root_commands", results)
 
