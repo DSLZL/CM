@@ -108,7 +108,7 @@ def reject(home, *, metadata=False):
 
 
 def decoded(directory, kind=16):
-    return [{**row, "input": json.loads(bytes.fromhex(row["input_hex"]))}
+    return [{**row, "input": json.loads(bytes.fromhex(row["input_hex"]).decode("utf-8"))}
             for row in events(directory)["mods"] if row["event"] == "dispatch" and row["kind"] == kind]
 
 
@@ -621,7 +621,7 @@ def case_cli_help():
         value = command(home, args, EVIDENCE / str(index))
         no_native(value)
         if index < 2:
-            assert "sdk-a__hello" in str(value["stdout"])
+            assert "sdk-a__hello" in value["stdout"]
         results.append(value)
     return report(5, "metadata_help_and_existing_root_commands", results)
 
