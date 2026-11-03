@@ -119,7 +119,11 @@ pub async fn sdk_stream_probe(home: &std::path::Path, case: &str) {
             .map(|line| serde_json::from_str::<Value>(line).expect("stream event"))
             .filter(|row| row["event"] == "dispatch" && row["kind"] == v23::STREAM_EVENT)
             .count();
-        assert_eq!(dispatches, 5 * observer_count, "missing terminal stream ACK");
+        assert_eq!(
+            dispatches,
+            5 * observer_count,
+            "missing terminal stream ACK"
+        );
         assert!(stream.next().await.is_none());
         drop(stream);
         assert!(dropped.load(AtomicOrdering::Acquire));
@@ -136,7 +140,9 @@ pub async fn sdk_stream_probe(home: &std::path::Path, case: &str) {
         let mut retry = Box::new(observer).intercept(upstream);
         assert!(matches!(retry.next().await, Some(Err(_))));
         assert!(retry.next().await.is_none());
-        scope.check().expect("transport error poisoned native scope");
+        scope
+            .check()
+            .expect("transport error poisoned native scope");
     }
     scope.close().expect("cooperative ACK drain");
     thread.close().expect("thread drain");
