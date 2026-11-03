@@ -86,6 +86,7 @@ pub(crate) struct BinaryManifest {
     pub config: Option<Contract>,
     pub state: Option<State>,
     pub provenance: Provenance,
+    pub commands: Option<crate::commands::Metadata>,
 }
 
 pub(crate) fn parse(bytes: &[u8]) -> Result<Manifest, crate::LoadError> {
@@ -159,7 +160,7 @@ impl BinaryManifest {
         let abi = &self.compat;
         let minor_max = match abi.abi_major {
             1 => 0,
-            2 => 2,
+            2 => 3,
             _ => return Err("compat.abi_major: unsupported".into()),
         };
         if self.format_version != 3
@@ -288,6 +289,7 @@ impl BinaryManifest {
         if let Some(config) = &self.config {
             config.validate()?;
         }
+        crate::commands::validate_manifest(self)?;
         Ok(())
     }
 
@@ -343,7 +345,7 @@ impl BinaryManifest {
     }
 
     pub(crate) fn summary(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut value = serde_json::json!({
             "kind": self.kind, "binary": self.binary, "compat": self.compat,
             "dependencies": self.dependencies, "conflicts": self.conflicts,
             "state": self.state, "provenance": self.provenance,
@@ -351,7 +353,9 @@ impl BinaryManifest {
             "qualification": {"declared": true, "verified": false,
                 "backend": if self.kind == ModKind::AdvancedHook {"prepared_slots"} else {"sdk"},
                 "unsupported": false},
-        })
+        });
+        if let Some(commands) = &self.commands { value["commands"] = serde_json::to_value(commands).expect("command metadata serializes"); }
+        value
     }
 }
 

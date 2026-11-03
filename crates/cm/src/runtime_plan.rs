@@ -72,7 +72,7 @@ impl HostIdentity {
             target: loader::TARGET.into(),
             api_version: field("host_api_version")?,
             capabilities,
-            abis: vec!["1.0".into(), "2.0".into(), "2.1".into(), "2.2".into()],
+            abis: vec!["1.0".into(), "2.0".into(), "2.1".into(), "2.2".into(), "2.3".into()],
             patch_map_sha256,
             prepared_slots,
         })
@@ -308,6 +308,10 @@ fn phase(kind: &Kind) -> &'static str {
         Kind::SamplingBudget => "sampling_budget",
         Kind::SubmitReview => "submit_review",
         Kind::ToolConcurrency => "tool_concurrency",
+        Kind::ToolAround | Kind::ToolReplacement => "tool_continuation",
+        Kind::ResponseStream => "response_stream",
+        Kind::CliCommand => "cli_command",
+        Kind::TuiCommand => "tui_command",
     }
 }
 
@@ -490,11 +494,20 @@ fn resolve(
                     Kind::SamplingBudget => cm_abi::v22::SAMPLING_BUDGET_CAPABILITY,
                     Kind::SubmitReview => cm_abi::v22::SUBMIT_REVIEW_CAPABILITY,
                     Kind::ToolConcurrency => cm_abi::v22::TOOL_CONCURRENCY_CAPABILITY,
+                    Kind::ToolAround | Kind::ToolReplacement => cm_abi::v23::TOOL_CONTINUATION,
+                    Kind::ResponseStream => cm_abi::v23::RESPONSE_STREAM,
+                    Kind::CliCommand => cm_abi::v23::CLI_COMMAND,
+                    Kind::TuiCommand => cm_abi::v23::TUI_COMMAND,
                     _ => unreachable!("runtime kind"),
                 };
-                let valid_resource = if matches!(
+                let continuation = matches!(contribution.kind, Kind::ToolAround | Kind::ToolReplacement);
+                let ordered = continuation || contribution.kind == Kind::ResponseStream;
+                let sdk = contribution.kind.abi() >= cm_abi::v23::KIND_TOOL_AROUND;
+                let valid_resource = if continuation {
+                    contribution.resource == "exec_command"
+                } else if matches!(
                     contribution.kind,
-                    Kind::SamplingBudget | Kind::SubmitReview | Kind::ToolConcurrency
+                    Kind::SamplingBudget | Kind::SubmitReview | Kind::ToolConcurrency | Kind::ResponseStream
                 ) {
                     contribution.resource == capability
                 } else {
@@ -502,15 +515,15 @@ fn resolve(
                 };
                 manifest.format_version == 3
                     && manifest.abi_major == 2
-                    && manifest.abi_minor == 2
+                    && manifest.abi_minor >= if sdk { 3 } else { 2 }
                     && contribution.capability == capability
                     && manifest
                         .required_capabilities
                         .contains(&contribution.capability)
                     && valid_resource
                     && contribution.priority == 0
-                    && contribution.order_before.is_empty()
-                    && contribution.order_after.is_empty()
+                    && (ordered || contribution.order_before.is_empty())
+                    && (ordered || contribution.order_after.is_empty())
             } else if limiter {
                 manifest.abi_major == 2
                     && manifest.abi_minor >= 1
@@ -537,7 +550,7 @@ fn resolve(
                     "unknown resource/capability or priority out of bounds",
                 ));
             }
-            if contribution.kind.runtime() {
+            if contribution.kind.runtime() && !matches!(contribution.kind, Kind::ToolAround | Kind::ResponseStream) {
                 let name = (contribution.kind.abi(), contribution.resource.clone());
                 if let Some(previous) =
                     runtime_names.insert(name, format!("{id}::{}", contribution.id))
@@ -545,7 +558,7 @@ fn resolve(
                     let mut error = failure(
                         if matches!(
                             contribution.kind,
-                            Kind::SamplingBudget | Kind::SubmitReview | Kind::ToolConcurrency
+                            Kind::SamplingBudget | Kind::SubmitReview | Kind::ToolConcurrency | Kind::ToolReplacement
                         ) {
                             "exclusive_conflict"
                         } else {
@@ -636,6 +649,16 @@ fn resolve(
             "runtime set exceeds contribution/resource/byte budget",
         ));
     }
+    for (key, (owner, hook)) in &hooks {
+        if hook.kind == Kind::ToolReplacement
+            && let Some((other, _)) = hooks.iter().find(|(_, (_, item))| item.kind == Kind::ToolAround && item.resource == hook.resource)
+        {
+            let mut error = failure("exclusive_conflict", owner, Some(&hook.id), "tool replacement and around composition is unsupported");
+            error.resource = Some(hook.resource.clone());
+            error.related_contributions = vec![key.clone(), other.clone()];
+            return Err(error);
+        }
+    }
     // Exclusive claims are rejected before priority or order can influence resolution.
     if replacements.len() > 1 {
         let mut error = failure(
@@ -713,6 +736,10 @@ fn resolve(
         "sampling_budget",
         "submit_review",
         "tool_concurrency",
+        "tool_continuation",
+        "response_stream",
+        "cli_command",
+        "tui_command",
     ] {
         let nodes: BTreeSet<_> = hooks
             .iter()

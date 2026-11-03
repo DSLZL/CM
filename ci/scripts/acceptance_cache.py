@@ -31,24 +31,28 @@ def recipes(root):
         "mod-pinned-snapshot-build": (root, cargo_args(runtime, "test", cfg, cfg["test_profile"]) +
             ["--lib", "--no-run", "--message-format=json"], target / "host", "cm_runtime"),
     }
-    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         probe = Path(os.environ["RUNNER_TEMP"]) / "cm-m02-native-probe-source"
         specs["m02-native-probe-build"] = (probe, ["cargo", "test", "--locked", "--manifest-path",
             "codex-rs/Cargo.toml", "--target", TARGET, "--profile", cfg["test_profile"],
             "--package", "codex-core", "--lib", "--no-run", "--message-format=json"],
             target / "m02-native-probe", "codex_core")
-    if cfg["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if cfg["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         probe = Path(os.environ["RUNNER_TEMP"]) / "cm-review-tui-probe-source"
         specs["review-tui-probe-build"] = (probe, ["cargo", "test", "--locked", "--manifest-path",
             "codex-rs/Cargo.toml", "--target", TARGET, "--profile", cfg["test_profile"],
             "-p", "codex-tui", "--lib", "--no-run", "--message-format=json"],
             target / "review-tui-probe", "codex_tui")
-    if cfg["task_id"] in ("CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if cfg["task_id"] in ("CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         specs["g03-local-backend-contract"] = (root, cargo_args({**unit, "packages": ["codex-app-server"]},
             "test", cfg, cfg["test_profile"]) + ["--lib", "cm_tool_concurrency_origin_tests::", "--", "--nocapture"],
             target / "host", None)
-    return {label: {"cwd": str(cwd), "command": command, "target_directory": str(target), "binary": binary}
-            for label, (cwd, command, target, binary) in specs.items()}
+    result = {label: {"cwd": str(cwd), "command": command, "target_directory": str(target), "binary": binary}
+              for label, (cwd, command, target, binary) in specs.items()}
+    if cfg["task_id"] == "CM-G06":
+        import sdk_seams
+        result.update(sdk_seams.recipes(root))
+    return result
 
 
 def identify(root, logs):
@@ -75,6 +79,11 @@ def identify(root, logs):
         "native_tools": {name: {key: value for key, value in tool.items() if key != "path"}
                          for name, tool in compatibility["native"].items()},
         "native": host.read(root / host.ADAPTER / "inputs/native.json")}
+    if load_config(root)["task_id"] == "CM-G06":
+        import sdk_seams
+        legacy["sdk_author_inputs"] = {label: sdk_seams.author_inputs(root, label)
+                                       for label in specs if label.startswith("g06-")}
+        legacy["sdk_compiler"] = {key: value for key, value in compiler.items() if key != "cargo_configuration"}
     inputs = {"schema_version": PROTOCOL, "recipes": specs, "legacy": legacy,
               "targets": target_inputs(legacy, compiler)}
     host.write(logs / "acceptance-build-inputs.json", inputs)
@@ -92,7 +101,10 @@ def target_inputs(legacy, compiler=None):
     return {label: {"schema_version": PROTOCOL, "host": legacy["host"], "recipes": {label: recipe},
                    **({"instrumented_source_sha256": legacy[private_sources[label]],
                        **({"compiler": compiler} if changed_compiler else {})} if label in private_sources else {})}
-            for label, recipe in legacy["recipes"].items()}
+            for label, recipe in legacy["recipes"].items() if not label.startswith("g06-")} | {
+        label: {"schema_version": PROTOCOL, "recipes": {label: recipe},
+                "author": legacy["sdk_author_inputs"][label], "compiler": legacy["sdk_compiler"]}
+        for label, recipe in legacy["recipes"].items() if label.startswith("g06-")}
 
 
 def origin():
@@ -180,11 +192,14 @@ def run(root, logs, label, destination=None):
                 {**os.environ, "CARGO_TARGET_DIR": recipe["target_directory"]})
         shutil.copyfile(logs / (label + ".log"), cache / (label + ".log"))
         if recipe["binary"]:
-            artifacts = [event["executable"] for line in (logs / (label + ".log")).read_text().splitlines()
-                if line.startswith("{") and (event := json.loads(line)).get("reason") == "compiler-artifact"
-                and event.get("executable") and event["target"]["name"] == recipe["binary"]]
-            assert len(set(artifacts)) == 1, artifacts
-            shutil.copy2(artifacts[0], binary)
+            if "artifact_path" in recipe:
+                shutil.copy2(recipe["artifact_path"], binary)
+            else:
+                artifacts = [event["executable"] for line in (logs / (label + ".log")).read_text().splitlines()
+                    if line.startswith("{") and (event := json.loads(line)).get("reason") == "compiler-artifact"
+                    and event.get("executable") and event["target"]["name"] == recipe["binary"]]
+                assert len(set(artifacts)) == 1, artifacts
+                shutil.copy2(artifacts[0], binary)
         state["checks"][label] = {"recipe": recipe, "return_code": 0}
         host.write(cache / "build.json", {"inputs": value, "origin": origin(),
             "checks": {label: state["checks"][label]},
@@ -309,6 +324,14 @@ def self_check():
             state = host.read(logs / "acceptance-build-cache.json")["targets"]
             assert {label for label, value in state.items() if value["migrated"]} == {"check", "other"}
             assert state["m02-native-probe-build"]["status"] == state["review-tui-probe-build"]["status"] == "miss"
+            authors = {**private, "recipes": {name: recipe for name in ("g06-sdk-a-v1", "g06-sdk-b-v1", "g06-c-abi")},
+                "sdk_author_inputs": {name: {"sources": name} for name in ("g06-sdk-a-v1", "g06-sdk-b-v1", "g06-c-abi")},
+                "sdk_compiler": compiler}
+            before = target_inputs(authors)
+            assert target_inputs({**authors, "host": {"host_build_id": "different-host"}}) == before
+            changed = json.loads(json.dumps(authors))
+            changed["sdk_author_inputs"]["g06-sdk-a-v1"]["sources"] = "only-author-a-changed"
+            assert {name for name in before if before[name] != target_inputs(changed)[name]} == {"g06-sdk-a-v1"}
 
 
 if __name__ == "__main__":

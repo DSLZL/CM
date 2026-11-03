@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use cm_abi::v22;
+use cm_abi::{v22, v23};
 use cm_runtime::LoadError;
 use cm_runtime::runtime::{self, Contribution, Kind, Registry, Scope};
 use cm_runtime::sampling_budget::TurnScope;
@@ -16,6 +16,7 @@ use codex_tools::{
 use serde_json::{Value, json};
 
 static SECTION_IDS: OnceLock<Mutex<BTreeMap<String, &'static str>>> = OnceLock::new();
+mod response_stream;
 
 struct Adapter {
     registry: Registry,
@@ -28,7 +29,7 @@ pub fn append<C: Send + Sync + 'static>(builder: &mut ExtensionRegistryBuilder<C
     let result = (|| {
         let contributions: Vec<_> = runtime::contributions()?
             .into_iter()
-            .filter(|item| item.kind != Kind::SubmitReview)
+            .filter(|item| !matches!(item.kind, Kind::SubmitReview | Kind::CliCommand | Kind::TuiCommand))
             .collect();
         if contributions.is_empty() {
             return Ok(None);
@@ -39,7 +40,11 @@ pub fn append<C: Send + Sync + 'static>(builder: &mut ExtensionRegistryBuilder<C
                 || contribution.kind == Kind::SamplingBudget
                     && contribution.name == v22::SAMPLING_BUDGET_CAPABILITY
                 || contribution.kind == Kind::ToolConcurrency
-                    && contribution.name == v22::TOOL_CONCURRENCY_CAPABILITY)
+                    && contribution.name == v22::TOOL_CONCURRENCY_CAPABILITY
+                || matches!(contribution.kind, Kind::ToolAround | Kind::ToolReplacement)
+                    && contribution.name == "exec_command"
+                || contribution.kind == Kind::ResponseStream
+                    && contribution.name == v23::RESPONSE_STREAM)
             {
                 return Err(runtime::registration_error(
                     &contribution.owner,
@@ -82,6 +87,7 @@ pub fn append<C: Send + Sync + 'static>(builder: &mut ExtensionRegistryBuilder<C
             builder.thread_lifecycle_contributor(adapter.clone());
             builder.turn_lifecycle_contributor(adapter.clone());
             builder.tool_contributor(adapter.clone());
+            builder.model_request_contributor(adapter.clone());
             builder.prompt_contributor(adapter);
         }
         Ok(None) => {}

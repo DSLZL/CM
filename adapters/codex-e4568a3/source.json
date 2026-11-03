@@ -8,8 +8,8 @@
     "codex-rs/Cargo.lock": "319fbf5f0e3f1217f09e3bdeeae5bbd6b9da208e30495d7f5eb3102a76474812",
     "codex-rs/rust-toolchain.toml": "570656042681cfd8795403a455baf9a33035331a07db0645e866bbcea89a3d64"
   },
-  "host_release_id": "cm-host-0.13.0-g05",
-  "host_api_version": "0.10.0",
+  "host_release_id": "cm-host-0.14.0-g06",
+  "host_api_version": "0.11.0",
   "runtime_slots": "runtime-slots.json",
   "capabilities": [
     "core.tool_parallel_eligibility.v1",
@@ -21,10 +21,14 @@
     "state.files.v1",
     "core.turn_sampling_budget.v1",
     "tui.submit_review.v1",
-    "core.turn_tool_concurrency.v1"
+    "core.turn_tool_concurrency.v1",
+    "core.tool_continuation.v1",
+    "core.response_stream_observe.v1",
+    "cli.command.v1",
+    "tui.command.v1"
   ],
   "protocol_source": "codex-rs/protocol",
-  "stage": "prepared-upgrade-compatibility",
+  "stage": "experimental-sdk-seams",
   "official_asset": {
     "url": "https://github.com/openai/codex/releases/download/rust-v0.163.0/codex-x86_64-unknown-linux-musl.tar.gz",
     "sha256": "beb339e8ecd9ba057a6bb2dc81ad8ca474812edfbf0fc5056ca818797648dde4",
@@ -73,7 +77,16 @@
     "adapters/codex-e4568a3/tui-submit-review.rs": "codex-rs/tui/src/bottom_pane/chat_composer/submit_review.rs",
     "adapters/codex-e4568a3/tui-review-dispatch.rs": "codex-rs/tui/src/chatwidget/cm_review.rs",
     "crates/cm/src/tool_concurrency.rs": "codex-rs/cm/src/tool_concurrency.rs",
-    "crates/cm/src/upgrade.rs": "codex-rs/cm/src/upgrade.rs"
+    "crates/cm/src/upgrade.rs": "codex-rs/cm/src/upgrade.rs",
+    "crates/cm-abi/src/v23.rs": "codex-rs/cm-abi/src/v23.rs",
+    "crates/cm-abi/include/cm_mod_v23.h": "codex-rs/cm-abi/include/cm_mod_v23.h",
+    "crates/cm-sdk/src/continuation.rs": "codex-rs/cm-sdk/src/continuation.rs",
+    "crates/cm-host-adapter/src/response_stream.rs": "codex-rs/cm-host-adapter/src/response_stream.rs",
+    "crates/cm/src/tool_continuation.rs": "codex-rs/cm/src/tool_continuation.rs",
+    "crates/cm/src/commands.rs": "codex-rs/cm/src/commands.rs",
+    "crates/cm/src/commands/ui.rs": "codex-rs/cm/src/commands/ui.rs",
+    "adapters/codex-e4568a3/core-tool-continuation.rs": "codex-rs/core/src/tools/cm_tool_continuation.rs",
+    "adapters/codex-e4568a3/cli-commands.rs": "codex-rs/cli/src/cm_commands.rs"
   },
   "patches": [
     "cli.patch",
@@ -83,7 +96,8 @@
     "managed.patch",
     "sampling-budget.patch",
     "tui-review.patch",
-    "tool-concurrency.patch"
+    "tool-concurrency.patch",
+    "sdk-seams.patch"
   ],
   "patched_paths": [
     "codex-rs/Cargo.lock",
@@ -116,10 +130,13 @@
     "codex-rs/config/examples/cm-schema.rs",
     "codex-rs/config/src/config_toml.rs",
     "codex-rs/core/Cargo.toml",
+    "codex-rs/core/src/client.rs",
     "codex-rs/core/src/code_mode_host.rs",
     "codex-rs/core/src/config/mod.rs",
     "codex-rs/core/src/context/world_state/mod.rs",
     "codex-rs/core/src/lib.rs",
+    "codex-rs/core/src/model_request.rs",
+    "codex-rs/core/src/model_request_tests.rs",
     "codex-rs/core/src/session/session.rs",
     "codex-rs/core/src/session/turn.rs",
     "codex-rs/core/src/session/turn_context.rs",
@@ -137,6 +154,7 @@
     "codex-rs/core/tests/suite/openai_file_mcp.rs",
     "codex-rs/exec/Cargo.toml",
     "codex-rs/exec/src/lib.rs",
+    "codex-rs/ext/extension-api/src/model_request.rs",
     "codex-rs/protocol/src/turn_input.rs",
     "codex-rs/tui/Cargo.toml",
     "codex-rs/tui/src/app/event_dispatch.rs",
@@ -149,7 +167,10 @@
     "codex-rs/tui/src/bottom_pane/chat_composer/composer_layout.rs",
     "codex-rs/tui/src/bottom_pane/chat_composer/paste_input.rs",
     "codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs",
+    "codex-rs/tui/src/bottom_pane/chat_composer/sparkle.rs",
+    "codex-rs/tui/src/bottom_pane/command_popup.rs",
     "codex-rs/tui/src/bottom_pane/mod.rs",
+    "codex-rs/tui/src/bottom_pane/slash_commands.rs",
     "codex-rs/tui/src/chatwidget.rs",
     "codex-rs/tui/src/chatwidget/backend_banners.rs",
     "codex-rs/tui/src/chatwidget/constructor.rs",
@@ -159,10 +180,12 @@
     "codex-rs/tui/src/chatwidget/input_submission.rs",
     "codex-rs/tui/src/chatwidget/interaction.rs",
     "codex-rs/tui/src/chatwidget/reconnect.rs",
+    "codex-rs/tui/src/chatwidget/session_flow.rs",
     "codex-rs/tui/src/chatwidget/slash_dispatch.rs",
     "codex-rs/tui/src/chatwidget/startup_submission.rs",
     "codex-rs/tui/src/chatwidget/user_messages.rs",
     "codex-rs/tui/src/keymap.rs",
-    "codex-rs/tui/src/lib.rs"
+    "codex-rs/tui/src/lib.rs",
+    "codex-rs/tui/src/startup_recovery.rs"
   ]
 }

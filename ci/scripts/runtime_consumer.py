@@ -160,7 +160,7 @@ def produce():
     lock = sha(root / unit["lockfile"])
     authors = {"a": read(logs / "mod-build.json")}
     for variant in ("normal", "two-limiters", "init-fail", *ENTRY_INVALID, *CALL_INVALID,
-                    *(("config",) if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05") else ())):
+                    *(("config",) if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06") else ())):
         target = Path(os.environ["CARGO_TARGET_DIR"]) / ("output-limit-" + variant)
         assert not target.exists(), "Independent author target must start empty"
         env = {**os.environ, "CARGO_TARGET_DIR": str(target), "CM_LIMIT_VARIANT": variant}
@@ -205,7 +205,7 @@ def produce():
         shutil.copyfile(root / relative, destination)
     metadata_audit = None
     binary_packages = None
-    if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         import mod_manifest
         legacy = read(artifact / "evidence/runtime-plan-determinism.json")["mods"]["a/normal"]
         composition.install(inputs, legacy, directory="m01-legacy-v2")
@@ -236,42 +236,46 @@ def produce():
                       "prepared_profile": inventory(inputs / "official/profile")}
     write(logs / "official-profile-setup.json", official_setup)
     runtime_sdk = None
-    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         from runtime_sdk import prepare
         runtime_sdk = prepare(inputs, package, authors)
-    if cfg["task_id"] in ("CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if cfg["task_id"] in ("CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         import managed_package
         managed_package.prepare(inputs, package, frozen, logs)
-    if cfg["task_id"] in ("CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if cfg["task_id"] in ("CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         import runtime_state
         runtime_state.prepare(inputs, package, frozen, logs, authors)
     m05 = None
-    if cfg["task_id"] in ("CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if cfg["task_id"] in ("CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         import mod_author
         m05 = mod_author.prepare(inputs, package, frozen, logs)
     g02a = None
-    if cfg["task_id"] in ("CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if cfg["task_id"] in ("CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         import turn_budget
         g02a = turn_budget.prepare(inputs, package, frozen, logs, authors, runtime_sdk)
     review = None
-    if cfg["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if cfg["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         import review_before_send
         review = review_before_send.prepare(inputs, package, frozen, logs, authors, runtime_sdk)
     concurrency = None
-    if cfg["task_id"] in ("CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if cfg["task_id"] in ("CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         import tool_concurrency
         concurrency = tool_concurrency.prepare(inputs, package, frozen, logs, authors, runtime_sdk)
-    if cfg["task_id"] in ("CM-G04", "CM-G01", "CM-G05"):
+    if cfg["task_id"] in ("CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         import runtime_qualification
         runtime_qualification.prepare(inputs, frozen)
     hooks = None
-    if cfg["task_id"] in ("CM-G01", "CM-G05"):
+    if cfg["task_id"] in ("CM-G01", "CM-G05", "CM-G06"):
         import runtime_hooks
         hooks = runtime_hooks.prepare(inputs, frozen, logs, authors)
     upgrade = None
-    if cfg["task_id"] == "CM-G05":
+    if cfg["task_id"] in ("CM-G05", "CM-G06"):
         import runtime_upgrade
         upgrade = runtime_upgrade.prepare(inputs, frozen)
+    seams = None
+    if cfg["task_id"] == "CM-G06":
+        import sdk_seams
+        seams = sdk_seams.prepare(root, inputs, package, frozen, logs, authors)
     write(inputs / "producer.json", {"schema_version": 1, "task_id": cfg["task_id"], "target": TARGET,
         "provenance": provenance(), "producer_job": os.environ["GITHUB_JOB"], "host": frozen, "authors": authors,
         "entry_invalid": ENTRY_INVALID, "call_invalid": CALL_INVALID,
@@ -280,7 +284,7 @@ def produce():
         "official_profile_setup": official_setup, "c_layout": read(logs / "output-limit-c-layout.log"),
         "metadata_source_attachment_audit": metadata_audit, "binary_packages": binary_packages,
         "runtime_sdk": runtime_sdk, "m05": m05, "g02a": g02a, "review": review, "concurrency": concurrency,
-        "hooks": hooks, "upgrade": upgrade})
+        "hooks": hooks, "upgrade": upgrade, "sdk_seams": seams})
     entries = inventory(inputs)
     write(inputs / "input-manifest.json", {"files": entries, "sha256": digest(entries)})
     write(logs / "consumer-input-links.json", [entry for entry in entries if "link" in entry])
@@ -1444,7 +1448,7 @@ def consume():
     assert producer["provenance"] == {**provenance(), "CM_SOURCE_SHA": origin["source_sha"],
         "GITHUB_WORKFLOW_SHA": origin["workflow_sha"], "GITHUB_RUN_ID": str(origin["run_id"]),
         "GITHUB_RUN_ATTEMPT": str(origin["run_attempt"]), "CM_REQUEST_ID": origin["request_id"]}, "Original producer provenance changed"
-    assert producer["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05") and producer["target"] == TARGET
+    assert producer["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06") and producer["target"] == TARGET
     m05_only = producer["task_id"] == "CM-M05" and producer["m05"]["build_kind"] == "mod-only"
     if producer["task_id"] == "CM-M05":
         assert producer["m05"]["build_kind"] == os.environ["CM_BUILD_KIND"]
@@ -1460,50 +1464,50 @@ def consume():
     sys.path.insert(0, str(inputs / "fixture/ci/scripts"))
     import mod_manifest
     m01_acceptance = None
-    if not m05_only and producer["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if not m05_only and producer["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         m01_acceptance = {"schema_version": 1, "task_id": "CM-M01", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M01-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(mod_manifest.REPORTS, 1)]}
     m02_acceptance = None
-    if not m05_only and producer["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if not m05_only and producer["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         import runtime_sdk
         m02_acceptance = {"schema_version": 1, "task_id": "CM-M02", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M02-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(runtime_sdk.REPORTS, 1)]}
     m03_acceptance = None
-    if not m05_only and producer["task_id"] in ("CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if not m05_only and producer["task_id"] in ("CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         import managed_package
         m03_acceptance = {"schema_version": 1, "task_id": "CM-M03", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M03-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(managed_package.REPORTS, 1)]}
     m04_acceptance = None
-    if not m05_only and producer["task_id"] in ("CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if not m05_only and producer["task_id"] in ("CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         import runtime_state
         m04_acceptance = {"schema_version": 1, "task_id": "CM-M04", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M04-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(runtime_state.REPORTS, 1)]}
     m05_acceptance = None
-    if producer["task_id"] in ("CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if producer["task_id"] in ("CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         import mod_author
         m05_acceptance = {"schema_version": 1, "task_id": "CM-M05", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M05-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(mod_author.REPORTS, 1)]}
     g02a_acceptance = None
-    if producer["task_id"] in ("CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if producer["task_id"] in ("CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         cases = budget_cases(producer)
         g02a_acceptance = {"schema_version": 1, "task_id": "CM-G02A", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [
                 {"id": "CM-G02A-AC0" + str(index), "status": "not_run", "phase": "g02a-" + case,
                  "evidence": ["evidence/budget-" + case + ".json"]} for index, case in enumerate(cases, 1)]}
     review_acceptance = None
-    if producer["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if producer["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         review_steps = review_cases(producer)
         review_acceptance = {"schema_version": 1, "task_id": "CM-G02B", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [
                 {"id": "CM-G02B-AC0" + str(index), "status": "not_run", "phase": "review-" + case,
                  "evidence": ["evidence/review-" + case + ".json"]} for index, case in enumerate(review_steps, 1)]}
     concurrency_acceptance = None
-    if producer["task_id"] in ("CM-G03", "CM-G04", "CM-G01", "CM-G05"):
+    if producer["task_id"] in ("CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         concurrency_steps = [label.removeprefix("concurrency-") for label in retry.PHASES if label.startswith("concurrency-")]
         assert len(concurrency_steps) == 7 and producer["concurrency"]["cases"] == concurrency_steps
         concurrency_acceptance = {"schema_version": 1, "task_id": "CM-G03", "target": TARGET, "status": "not_run",
@@ -1511,24 +1515,30 @@ def consume():
                 {"id": "CM-G03-AC0" + str(index), "status": "not_run", "phase": "concurrency-" + case,
                  "evidence": ["evidence/concurrency-" + case + ".json"]} for index, case in enumerate(concurrency_steps, 1)]}
     g04_acceptance = None
-    if producer["task_id"] in ("CM-G04", "CM-G01", "CM-G05"):
+    if producer["task_id"] in ("CM-G04", "CM-G01", "CM-G05", "CM-G06"):
         import runtime_qualification
         g04_acceptance = {"schema_version": 1, "task_id": "CM-G04", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-G04-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(runtime_qualification.REPORTS, 1)]}
     hooks_acceptance = None
-    if producer["task_id"] in ("CM-G01", "CM-G05"):
+    if producer["task_id"] in ("CM-G01", "CM-G05", "CM-G06"):
         import runtime_hooks
         hooks_acceptance = {"schema_version": 1, "task_id": "CM-G01", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-G01-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(runtime_hooks.REPORTS, 1)]}
     upgrade_acceptance = None
-    if producer["task_id"] == "CM-G05":
+    if producer["task_id"] in ("CM-G05", "CM-G06"):
         import runtime_upgrade
         upgrade_acceptance = {"schema_version": 1, "task_id": "CM-G05", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-G05-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(runtime_upgrade.REPORTS, 1)]}
-    acceptance = upgrade_acceptance or hooks_acceptance or g04_acceptance or concurrency_acceptance or review_acceptance or g02a_acceptance or m05_acceptance or m04_acceptance or m03_acceptance or m02_acceptance or m01_acceptance or p04_acceptance
+    seams_acceptance = None
+    if producer["task_id"] == "CM-G06":
+        import sdk_seams
+        seams_acceptance = {"schema_version": 1, "task_id": "CM-G06", "target": TARGET, "status": "not_run",
+            "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-G06-AC0" + str(index),
+            "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(sdk_seams.REPORTS, 1)]}
+    acceptance = seams_acceptance or upgrade_acceptance or hooks_acceptance or g04_acceptance or concurrency_acceptance or review_acceptance or g02a_acceptance or m05_acceptance or m04_acceptance or m03_acceptance or m02_acceptance or m01_acceptance or p04_acceptance
     write(artifact / "acceptance.json", acceptance)
     stage = "rootfs"
     try:
@@ -1608,6 +1618,8 @@ def consume():
                 phase_reports["g01"] = list(runtime_hooks.REPORTS)
             if upgrade_acceptance is not None:
                 phase_reports["g05"] = list(runtime_upgrade.REPORTS)
+            if seams_acceptance is not None:
+                phase_reports["g06"] = list(sdk_seams.REPORTS)
             for phase in phase_reports:
                 for case in runtime_cases.GROUPS[phase]:
                     report_names[phase + "-" + case] = [phase + "/" + case + "/reports.json"]
@@ -1625,13 +1637,13 @@ def consume():
             write(logs / "consumer-command.json", {"command": command("consumer-matrix", [*driver, "matrix"]),
                 "cache_mode": "none", "producer_input_manifest_sha256": manifest["sha256"], "provenance": provenance()})
             commands = []
-            for phase in ("p04", "m01", "m02", "m05", "g04", "g01", "g05"):
+            for phase in ("p04", "m01", "m02", "m05", "g04", "g01", "g05", "g06"):
                 if phase not in phase_reports or m05_only and phase == "p04":
                     continue
                 wrapper = {"p04": "fixtures/runtime-consumer/driver.py", "m01": "ci/scripts/mod_manifest.py",
                     "m02": "ci/scripts/runtime_sdk.py", "m05": "ci/scripts/mod_author.py",
                     "g04": "fixtures/runtime-qualification/driver.py", "g01": "fixtures/runtime-hooks/driver.py",
-                    "g05": "fixtures/compatibility/driver.py"}[phase]
+                    "g05": "fixtures/compatibility/driver.py", "g06": "fixtures/sdk-seams/driver.py"}[phase]
                 for case in runtime_cases.GROUPS[phase]:
                     if phase == "g04" and case == "missing-library":
                         continue
@@ -1793,6 +1805,9 @@ def consume():
             if upgrade_acceptance is not None:
                 runtime_upgrade.reports(evidence, checkpoints.results, audit)
                 report_sets.append(upgrade_acceptance)
+            if seams_acceptance is not None:
+                sdk_seams.reports(evidence, checkpoints.results, audit)
+                report_sets.append(seams_acceptance)
             for report_set in report_sets:
                 for check in report_set["checks"]:
                     path = evidence / Path(check["evidence"][0]).name
@@ -1850,6 +1865,9 @@ def consume():
                 for name, baseline in (("g04", g04_acceptance), ("g01", hooks_acceptance)):
                     write(artifact / (name + "-baseline-acceptance.json"), baseline)
                     write(logs / (name + "-baseline-acceptance.json"), baseline)
+            if seams_acceptance is not None:
+                write(artifact / "g05-baseline-acceptance.json", upgrade_acceptance)
+                write(logs / "g05-baseline-acceptance.json", upgrade_acceptance)
         finally:
             stopped.set()
             thread.join(timeout=1)

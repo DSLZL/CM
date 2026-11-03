@@ -50,6 +50,11 @@ pub(crate) enum Kind {
     SamplingBudget,
     SubmitReview,
     ToolConcurrency,
+    ToolAround,
+    ToolReplacement,
+    ResponseStream,
+    CliCommand,
+    TuiCommand,
 }
 
 impl Kind {
@@ -67,6 +72,11 @@ impl Kind {
             Self::SamplingBudget => cm_abi::v22::KIND_SAMPLING_BUDGET,
             Self::SubmitReview => cm_abi::v22::KIND_SUBMIT_REVIEW,
             Self::ToolConcurrency => cm_abi::v22::KIND_TOOL_CONCURRENCY,
+            Self::ToolAround => cm_abi::v23::KIND_TOOL_AROUND,
+            Self::ToolReplacement => cm_abi::v23::KIND_TOOL_REPLACEMENT,
+            Self::ResponseStream => cm_abi::v23::KIND_RESPONSE_STREAM,
+            Self::CliCommand => cm_abi::v23::KIND_CLI_COMMAND,
+            Self::TuiCommand => cm_abi::v23::KIND_TUI_COMMAND,
         }
     }
 
@@ -79,6 +89,11 @@ impl Kind {
                 | Self::SamplingBudget
                 | Self::SubmitReview
                 | Self::ToolConcurrency
+                | Self::ToolAround
+                | Self::ToolReplacement
+                | Self::ResponseStream
+                | Self::CliCommand
+                | Self::TuiCommand
         )
     }
 }

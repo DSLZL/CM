@@ -1,5 +1,9 @@
 # 原生运行时 SDK（ABI 2.2）
 
+实验性 ABI 2.3 候选的工具 continuation、响应 metadata ACK 和 CLI/TUI 命令桥见
+[SDK 支持边界](sdk-support.md)。G06 尚未执行独立 Actions 验收；本文的既有 2.2
+导出、协商与模板不随该候选改写。
+
 本增量已通过独立 Linux x64 [M02 验收](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/40514837331)（源码 `825c11e`）。
 当前支持面为本地 Embedded
 `codex exec` 的新建、resume、fork，以及本地 stdio App Server。

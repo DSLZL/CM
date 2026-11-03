@@ -20,7 +20,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing Host build identity"))?;
         assert_eq!(build_id.len(), "sha256:".len() + 64);
         assert!(build_id.starts_with("sha256:"));
-        assert_eq!(identity["stage"], "prepared-upgrade-compatibility");
+        assert_eq!(identity["stage"], "experimental-sdk-seams");
         assert_eq!(
             identity["patch_map"]["descriptor"]["backend"],
             "prepared_slots"
@@ -38,7 +38,11 @@ mod tests {
                 "state.files.v1",
                 "core.turn_sampling_budget.v1",
                 "tui.submit_review.v1",
-                "core.turn_tool_concurrency.v1"
+                "core.turn_tool_concurrency.v1",
+                "core.tool_continuation.v1",
+                "core.response_stream_observe.v1",
+                "cli.command.v1",
+                "tui.command.v1"
             ])
         );
         assert!(identity.get("artifact_sha256").is_none());

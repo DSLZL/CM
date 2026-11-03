@@ -111,7 +111,7 @@ def turns_settled(native):
 
 
 class Terminal:
-    def __init__(self, case, name, home, *, reviewed=True, launch_args=(), binary=None, directory=None):
+    def __init__(self, case, name, home, *, reviewed=True, launch_args=(), binary=None, directory=None, extra_env=None):
         self.sdk = module("runtime-sdk/driver.py")
         self.managed = module("managed-package/driver.py")
         self.directory = directory or Path("/evidence/review") / case / name
@@ -124,6 +124,7 @@ class Terminal:
         (home / "config.toml").write_text(self.managed.tui_configuration(arguments, self.directory))
         # Handle fault probes need the SDK matrix's controlled thread lifetimes.
         self.env = self.sdk.environment(home, self.directory, mode="normal")
+        self.env.update(extra_env or {})
         self.env["TERM"] = "xterm-256color"
         self.command = self.managed.launch_command(self.binary, home, list(launch_args))
         master, slave = pty.openpty()

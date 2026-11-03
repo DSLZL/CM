@@ -10,9 +10,14 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
-use cm_abi::{Bytes, ErrorBuffer, Header, v22};
+use cm_abi::{Bytes, ErrorBuffer, Header, v22, v23};
 use serde_json::{Value, json};
 pub use v22::Handle;
+
+#[path = "tool_continuation.rs"]
+mod continuation;
+pub use continuation::Continuation;
+pub(crate) use continuation::services as continuation_services;
 
 use crate::loader::native;
 use crate::{LoadError, NativeCall, event};
@@ -29,6 +34,11 @@ pub enum Kind {
     SamplingBudget,
     SubmitReview,
     ToolConcurrency,
+    ToolAround,
+    ToolReplacement,
+    ResponseStream,
+    CliCommand,
+    TuiCommand,
 }
 
 #[derive(Clone, Debug)]
@@ -102,6 +112,7 @@ struct ScopeData {
 enum Object {
     Scope(ScopeData),
     Request(Arc<RequestData>),
+    Next { request: Handle, instance: Handle, continuation: Arc<Continuation> },
 }
 struct Slot {
     generation: u32,
@@ -381,9 +392,14 @@ pub(crate) fn install(
             if let Err(error) = &result { request.latch(error.clone()); }
             match job {
                 Job::Dispatch(request, _) => {
+                    let failed = result.is_err();
                     if let Ok(mut state) = request.state.lock() {
                         state.started_returned = true;
                         if let Err(error) = result { state.deliver(Err(error)); }
+                    }
+                    if let Some(next) = &request.continuation {
+                        if failed { next.cancel(); }
+                        next.dispatch_returned();
                     }
                     request.wake();
                     request.progress();
@@ -397,7 +413,10 @@ pub(crate) fn install(
                     event("runtime-request-released", json!({"mod": request.module.owner, "request": handle_json(request.handle()), "ok": result.is_ok()}));
                     if let Ok(mut tables) = hub.tables.lock()
                         && tables.remove(hub.epoch, request.handle()).is_ok()
-                    { tables.requests -= 1; }
+                    {
+                        if let Some(next) = &request.continuation { next.remove(&mut tables, hub.epoch); }
+                        tables.requests -= 1;
+                    }
                     hub.changed.notify_all();
                 }
             }
@@ -438,6 +457,25 @@ pub fn fail_registration(error: LoadError) {
     }
 }
 
+pub(crate) fn order_contributions(plan: &crate::runtime_plan::RuntimePlan) -> Result<(), LoadError> {
+    let hub = hub()?;
+    let order: BTreeMap<_, _> = plan.phases.values().flatten().enumerate().map(|(index, key)| (key.clone(), index)).collect();
+    let mut tables = hub.tables.lock().map_err(|_| lock_error())?;
+    tables.contributions.sort_by_key(|item| order.get(&format!("{}::{}", item.owner, item.id)).copied().unwrap_or(usize::MAX));
+    Ok(())
+}
+
+/// Stored order follows the committed RuntimePlan DAG, including stable tie breaks.
+pub fn ordered_contributions(kind: Kind) -> Result<Vec<Contribution>, LoadError> {
+    let Some(hub) = HUB.get() else { return Ok(Vec::new()); };
+    let tables = hub.as_ref().map_err(Clone::clone)?.tables.lock().map_err(|_| lock_error())?;
+    Ok(tables.contributions.iter().filter(|item| item.kind == kind).cloned().collect())
+}
+
+pub fn original_tool_event(call_id: &str, started: bool) {
+    event(if started { "runtime-original-tool-start" } else { "runtime-original-tool-end" }, json!({"call_id": call_id, "target": "exec_command"}));
+}
+
 pub fn bind_level(level: &str, scope: &Result<Scope, LoadError>) -> Result<(), LoadError> {
     let hub = hub()?;
     let mut tables = hub.tables.lock().map_err(|_| lock_error())?;
@@ -464,7 +502,7 @@ pub fn check_level(level: &str) -> Result<(), LoadError> {
     scope_for_level(level)?.map_or(Ok(()), |scope| scope.check())
 }
 
-pub(crate) fn scope_for_level(level: &str) -> Result<Option<Scope>, LoadError> {
+pub fn scope_for_level(level: &str) -> Result<Option<Scope>, LoadError> {
     let Some(hub) = HUB.get() else {
         return Ok(None);
     };
@@ -568,6 +606,16 @@ impl UiScope {
         RequestOwner::Ui(self.0.clone()).fail(error.clone());
         error
     }
+
+    pub fn close(&self) {
+        if self.0.closed.swap(true, Ordering::AcqRel) { return; }
+        if let Some(Ok(hub)) = HUB.get() {
+            let requests = hub.tables.lock().ok().map(|tables| tables.requests()).unwrap_or_default();
+            for request in requests {
+                if matches!(&request.owner, RequestOwner::Ui(owner) if Arc::ptr_eq(owner, &self.0)) { request.cancel(false); }
+            }
+        }
+    }
 }
 
 pub fn check_ui() -> Result<(), LoadError> {
@@ -585,21 +633,7 @@ pub fn check_ui() -> Result<(), LoadError> {
 
 impl Drop for UiScope {
     fn drop(&mut self) {
-        self.0.closed.store(true, Ordering::Release);
-        if let Some(Ok(hub)) = HUB.get() {
-            let requests = hub
-                .tables
-                .lock()
-                .ok()
-                .map(|tables| tables.requests())
-                .unwrap_or_default();
-            for request in requests {
-                if matches!(&request.owner, RequestOwner::Ui(owner) if Arc::ptr_eq(owner, &self.0))
-                {
-                    request.cancel(false);
-                }
-            }
-        }
+        self.close();
     }
 }
 
@@ -951,6 +985,7 @@ struct RequestData {
     cleanup: bool,
     // A cancelled native worker retains its leaf slot through quiet/release.
     _tool_lease: Option<crate::tool_concurrency::Lease>,
+    continuation: Option<Arc<Continuation>>,
     state: Mutex<RequestState>,
     changed: Condvar,
 }
@@ -992,6 +1027,7 @@ impl RequestData {
             false
         };
         if queued {
+            if let Some(next) = &self.continuation { next.cancel(); }
             if timeout {
                 self.latch(self.error("request timeout"));
             }
@@ -1012,7 +1048,7 @@ impl RequestData {
     }
     fn progress(self: &Arc<Self>) {
         let release = if let Ok(mut state) = self.state.lock() {
-            if state.releasable() {
+            if state.releasable() && self.continuation.as_ref().is_none_or(|next| next.quiet()) {
                 state.release_queued = true;
                 true
             } else {
@@ -1059,7 +1095,7 @@ impl Future for RequestFuture {
             Ok(state) => state,
             Err(_) => return Poll::Ready(Err(lock_error())),
         };
-        if matches!(&self.request.owner, RequestOwner::Ui(_))
+        if (matches!(&self.request.owner, RequestOwner::Ui(_)) || self.request.continuation.is_some())
             && !state.started_returned
             && !state.cancelled
         {
@@ -1105,6 +1141,8 @@ pub fn dispatch(
         Kind::SamplingBudget => event_kind == v22::SAMPLING_BUDGET,
         Kind::SubmitReview => false,
         Kind::ToolConcurrency => event_kind == v22::TOOL_CONCURRENCY,
+        Kind::ResponseStream => event_kind == v23::STREAM_EVENT,
+        Kind::ToolAround | Kind::ToolReplacement | Kind::CliCommand | Kind::TuiCommand => false,
     };
     let turn_event = matches!(
         event_kind,
@@ -1116,6 +1154,7 @@ pub fn dispatch(
             | v22::SECTION
             | v22::SAMPLING_BUDGET
             | v22::TOOL_CONCURRENCY
+            | v23::STREAM_EVENT
     );
     if !expected || (turn_event != scope.0.parent.is_some()) {
         return Err(failure("event/contribution/scope kind mismatch"));
@@ -1127,7 +1166,22 @@ pub fn dispatch(
         input,
         call_id,
         cleanup,
+        None,
     )
+}
+
+pub fn dispatch_with_next(
+    scope: &Scope,
+    contribution: &Contribution,
+    input: &[u8],
+    call_id: &str,
+    next: Arc<Continuation>,
+) -> Result<RequestFuture, LoadError> {
+    scope.check()?;
+    if scope.0.parent.is_none() || !matches!(contribution.kind, Kind::ToolAround | Kind::ToolReplacement) {
+        return Err(failure("continuation requires a tool contribution and actual turn"));
+    }
+    dispatch_owned(RequestOwner::Core(scope.clone()), contribution, v23::TOOL_AROUND, input, call_id, false, Some(next))
 }
 
 pub fn dispatch_ui(
@@ -1136,16 +1190,20 @@ pub fn dispatch_ui(
     input: &[u8],
 ) -> Result<RequestFuture, LoadError> {
     scope.check()?;
-    if contribution.kind != Kind::SubmitReview {
-        return Err(failure("UI request/contribution kind mismatch"));
-    }
+    let event = match contribution.kind {
+        Kind::SubmitReview => v22::SUBMIT_REVIEW,
+        Kind::CliCommand => v23::CLI_CALL,
+        Kind::TuiCommand => v23::TUI_CALL,
+        _ => return Err(failure("UI request/contribution kind mismatch")),
+    };
     dispatch_owned(
         RequestOwner::Ui(Arc::clone(&scope.0)),
         contribution,
-        v22::SUBMIT_REVIEW,
+        event,
         input,
         "",
         false,
+        None,
     )
 }
 
@@ -1156,12 +1214,13 @@ fn dispatch_owned(
     input: &[u8],
     call_id: &str,
     cleanup: bool,
+    continuation: Option<Arc<Continuation>>,
 ) -> Result<RequestFuture, LoadError> {
     if input.len() > v22::MAX_INPUT || call_id.len() > 512 {
         return Err(failure("request input limit"));
     }
     let tool_lease = match &owner {
-        RequestOwner::Core(scope) if event_kind == v22::TOOL_CALL => {
+        RequestOwner::Core(scope) if matches!(event_kind, v22::TOOL_CALL | v23::TOOL_AROUND) => {
             scope.0.concurrency.native_lease(call_id)?
         }
         _ => None,
@@ -1254,6 +1313,7 @@ fn dispatch_owned(
         turn,
         cleanup,
         _tool_lease: tool_lease,
+        continuation,
         state: Mutex::new(RequestState {
             result: None,
             terminal: false,
@@ -1272,6 +1332,12 @@ fn dispatch_owned(
         .handle
         .set(handle)
         .map_err(|_| failure("duplicate request assignment"))?;
+    if let Some(next) = &request.continuation
+        && let Err(error) = next.bind(&request)
+    {
+        let _ = tables.remove(hub.epoch, handle);
+        return Err(error);
+    }
     tables.requests += 1;
     drop(tables);
     event(
@@ -1393,6 +1459,8 @@ unsafe extern "C" fn complete(
         let result = unsafe { view(value.result, v22::MAX_RESULT)? };
         let request = request(instance, value.request)?;
         let mut state = request.state.lock().map_err(|_| v22::INVALID)?;
+        let child_pending = request.continuation.as_ref().is_some_and(|next| !next.quiet());
+        let protocol_error = (!state.terminal && child_pending && value.status == v22::SUCCEEDED).then(|| request.error("Mod completed before its continuation drained"));
         let code = if state.terminal {
             if state.cancelled {
                 v22::REQUEST_CANCELLED
@@ -1400,7 +1468,7 @@ unsafe extern "C" fn complete(
                 v22::ALREADY_COMPLETED
             }
         } else {
-            let result = match value.status {
+            let result = if let Some(error) = &protocol_error { Err(error.clone()) } else { match value.status {
                 v22::SUCCEEDED => Ok(result),
                 v22::FAILED => {
                     let message = String::from_utf8(result).map_err(|_| v22::INVALID)?;
@@ -1412,7 +1480,7 @@ unsafe extern "C" fn complete(
                     state.cancelled = true;
                     Err(request.error("Mod cancelled request"))
                 }
-            };
+            } };
             state.deliver(result);
             cm_abi::OK
         };
@@ -1420,6 +1488,8 @@ unsafe extern "C" fn complete(
             state.quiet = true;
         }
         drop(state);
+        if let Some(error) = protocol_error { request.latch(error); }
+        if child_pending { if let Some(next) = &request.continuation { next.cancel(); } }
         event(
             "runtime-complete",
             json!({"mod": request.module.owner, "request": handle_json(value.request),

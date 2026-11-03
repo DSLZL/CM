@@ -12,6 +12,9 @@ and cm-abi. Actual `--locked` resolution, format, strict Clippy, tests, ELF buil
 and packaging run only on the independent GitHub-hosted Ubuntu 24.04 X64 worker.
 Host/Core/TUI are not author dependencies. Preserve SDK request ownership, allocator
 ownership, cancellation and quiescence rules in [the SDK contract](runtime-sdk.md).
+The ABI 2.3 [experimental seams candidate](sdk-support.md) uses separate exports
+and independent fixtures; its seven G06 acceptance checks remain not_run. The
+pinned 2.2 template is unchanged.
 
 The current trusted source is only `DSLZL/CM`, at the fixed template path. Submit
 the reviewed change there. CM's `.github/workflows/cm-mod-author.yml` requests the existing

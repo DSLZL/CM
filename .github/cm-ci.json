@@ -1,13 +1,15 @@
 {
   "schema_version": 1,
   "configured": true,
-  "task_id": "CM-G05",
+  "task_id": "CM-G06",
   "required_checks": [
-    "CM-G05-AC01",
-    "CM-G05-AC02",
-    "CM-G05-AC03",
-    "CM-G05-AC04",
-    "CM-G05-AC05"
+    "CM-G06-AC01",
+    "CM-G06-AC02",
+    "CM-G06-AC03",
+    "CM-G06-AC04",
+    "CM-G06-AC05",
+    "CM-G06-AC06",
+    "CM-G06-AC07"
   ],
   "target": "x86_64-unknown-linux-gnu",
   "rust_toolchain": "1.95.0",
@@ -37,7 +39,7 @@
       "no_default_features": false
     }
   ],
-  "acceptance_script": "fixtures/compatibility/acceptance.sh",
+  "acceptance_script": "fixtures/sdk-seams/acceptance.sh",
   "cargo_config_files": [
     "adapters/codex-e4568a3/host/codex-rs/.cargo/config.toml"
   ],
@@ -93,7 +95,17 @@
     "adapters/codex-e4568a3/tui-review.patch",
     "crates/cm/src/tool_concurrency.rs",
     "adapters/codex-e4568a3/tool-concurrency.patch",
-    "crates/cm/src/upgrade.rs"
+    "crates/cm/src/upgrade.rs",
+    "crates/cm-abi/src/v23.rs",
+    "crates/cm-abi/include/cm_mod_v23.h",
+    "crates/cm-sdk/src/continuation.rs",
+    "crates/cm-host-adapter/src/response_stream.rs",
+    "crates/cm/src/tool_continuation.rs",
+    "crates/cm/src/commands.rs",
+    "crates/cm/src/commands/ui.rs",
+    "adapters/codex-e4568a3/core-tool-continuation.rs",
+    "adapters/codex-e4568a3/cli-commands.rs",
+    "adapters/codex-e4568a3/sdk-seams.patch"
   ],
   "generated_native_identity_files": [
     "adapters/codex-e4568a3/inputs/native.json"

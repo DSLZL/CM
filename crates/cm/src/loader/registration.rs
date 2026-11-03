@@ -107,6 +107,7 @@ impl RegistrationSet {
                 json!({"mod": owner, "plan_sha256": staged.digest}),
             );
         }
+        crate::runtime::order_contributions(&staged.plan)?;
         event(
             "registration-commit",
             json!({
@@ -277,15 +278,18 @@ impl CompositionMod {
             Bytes::from_static(v21::CAPABILITY),
             Bytes::from_static(crate::state::CAPABILITY),
         ];
-        let instance = if manifest.abi_minor == 2 {
+        let instance = if manifest.abi_minor >= 2 {
             Some(crate::runtime::new_instance(&manifest.id)?)
         } else {
             None
         };
         let services =
             instance.map(|instance| Box::leak(Box::new(crate::runtime::services(instance))));
-        if manifest.abi_minor == 2 {
+        if manifest.abi_minor >= 2 {
             capabilities.extend(cm_abi::v22::CAPABILITIES.map(Bytes::from_static));
+        }
+        if manifest.abi_minor == 3 {
+            capabilities.extend(cm_abi::v23::CAPABILITIES.map(Bytes::from_static));
         }
         let mut host = cm_abi::v22::HostApi {
             base: v21::HostApi {
@@ -301,9 +305,14 @@ impl CompositionMod {
         } else if manifest.abi_minor == 2 {
             host.base.base.header = cm_abi::v22::header::<cm_abi::v22::HostApi>();
         }
+        let continuation = crate::runtime::continuation_services();
+        let mut sdk_host = cm_abi::v23::HostApi { base: host, continuation: &continuation };
+        if manifest.abi_minor == 3 {
+            sdk_host.base.base.base.header = cm_abi::v23::header::<cm_abi::v23::HostApi>();
+        }
         let mut table: *const Header = ptr::null();
         native::invoke("entry", |error| unsafe {
-            entry(&host.base.base, &mut table, error)
+            entry(&sdk_host.base.base.base, &mut table, error)
         })?;
         if crate::tool_policy::NEXT_VIOLATION.load(std::sync::atomic::Ordering::Acquire) {
             return Err(LoadError::native(
@@ -321,7 +330,7 @@ impl CompositionMod {
             return Err(LoadError::native("negotiate", "short v2 header prefix"));
         }
         let prefix = unsafe { table.read() };
-        let minimum = if manifest.abi_minor == 2 {
+        let minimum = if manifest.abi_minor >= 2 {
             size_of::<cm_abi::v22::ModApi>()
         } else if manifest.abi_minor == 1 {
             size_of::<v21::ModApi>()
@@ -447,7 +456,7 @@ impl CompositionMod {
             }
         }
         let mut runtime_api = None;
-        if manifest.abi_minor == 2 {
+        if manifest.abi_minor >= 2 {
             let tail = unsafe { table.cast::<cm_abi::v22::ModApi>().read() };
             let expected = manifest
                 .contributions
@@ -512,7 +521,11 @@ impl CompositionMod {
                     || descriptor.kind == cm_abi::v22::KIND_SUBMIT_REVIEW
                         && resource == cm_abi::v22::SUBMIT_REVIEW_CAPABILITY
                     || descriptor.kind == cm_abi::v22::KIND_TOOL_CONCURRENCY
-                        && resource == cm_abi::v22::TOOL_CONCURRENCY_CAPABILITY)
+                        && resource == cm_abi::v22::TOOL_CONCURRENCY_CAPABILITY
+                    || matches!(descriptor.kind, cm_abi::v23::KIND_TOOL_AROUND | cm_abi::v23::KIND_TOOL_REPLACEMENT)
+                        && resource == "exec_command"
+                    || descriptor.kind == cm_abi::v23::KIND_RESPONSE_STREAM
+                        && resource == cm_abi::v23::RESPONSE_STREAM)
                 {
                     return Err(LoadError::native(
                         "negotiate",
@@ -556,6 +569,7 @@ impl CompositionMod {
                 .owner(&manifest.id, Some(&hook.id)));
             }
             if let Callback::Runtime(route) = callback {
+                crate::commands::check_route(&manifest, hook, route)?;
                 let kind = match hook.kind {
                     Kind::Lifecycle => crate::runtime::Kind::Lifecycle,
                     Kind::Tool => crate::runtime::Kind::Tool,
@@ -563,6 +577,11 @@ impl CompositionMod {
                     Kind::SamplingBudget => crate::runtime::Kind::SamplingBudget,
                     Kind::SubmitReview => crate::runtime::Kind::SubmitReview,
                     Kind::ToolConcurrency => crate::runtime::Kind::ToolConcurrency,
+                    Kind::ToolAround => crate::runtime::Kind::ToolAround,
+                    Kind::ToolReplacement => crate::runtime::Kind::ToolReplacement,
+                    Kind::ResponseStream => crate::runtime::Kind::ResponseStream,
+                    Kind::CliCommand => crate::runtime::Kind::CliCommand,
+                    Kind::TuiCommand => crate::runtime::Kind::TuiCommand,
                     _ => {
                         return Err(LoadError::native(
                             "negotiate",

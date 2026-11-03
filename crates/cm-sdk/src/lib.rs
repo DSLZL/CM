@@ -1,6 +1,9 @@
 //! Author-side helpers. Only `cm-abi` data crosses the native library boundary.
 pub use cm_abi as abi;
 pub use cm_abi::v22;
+pub use cm_abi::v23;
+mod continuation;
+pub use continuation::NextPoll;
 
 use std::ffi::c_void;
 use std::mem::{align_of, size_of};
@@ -16,6 +19,7 @@ pub struct Host {
     complete: v22::Complete,
     state_get: v22::StateGet,
     state_set: v22::StateSet,
+    continuation: Option<v23::ContinuationApi>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -61,6 +65,16 @@ impl Host {
     /// # Safety
     /// `api` must point to a live Host table of its advertised readable size.
     pub unsafe fn negotiate(api: *const abi::v2::HostApi) -> Result<Self, String> {
+        unsafe { Self::negotiate_version(api, 2) }
+    }
+
+    /// # Safety
+    /// Same allocation contract as `negotiate`; requires the experimental 2.3 tail.
+    pub unsafe fn negotiate_sdk(api: *const abi::v2::HostApi) -> Result<Self, String> {
+        unsafe { Self::negotiate_version(api, 3) }
+    }
+
+    unsafe fn negotiate_version(api: *const abi::v2::HostApi, minor: u16) -> Result<Self, String> {
         if api.is_null() || !(api as usize).is_multiple_of(align_of::<v22::HostApi>()) {
             return Err("null/misaligned Host".into());
         }
@@ -69,12 +83,32 @@ impl Host {
         }
         let header = unsafe { api.cast::<Header>().read() };
         if header.major != 2
-            || header.minor != 2
-            || header.struct_size < size_of::<v22::HostApi>() as u32
+            || header.minor != minor
+            || header.struct_size < (if minor == 3 { size_of::<v23::HostApi>() } else { size_of::<v22::HostApi>() }) as u32
             || header.struct_size > 4096
         {
-            return Err("ABI 2.2 Host required".into());
+            return Err(format!("ABI 2.{minor} Host required"));
         }
+        let continuation = if minor == 3 {
+            let services = unsafe { (&*api.cast::<v23::HostApi>()).continuation };
+            if services.is_null()
+                || !(services as usize).is_multiple_of(align_of::<v23::ContinuationApi>())
+                || unsafe { services.cast::<u32>().read() } < size_of::<Header>() as u32
+            {
+                return Err("missing/short continuation services".into());
+            }
+            let header = unsafe { services.cast::<Header>().read() };
+            if header.major != 2 || header.minor != 3 || header.struct_size != size_of::<v23::ContinuationApi>() as u32 {
+                return Err("invalid continuation header".into());
+            }
+            let services = unsafe { services.read() };
+            if services.reserved != 0 || services.start.is_none() || services.poll.is_none()
+                || services.cancel.is_none() || services.release.is_none()
+            {
+                return Err("invalid continuation services".into());
+            }
+            Some(services)
+        } else { None };
         let api = unsafe { api.cast::<v22::HostApi>().read() };
         if api.runtime.is_null()
             || !(api.runtime as usize).is_multiple_of(align_of::<v22::HostRuntimeApi>())
@@ -97,6 +131,7 @@ impl Host {
             complete: runtime.complete.ok_or("missing complete")?,
             state_get: runtime.state_get.ok_or("missing state_get")?,
             state_set: runtime.state_set.ok_or("missing state_set")?,
+            continuation,
         })
     }
 
@@ -300,6 +335,25 @@ pub unsafe extern "C" fn dispatch<T: Mod>(
     request: *const v22::Request,
     error: *mut ErrorBuffer,
 ) -> u32 {
+    unsafe { dispatch_version::<T>(userdata, request, error, v22::TOOL_CONCURRENCY) }
+}
+
+/// # Safety
+/// Same allocation contract as `dispatch`, for a negotiated ABI 2.3 Mod only.
+pub unsafe extern "C" fn dispatch_sdk<T: Mod>(
+    userdata: *mut c_void,
+    request: *const v22::Request,
+    error: *mut ErrorBuffer,
+) -> u32 {
+    unsafe { dispatch_version::<T>(userdata, request, error, v23::TUI_CALL) }
+}
+
+unsafe fn dispatch_version<T: Mod>(
+    userdata: *mut c_void,
+    request: *const v22::Request,
+    error: *mut ErrorBuffer,
+    maximum_event: u32,
+) -> u32 {
     unsafe {
         boundary(error, || {
             if userdata.is_null()
@@ -318,12 +372,12 @@ pub unsafe extern "C" fn dispatch<T: Mod>(
             let request = &*request;
             if !valid_header::<v22::Request>(request.header)
                 || request.reserved != 0
-                || !(v22::THREAD_START..=v22::TOOL_CONCURRENCY).contains(&request.event)
+                || !(v22::THREAD_START..=maximum_event).contains(&request.event)
                 || request.handle == Handle::NONE
                 || request.mod_scope == Handle::NONE
                 || request.route == 0
                 || !valid_request_scopes(request.event, request.thread_scope, request.turn_scope)
-                || (request.event == v22::SUBMIT_REVIEW
+                || ([v22::SUBMIT_REVIEW, v23::CLI_CALL, v23::TUI_CALL].contains(&request.event)
                     && (request.thread_id.len != 0
                         || request.turn_id.len != 0
                         || request.call_id.len != 0))
@@ -351,8 +405,8 @@ fn valid_request_scopes(event: u32, thread: Handle, turn: Handle) -> bool {
     match event {
         v22::THREAD_START..=v22::THREAD_STOP => thread != Handle::NONE && turn == Handle::NONE,
         v22::TURN_START..=v22::SAMPLING_BUDGET => thread != Handle::NONE && turn != Handle::NONE,
-        v22::SUBMIT_REVIEW => thread == Handle::NONE && turn == Handle::NONE,
-        v22::TOOL_CONCURRENCY => thread != Handle::NONE && turn != Handle::NONE,
+        v22::SUBMIT_REVIEW | v23::CLI_CALL | v23::TUI_CALL => thread == Handle::NONE && turn == Handle::NONE,
+        v22::TOOL_CONCURRENCY | v23::TOOL_AROUND | v23::STREAM_EVENT => thread != Handle::NONE && turn != Handle::NONE,
         _ => false,
     }
 }
@@ -413,6 +467,21 @@ unsafe impl Sync for Contributions {}
 #[macro_export]
 macro_rules! export_mod {
     ($module:ty, $id:literal, $factory:path, $contributions:expr) => {
+        $crate::__export_mod!($module, $id, $factory, $contributions, 2, $crate::Host::negotiate, $crate::dispatch::<$module>);
+    };
+}
+
+#[macro_export]
+macro_rules! export_sdk_mod {
+    ($module:ty, $id:literal, $factory:path, $contributions:expr) => {
+        $crate::__export_mod!($module, $id, $factory, $contributions, 3, $crate::Host::negotiate_sdk, $crate::dispatch_sdk::<$module>);
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __export_mod {
+    ($module:ty, $id:literal, $factory:path, $contributions:expr, $minor:literal, $negotiate:path, $dispatch:path) => {
         mod cm_export {
             use super::*;
             use $crate::{abi, v22};
@@ -432,7 +501,7 @@ macro_rules! export_mod {
             }
             static RUNTIME: v22::ModRuntimeApi = v22::ModRuntimeApi {
                 header: v22::header::<v22::ModRuntimeApi>(),
-                dispatch: Some($crate::dispatch::<$module>),
+                dispatch: Some($dispatch),
                 cancel: Some($crate::cancel::<$module>),
                 request_release: Some($crate::request_release::<$module>),
                 reserved: 0,
@@ -440,7 +509,7 @@ macro_rules! export_mod {
             static TABLE: $crate::ExportTable = $crate::ExportTable(v22::ModApi {
                 base: abi::v21::ModApi {
                     base: abi::v2::ModApi {
-                        header: v22::header::<v22::ModApi>(),
+                        header: abi::Header { struct_size: std::mem::size_of::<v22::ModApi>() as u32, major: 2, minor: $minor },
                         mod_id: abi::Bytes::from_static($id),
                         contributions: std::ptr::null(),
                         contribution_count: 0,
@@ -470,7 +539,7 @@ macro_rules! export_mod {
                         if table.is_null() {
                             return Err("null table output".into());
                         }
-                        let host = $crate::Host::negotiate(host)?;
+                        let host = $negotiate(host)?;
                         HOST.set(host).map_err(|_| "entry already called")?;
                         *table = (&TABLE.0 as *const v22::ModApi).cast();
                         Ok(())
@@ -523,7 +592,7 @@ mod tests {
             Handle::NONE
         ));
         assert!(!valid_request_scopes(
-            v22::TOOL_CONCURRENCY + 1,
+            v23::TUI_CALL + 1,
             owned,
             owned
         ));
