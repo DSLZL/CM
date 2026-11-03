@@ -95,7 +95,7 @@ def native_probe_source(root):
             stream.write('include!("cm_sdk_seams_probe.rs");\n')
             shutil.copyfile(root / "fixtures/sdk-seams/runtime_probe.rs", runtime.parent / "sdk_seams_probe.rs")
             with runtime.open("a") as injected:
-                injected.write('\npub mod sdk_seams_probe;\n')
+                injected.write('\n#[path = "sdk_seams_probe.rs"]\npub mod sdk_seams_probe;\n')
             adapter = probe / "codex-rs/cm-host-adapter/src"
             shutil.copyfile(root / "fixtures/sdk-seams/stream_probe.rs", adapter / "sdk_stream_probe.rs")
             with (adapter / "response_stream.rs").open("a") as injected:
