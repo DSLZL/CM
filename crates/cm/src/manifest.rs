@@ -354,7 +354,10 @@ impl BinaryManifest {
                 "backend": if self.kind == ModKind::AdvancedHook {"prepared_slots"} else {"sdk"},
                 "unsupported": false},
         });
-        if let Some(commands) = &self.commands { value["commands"] = serde_json::to_value(commands).expect("command metadata serializes"); }
+        if let Some(commands) = &self.commands {
+            value["commands"] =
+                serde_json::to_value(commands).expect("command metadata serializes");
+        }
         value
     }
 }

@@ -17,8 +17,8 @@ use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
 
-pub mod config;
 pub mod commands;
+pub mod config;
 mod diagnostics;
 mod hooks;
 pub mod launcher;
@@ -316,9 +316,14 @@ fn initialize_with(
     initialize_mode(Backend::Core(embedded_exec), prepare)
 }
 
-enum Backend { Core(bool), Command }
+enum Backend {
+    Core(bool),
+    Command,
+}
 
-pub(crate) fn initialize_command(prepared: runtime_plan::PreparedPlan) -> Result<ShutdownGuard, LoadError> {
+pub(crate) fn initialize_command(
+    prepared: runtime_plan::PreparedPlan,
+) -> Result<ShutdownGuard, LoadError> {
     initialize_mode(Backend::Command, || Ok(prepared))
 }
 
@@ -361,7 +366,9 @@ fn initialize_mode(
                 "tui.submit_review.v1 requires the local Embedded TUI; exec/stdio are unsupported",
             ));
         }
-        if (prepared.managed() || !prepared.plan().mods.is_empty()) && matches!(backend, Backend::Core(false)) {
+        if (prepared.managed() || !prepared.plan().mods.is_empty())
+            && matches!(backend, Backend::Core(false))
+        {
             return Err(LoadError::new(
                 "backend",
                 false,

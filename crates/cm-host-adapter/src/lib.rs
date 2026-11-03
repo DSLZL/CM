@@ -29,7 +29,12 @@ pub fn append<C: Send + Sync + 'static>(builder: &mut ExtensionRegistryBuilder<C
     let result = (|| {
         let contributions: Vec<_> = runtime::contributions()?
             .into_iter()
-            .filter(|item| !matches!(item.kind, Kind::SubmitReview | Kind::CliCommand | Kind::TuiCommand))
+            .filter(|item| {
+                !matches!(
+                    item.kind,
+                    Kind::SubmitReview | Kind::CliCommand | Kind::TuiCommand
+                )
+            })
             .collect();
         if contributions.is_empty() {
             return Ok(None);

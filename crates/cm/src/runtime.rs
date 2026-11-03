@@ -112,7 +112,11 @@ struct ScopeData {
 enum Object {
     Scope(ScopeData),
     Request(Arc<RequestData>),
-    Next { request: Handle, instance: Handle, continuation: Arc<Continuation> },
+    Next {
+        request: Handle,
+        instance: Handle,
+        continuation: Arc<Continuation>,
+    },
 }
 struct Slot {
     generation: u32,
@@ -457,23 +461,55 @@ pub fn fail_registration(error: LoadError) {
     }
 }
 
-pub(crate) fn order_contributions(plan: &crate::runtime_plan::RuntimePlan) -> Result<(), LoadError> {
+pub(crate) fn order_contributions(
+    plan: &crate::runtime_plan::RuntimePlan,
+) -> Result<(), LoadError> {
     let hub = hub()?;
-    let order: BTreeMap<_, _> = plan.phases.values().flatten().enumerate().map(|(index, key)| (key.clone(), index)).collect();
+    let order: BTreeMap<_, _> = plan
+        .phases
+        .values()
+        .flatten()
+        .enumerate()
+        .map(|(index, key)| (key.clone(), index))
+        .collect();
     let mut tables = hub.tables.lock().map_err(|_| lock_error())?;
-    tables.contributions.sort_by_key(|item| order.get(&format!("{}::{}", item.owner, item.id)).copied().unwrap_or(usize::MAX));
+    tables.contributions.sort_by_key(|item| {
+        order
+            .get(&format!("{}::{}", item.owner, item.id))
+            .copied()
+            .unwrap_or(usize::MAX)
+    });
     Ok(())
 }
 
 /// Stored order follows the committed RuntimePlan DAG, including stable tie breaks.
 pub fn ordered_contributions(kind: Kind) -> Result<Vec<Contribution>, LoadError> {
-    let Some(hub) = HUB.get() else { return Ok(Vec::new()); };
-    let tables = hub.as_ref().map_err(Clone::clone)?.tables.lock().map_err(|_| lock_error())?;
-    Ok(tables.contributions.iter().filter(|item| item.kind == kind).cloned().collect())
+    let Some(hub) = HUB.get() else {
+        return Ok(Vec::new());
+    };
+    let tables = hub
+        .as_ref()
+        .map_err(Clone::clone)?
+        .tables
+        .lock()
+        .map_err(|_| lock_error())?;
+    Ok(tables
+        .contributions
+        .iter()
+        .filter(|item| item.kind == kind)
+        .cloned()
+        .collect())
 }
 
 pub fn original_tool_event(call_id: &str, started: bool) {
-    event(if started { "runtime-original-tool-start" } else { "runtime-original-tool-end" }, json!({"call_id": call_id, "target": "exec_command"}));
+    event(
+        if started {
+            "runtime-original-tool-start"
+        } else {
+            "runtime-original-tool-end"
+        },
+        json!({"call_id": call_id, "target": "exec_command"}),
+    );
 }
 
 pub fn bind_level(level: &str, scope: &Result<Scope, LoadError>) -> Result<(), LoadError> {
@@ -608,11 +644,21 @@ impl UiScope {
     }
 
     pub fn close(&self) {
-        if self.0.closed.swap(true, Ordering::AcqRel) { return; }
+        if self.0.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
         if let Some(Ok(hub)) = HUB.get() {
-            let requests = hub.tables.lock().ok().map(|tables| tables.requests()).unwrap_or_default();
+            let requests = hub
+                .tables
+                .lock()
+                .ok()
+                .map(|tables| tables.requests())
+                .unwrap_or_default();
             for request in requests {
-                if matches!(&request.owner, RequestOwner::Ui(owner) if Arc::ptr_eq(owner, &self.0)) { request.cancel(false); }
+                if matches!(&request.owner, RequestOwner::Ui(owner) if Arc::ptr_eq(owner, &self.0))
+                {
+                    request.cancel(false);
+                }
             }
         }
     }
@@ -1027,7 +1073,9 @@ impl RequestData {
             false
         };
         if queued {
-            if let Some(next) = &self.continuation { next.cancel(); }
+            if let Some(next) = &self.continuation {
+                next.cancel();
+            }
             if timeout {
                 self.latch(self.error("request timeout"));
             }
@@ -1095,7 +1143,8 @@ impl Future for RequestFuture {
             Ok(state) => state,
             Err(_) => return Poll::Ready(Err(lock_error())),
         };
-        if (matches!(&self.request.owner, RequestOwner::Ui(_)) || self.request.continuation.is_some())
+        if (matches!(&self.request.owner, RequestOwner::Ui(_))
+            || self.request.continuation.is_some())
             && !state.started_returned
             && !state.cancelled
         {
@@ -1178,10 +1227,22 @@ pub fn dispatch_with_next(
     next: Arc<Continuation>,
 ) -> Result<RequestFuture, LoadError> {
     scope.check()?;
-    if scope.0.parent.is_none() || !matches!(contribution.kind, Kind::ToolAround | Kind::ToolReplacement) {
-        return Err(failure("continuation requires a tool contribution and actual turn"));
+    if scope.0.parent.is_none()
+        || !matches!(contribution.kind, Kind::ToolAround | Kind::ToolReplacement)
+    {
+        return Err(failure(
+            "continuation requires a tool contribution and actual turn",
+        ));
     }
-    dispatch_owned(RequestOwner::Core(scope.clone()), contribution, v23::TOOL_AROUND, input, call_id, false, Some(next))
+    dispatch_owned(
+        RequestOwner::Core(scope.clone()),
+        contribution,
+        v23::TOOL_AROUND,
+        input,
+        call_id,
+        false,
+        Some(next),
+    )
 }
 
 pub fn dispatch_ui(
@@ -1459,8 +1520,12 @@ unsafe extern "C" fn complete(
         let result = unsafe { view(value.result, v22::MAX_RESULT)? };
         let request = request(instance, value.request)?;
         let mut state = request.state.lock().map_err(|_| v22::INVALID)?;
-        let child_pending = request.continuation.as_ref().is_some_and(|next| !next.quiet());
-        let protocol_error = (!state.terminal && child_pending && value.status == v22::SUCCEEDED).then(|| request.error("Mod completed before its continuation drained"));
+        let child_pending = request
+            .continuation
+            .as_ref()
+            .is_some_and(|next| !next.quiet());
+        let protocol_error = (!state.terminal && child_pending && value.status == v22::SUCCEEDED)
+            .then(|| request.error("Mod completed before its continuation drained"));
         let code = if state.terminal {
             if state.cancelled {
                 v22::REQUEST_CANCELLED
@@ -1468,19 +1533,23 @@ unsafe extern "C" fn complete(
                 v22::ALREADY_COMPLETED
             }
         } else {
-            let result = if let Some(error) = &protocol_error { Err(error.clone()) } else { match value.status {
-                v22::SUCCEEDED => Ok(result),
-                v22::FAILED => {
-                    let message = String::from_utf8(result).map_err(|_| v22::INVALID)?;
-                    let mut error = request.error(&message);
-                    error.code = "mod_error".into();
-                    Err(error)
+            let result = if let Some(error) = &protocol_error {
+                Err(error.clone())
+            } else {
+                match value.status {
+                    v22::SUCCEEDED => Ok(result),
+                    v22::FAILED => {
+                        let message = String::from_utf8(result).map_err(|_| v22::INVALID)?;
+                        let mut error = request.error(&message);
+                        error.code = "mod_error".into();
+                        Err(error)
+                    }
+                    _ => {
+                        state.cancelled = true;
+                        Err(request.error("Mod cancelled request"))
+                    }
                 }
-                _ => {
-                    state.cancelled = true;
-                    Err(request.error("Mod cancelled request"))
-                }
-            } };
+            };
             state.deliver(result);
             cm_abi::OK
         };
@@ -1488,8 +1557,14 @@ unsafe extern "C" fn complete(
             state.quiet = true;
         }
         drop(state);
-        if let Some(error) = protocol_error { request.latch(error); }
-        if child_pending { if let Some(next) = &request.continuation { next.cancel(); } }
+        if let Some(error) = protocol_error {
+            request.latch(error);
+        }
+        if child_pending {
+            if let Some(next) = &request.continuation {
+                next.cancel();
+            }
+        }
         event(
             "runtime-complete",
             json!({"mod": request.module.owner, "request": handle_json(value.request),

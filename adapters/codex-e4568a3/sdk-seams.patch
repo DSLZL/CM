@@ -24,7 +24,7 @@ index fa44e4e..a8e06cc 100644
  codex-app-server = { workspace = true }
  codex-app-server-daemon = { workspace = true }
 diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
-index c0a8340..3a2d446 100644
+index c0a8340..8c6a021 100644
 --- a/codex-rs/cli/src/main.rs
 +++ b/codex-rs/cli/src/main.rs
 @@ -1,4 +1,6 @@
@@ -43,16 +43,17 @@ index c0a8340..3a2d446 100644
      /// Check or create an independent profile for this Host from a previous Host.
      Upgrade {
          candidate: std::path::PathBuf,
-@@ -1139,7 +1143,7 @@ fn main() -> anyhow::Result<()> {
+@@ -1139,8 +1143,7 @@ fn main() -> anyhow::Result<()> {
      codex_build_info::initialize!();
      let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
      // Management must not create arg0 aliases or load .env from an inherited official home.
 -    if MultitoolCli::try_parse().is_ok_and(|cli| matches!(cli.subcommand, Some(Subcommand::Cm(_))))
-+    if cm_commands::try_parse().is_ok_and(|cli| matches!(cli.subcommand, Some(Subcommand::Cm(_))))
-     {
+-    {
++    if cm_commands::try_parse().is_ok_and(|cli| matches!(cli.subcommand, Some(Subcommand::Cm(_)))) {
          return tokio::runtime::Builder::new_current_thread()
              .enable_all()
-@@ -1149,7 +1153,7 @@ fn main() -> anyhow::Result<()> {
+             .build()?
+@@ -1149,7 +1152,7 @@ fn main() -> anyhow::Result<()> {
                  remote_control_disabled,
              )));
      }
@@ -61,7 +62,7 @@ index c0a8340..3a2d446 100644
          matches!(
              cli.subcommand,
              None | Some(Subcommand::Agents(_))
-@@ -1181,7 +1185,7 @@ async fn cli_main(
+@@ -1181,7 +1184,7 @@ async fn cli_main(
          remote,
          mut interactive,
          subcommand,
@@ -70,15 +71,24 @@ index c0a8340..3a2d446 100644
      // Retain the launch target through TUI exit, even if a launcher changes selection.
      let daemon_cli_executable = arg0_paths
          .codex_self_exe
-@@ -1257,6 +1261,7 @@ async fn cli_main(
+@@ -1257,6 +1260,16 @@ async fn cli_main(
              find_codex_home()?.to_path_buf()
          };
          let result = match &command.command {
-+            CmCommand::Run(command) => cm_runtime::commands::run(&home, &cm_options, cm_commands::graph()?, &command.name, command.input.as_deref()).await,
++            CmCommand::Run(command) => {
++                cm_runtime::commands::run(
++                    &home,
++                    &cm_options,
++                    cm_commands::graph()?,
++                    &command.name,
++                    command.input.as_deref(),
++                )
++                .await
++            }
              CmCommand::Upgrade {
                  candidate,
                  check,
-@@ -3071,7 +3076,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
+@@ -3071,7 +3084,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
  }
  
  fn print_completion(cmd: CompletionCommand) {
@@ -88,7 +98,7 @@ index c0a8340..3a2d446 100644
      generate(cmd.shell, &mut app, name, &mut std::io::stdout());
  }
 diff --git a/codex-rs/core/src/client.rs b/codex-rs/core/src/client.rs
-index 172a741..7d9c979 100644
+index 172a741..e73864b 100644
 --- a/codex-rs/core/src/client.rs
 +++ b/codex-rs/core/src/client.rs
 @@ -294,6 +294,7 @@ pub struct ModelClient {
@@ -99,7 +109,7 @@ index 172a741..7d9c979 100644
      websocket_session: WebsocketSession,
      /// Turn state for sticky routing.
      ///
-@@ -312,6 +313,21 @@ pub struct ModelClientSession {
+@@ -312,6 +313,31 @@ pub struct ModelClientSession {
  /// Executes HTTP Responses requests without owning a turn's WebSocket state.
  pub(crate) struct ResponsesHttpExecutor<'a> {
      client: &'a ModelClient,
@@ -114,14 +124,24 @@ index 172a741..7d9c979 100644
 +
 +impl CmRequestContext {
 +    fn next_attempt(&self) -> Result<(String, String, u64)> {
-+        let attempt = self.attempt.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |value| value.checked_add(1))
-+            .map_err(|_| codex_protocol::error::CodexErrorDetails::InvalidRequest("CM attempt identity exhausted".into()))?;
++        let attempt = self
++            .attempt
++            .fetch_update(
++                std::sync::atomic::Ordering::Relaxed,
++                std::sync::atomic::Ordering::Relaxed,
++                |value| value.checked_add(1),
++            )
++            .map_err(|_| {
++                codex_protocol::error::CodexErrorDetails::InvalidRequest(
++                    "CM attempt identity exhausted".into(),
++                )
++            })?;
 +        Ok((self.level.clone(), self.id.clone(), attempt))
 +    }
  }
  
  #[derive(Debug, Clone)]
-@@ -681,6 +697,7 @@ impl ModelClient {
+@@ -681,6 +707,7 @@ impl ModelClient {
          }
          ModelClientSession {
              client: self.clone(),
@@ -129,27 +149,43 @@ index 172a741..7d9c979 100644
              websocket_session,
              turn_state: Arc::new(OnceLock::new()),
          }
-@@ -1441,6 +1458,14 @@ impl Drop for ModelClientSession {
+@@ -1441,6 +1468,27 @@ impl Drop for ModelClientSession {
  }
  
  impl ModelClientSession {
 +    pub(crate) fn bind_cm_request(&mut self, level: &str) -> Result<()> {
 +        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-+        let id = SEQUENCE.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |value| value.checked_add(1))
-+            .map_err(|_| codex_protocol::error::CodexErrorDetails::InvalidRequest("CM request identity exhausted".into()))?;
-+        self.cm_request = Some(Arc::new(CmRequestContext { level: level.into(), id: format!("{level}:{id}"), attempt: std::sync::atomic::AtomicU64::new(1) }));
++        let id = SEQUENCE
++            .fetch_update(
++                std::sync::atomic::Ordering::Relaxed,
++                std::sync::atomic::Ordering::Relaxed,
++                |value| value.checked_add(1),
++            )
++            .map_err(|_| {
++                codex_protocol::error::CodexErrorDetails::InvalidRequest(
++                    "CM request identity exhausted".into(),
++                )
++            })?;
++        self.cm_request = Some(Arc::new(CmRequestContext {
++            level: level.into(),
++            id: format!("{level}:{id}"),
++            attempt: std::sync::atomic::AtomicU64::new(1),
++        }));
 +        Ok(())
 +    }
 +
      pub(crate) fn inference_tools_changed(&self, tools: &Arc<[ToolSpec]>) -> bool {
          let previous = self
              .client
-@@ -1455,7 +1480,12 @@ impl ModelClientSession {
+@@ -1455,7 +1503,15 @@ impl ModelClientSession {
  
  impl<'a> ResponsesHttpExecutor<'a> {
      pub(crate) fn new(client: &'a ModelClient) -> Self {
 -        Self { client }
-+        Self { client, cm_request: None }
++        Self {
++            client,
++            cm_request: None,
++        }
 +    }
 +
 +    fn with_cm_request(mut self, request: Option<Arc<CmRequestContext>>) -> Self {
@@ -158,38 +194,50 @@ index 172a741..7d9c979 100644
      }
  
      #[allow(clippy::too_many_arguments)]
-@@ -1876,12 +1906,14 @@ impl ResponsesHttpExecutor<'_> {
+@@ -1876,12 +1932,20 @@ impl ResponsesHttpExecutor<'_> {
              let request_session_telemetry =
                  session_telemetry_for_request(session_telemetry, &request);
              options.extra_headers.extend(responses_headers);
-+            let cm_context = self.cm_request.as_ref().map(|context| context.next_attempt()).transpose()?;
++            let cm_context = self
++                .cm_request
++                .as_ref()
++                .map(|context| context.next_attempt())
++                .transpose()?;
              let interceptors = crate::model_request::prepare(
                  &self.client.request_contributors,
                  &self.client.state.thread_id.to_string(),
                  &model_info.slug,
                  codex_extension_api::ModelRequestKind::Generation,
                  &mut request.client_metadata,
-+                cm_context.as_ref().map(|(level, id, attempt)| (level.as_str(), id.as_str(), *attempt)),
++                cm_context
++                    .as_ref()
++                    .map(|(level, id, attempt)| (level.as_str(), id.as_str(), *attempt)),
              );
              let inference_trace_attempt = inference_trace.start_attempt();
              inference_trace_attempt.add_request_headers(&mut options.extra_headers);
-@@ -2171,6 +2203,7 @@ impl ModelClientSession {
+@@ -2171,6 +2235,11 @@ impl ModelClientSession {
                  client_setup.auth.as_ref(),
                  &responses_headers,
              );
-+            let cm_context = self.cm_request.as_ref().map(|context| context.next_attempt()).transpose()?;
++            let cm_context = self
++                .cm_request
++                .as_ref()
++                .map(|context| context.next_attempt())
++                .transpose()?;
              let interceptors = crate::model_request::prepare(
                  &self.client.request_contributors,
                  &self.client.state.thread_id.to_string(),
-@@ -2181,6 +2214,7 @@ impl ModelClientSession {
+@@ -2181,6 +2250,9 @@ impl ModelClientSession {
                      codex_extension_api::ModelRequestKind::Generation
                  },
                  &mut ws_payload.client_metadata,
-+                cm_context.as_ref().map(|(level, id, attempt)| (level.as_str(), id.as_str(), *attempt)),
++                cm_context
++                    .as_ref()
++                    .map(|(level, id, attempt)| (level.as_str(), id.as_str(), *attempt)),
              );
              let mut ws_request = ResponsesWsRequest::ResponseCreate(ws_payload);
              stamp_ws_stream_request_start_ms(&mut ws_request);
-@@ -2402,6 +2436,7 @@ impl ModelClientSession {
+@@ -2402,6 +2474,7 @@ impl ModelClientSession {
                  }
  
                  ResponsesHttpExecutor::new(&self.client)
@@ -246,7 +294,7 @@ index 4cb1232..dae4f35 100644
          // Running code-mode cells can request review while this response is in flight.
          // Keep the latest received ID until response.created replaces it.
 diff --git a/codex-rs/core/src/tools/registry.rs b/codex-rs/core/src/tools/registry.rs
-index f495b89..5817848 100644
+index f495b89..58961f0 100644
 --- a/codex-rs/core/src/tools/registry.rs
 +++ b/codex-rs/core/src/tools/registry.rs
 @@ -52,6 +52,9 @@ pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
@@ -259,16 +307,25 @@ index f495b89..5817848 100644
  #[derive(Clone, Copy, PartialEq, Eq)]
  pub(crate) enum ToolExecutionRole {
      Leaf,
-@@ -345,6 +348,18 @@ pub struct ToolRegistry {
+@@ -345,6 +348,27 @@ pub struct ToolRegistry {
  }
  
  impl ToolRegistry {
 +    pub(crate) fn cm_check_tool_targets(&self) -> Result<(), cm_runtime::LoadError> {
-+        for kind in [cm_runtime::runtime::Kind::ToolAround, cm_runtime::runtime::Kind::ToolReplacement] {
++        for kind in [
++            cm_runtime::runtime::Kind::ToolAround,
++            cm_runtime::runtime::Kind::ToolReplacement,
++        ] {
 +            for contribution in cm_runtime::runtime::ordered_contributions(kind)? {
-+                let available = self.tool(&ToolName::plain(&contribution.name)).is_some_and(|tool| !tool.is_third_party_tool());
++                let available = self
++                    .tool(&ToolName::plain(&contribution.name))
++                    .is_some_and(|tool| !tool.is_third_party_tool());
 +                if !available {
-+                    return Err(cm_runtime::runtime::registration_error(&contribution.owner, &contribution.id, "continuation target is absent or not a builtin"));
++                    return Err(cm_runtime::runtime::registration_error(
++                        &contribution.owner,
++                        &contribution.id,
++                        "continuation target is absent or not a builtin",
++                    ));
 +                }
 +            }
 +        }
@@ -278,25 +335,33 @@ index f495b89..5817848 100644
      pub(crate) fn search_info(&self, tool: &RegisteredTool) -> Option<ToolSearchInfo> {
          let info = tool.runtime.search_info()?;
          // A runtime may advertise a different search schema or description. Preserve it,
-@@ -807,7 +822,7 @@ impl ToolRegistry {
+@@ -807,7 +831,13 @@ impl ToolRegistry {
                  log_payload.as_ref(),
                  &tool_result_tags,
                  &extra_trace_fields,
 -                || handle_any_tool(tool.as_ref(), invocation.clone(), call_state.as_deref()),
-+                || cm_tool_continuation::handle(Arc::clone(&tool), invocation.clone(), call_state.clone()),
++                || {
++                    cm_tool_continuation::handle(
++                        Arc::clone(&tool),
++                        invocation.clone(),
++                        call_state.clone(),
++                    )
++                },
                  |result| {
                      (
                          result.result.log_output(),
 diff --git a/codex-rs/core/src/tools/spec_plan.rs b/codex-rs/core/src/tools/spec_plan.rs
-index f357465..d7e186c 100644
+index f357465..cc56187 100644
 --- a/codex-rs/core/src/tools/spec_plan.rs
 +++ b/codex-rs/core/src/tools/spec_plan.rs
-@@ -544,6 +544,9 @@ pub(crate) fn finalize_tool_router(
+@@ -544,6 +544,11 @@ pub(crate) fn finalize_tool_router(
      let child_management_tools = required_child_management_tool_names(turn_context, model_info);
      crate::cm_runtime_check(turn_context.extension_data.level_id())?;
  
 +    if let Err(error) = registry.cm_check_tool_targets() {
-+        return Err(codex_protocol::error::CodexErrorDetails::InvalidRequest(error.to_string()).into());
++        return Err(
++            codex_protocol::error::CodexErrorDetails::InvalidRequest(error.to_string()).into(),
++        );
 +    }
      Ok(ToolRouter::from_parts(
          registry,
@@ -343,18 +408,21 @@ index 2aa35b6..42831c7 100644
          request_id: uuid::Uuid,
          email: Option<String>,
 diff --git a/codex-rs/tui/src/bottom_pane/chat_composer.rs b/codex-rs/tui/src/bottom_pane/chat_composer.rs
-index 3f3fed8..354809f 100644
+index 3f3fed8..8b87971 100644
 --- a/codex-rs/tui/src/bottom_pane/chat_composer.rs
 +++ b/codex-rs/tui/src/bottom_pane/chat_composer.rs
-@@ -482,6 +482,7 @@ pub enum InputResult {
+@@ -482,6 +482,10 @@ pub enum InputResult {
      Command(SlashCommand),
      /// A bare model service-tier command parsed by the composer.
      ServiceTierCommand(ServiceTierCommand),
-+    CmCommand { command: cm_runtime::commands::Command, input: Option<String> },
++    CmCommand {
++        command: cm_runtime::commands::Command,
++        input: Option<String>,
++    },
      /// An inline slash command and its trimmed argument text.
      ///
      /// The `TextElement` ranges are rebased into the argument string, while any pending local
-@@ -3162,6 +3163,7 @@ impl ChatComposer {
+@@ -3162,6 +3166,7 @@ impl ChatComposer {
                  | InputResult::Queued { .. }
                  | InputResult::Command(_)
                  | InputResult::ServiceTierCommand(_)
@@ -362,15 +430,18 @@ index 3f3fed8..354809f 100644
                  | InputResult::CommandWithArgs(_, _, _)
          ) && self.config.reset_vim_on_submission
          {
-@@ -3346,6 +3348,7 @@ impl ChatComposer {
+@@ -3346,6 +3351,10 @@ impl ChatComposer {
          Some(match command {
              SlashCommandItem::Builtin(cmd) => InputResult::Command(cmd),
              SlashCommandItem::ServiceTier(command) => InputResult::ServiceTierCommand(command),
-+            SlashCommandItem::Cm(command) => InputResult::CmCommand { command, input: None },
++            SlashCommandItem::Cm(command) => InputResult::CmCommand {
++                command,
++                input: None,
++            },
          })
      }
  
-@@ -3370,14 +3373,16 @@ impl ChatComposer {
+@@ -3370,14 +3379,22 @@ impl ChatComposer {
          );
          let trimmed_rest = inline_command.rest.trim();
          args_elements = Self::trim_text_elements(inline_command.rest, trimmed_rest, args_elements);
@@ -384,18 +455,24 @@ index 3f3fed8..354809f 100644
 -        ))
 +        match command {
 +            SlashCommandItem::Builtin(cmd) => Some(InputResult::CommandWithArgs(
-+                cmd, trimmed_rest.to_string(), args_elements)),
++                cmd,
++                trimmed_rest.to_string(),
++                args_elements,
++            )),
 +            SlashCommandItem::Cm(command) => {
 +                self.draft.textarea.set_text_clearing_elements("");
 +                self.draft.prompt_prefix = PromptPrefix::None;
-+                Some(InputResult::CmCommand { command, input: Some(trimmed_rest.to_string()) })
++                Some(InputResult::CmCommand {
++                    command,
++                    input: Some(trimmed_rest.to_string()),
++                })
 +            }
 +            SlashCommandItem::ServiceTier(_) => None,
 +        }
      }
  
      /// Expand pending placeholders and extract normalized inline-command args.
-@@ -9479,7 +9484,7 @@ mod tests {
+@@ -9479,7 +9496,7 @@ mod tests {
              match &composer.popups.active {
                  ActivePopup::Command(popup) => match popup.selected_item() {
                      Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), expected),
@@ -404,7 +481,7 @@ index 3f3fed8..354809f 100644
                          panic!("expected {expected} command, got service tier {command:?}")
                      }
                      None => panic!("no selected command for '{input}'"),
-@@ -9592,7 +9597,7 @@ mod tests {
+@@ -9592,7 +9609,7 @@ mod tests {
              InputResult::CommandWithArgs(_, _, _) => {
                  panic!("expected command dispatch without args for '/init'")
              }
@@ -413,7 +490,7 @@ index 3f3fed8..354809f 100644
                  panic!("expected init command, got service tier {command:?}")
              }
              InputResult::Submitted { text, .. } => {
-@@ -10111,7 +10116,7 @@ mod tests {
+@@ -10111,7 +10128,7 @@ mod tests {
              InputResult::CommandWithArgs(_, _, _) => {
                  panic!("expected command dispatch without args for '/diff'")
              }
@@ -422,7 +499,7 @@ index 3f3fed8..354809f 100644
                  panic!("expected diff command, got service tier {command:?}")
              }
              InputResult::Submitted { text, .. } => {
-@@ -10332,7 +10337,7 @@ mod tests {
+@@ -10332,7 +10349,7 @@ mod tests {
              InputResult::CommandWithArgs(_, _, _) => {
                  panic!("expected command dispatch without args for '/mention'")
              }
@@ -432,7 +509,7 @@ index 3f3fed8..354809f 100644
              }
              InputResult::Submitted { text, .. } => {
 diff --git a/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs b/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs
-index 77bbc15..5bfad28 100644
+index 77bbc15..89c10f1 100644
 --- a/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs
 +++ b/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs
 @@ -378,7 +378,7 @@ impl ChatComposer {
@@ -444,15 +521,18 @@ index 77bbc15..5bfad28 100644
                          };
                          if !command_is_allowed {
                              return (InputResult::ParentOwnedInputBlocked, true);
-@@ -405,6 +405,7 @@ impl ChatComposer {
+@@ -405,6 +405,10 @@ impl ChatComposer {
                              CommandItem::ServiceTier(command) => {
                                  InputResult::ServiceTierCommand(command)
                              }
-+                            CommandItem::Cm(command) => InputResult::CmCommand { command, input: None },
++                            CommandItem::Cm(command) => InputResult::CmCommand {
++                                command,
++                                input: None,
++                            },
                          },
                          true,
                      );
-@@ -431,12 +432,11 @@ impl ChatComposer {
+@@ -431,12 +435,13 @@ impl ChatComposer {
          &self,
          selected_cmd: &CommandItem,
      ) -> Option<(usize, String)> {
@@ -460,7 +540,9 @@ index 77bbc15..5bfad28 100644
 -            return None;
 +        let name = match selected_cmd {
 +            CommandItem::Builtin(cmd) if cmd.supports_inline_args() => cmd.command(),
-+            CommandItem::Cm(command) if command.spec.input != cm_runtime::commands::Input::None => &command.spec.name,
++            CommandItem::Cm(command) if command.spec.input != cm_runtime::commands::Input::None => {
++                &command.spec.name
++            }
 +            _ => return None,
          };
 -        if !cmd.supports_inline_args() {
@@ -469,7 +551,7 @@ index 77bbc15..5bfad28 100644
  
          let text = self.current_text();
          let first_line_end = text.find('\n').unwrap_or(text.len());
-@@ -455,14 +455,14 @@ impl ChatComposer {
+@@ -455,14 +460,14 @@ impl ChatComposer {
              return None;
          }
          let replace_end =
@@ -487,15 +569,17 @@ index 77bbc15..5bfad28 100644
              selected_command_text
          } else {
 diff --git a/codex-rs/tui/src/bottom_pane/chat_composer/sparkle.rs b/codex-rs/tui/src/bottom_pane/chat_composer/sparkle.rs
-index c1b0787..47be8b2 100644
+index c1b0787..3a66276 100644
 --- a/codex-rs/tui/src/bottom_pane/chat_composer/sparkle.rs
 +++ b/codex-rs/tui/src/bottom_pane/chat_composer/sparkle.rs
-@@ -238,7 +238,7 @@ impl ChatComposer {
+@@ -238,7 +238,9 @@ impl ChatComposer {
          result: &InputResult,
      ) {
          match result {
 -            InputResult::Command(_) | InputResult::ServiceTierCommand(_) => {
-+            InputResult::Command(_) | InputResult::ServiceTierCommand(_) | InputResult::CmCommand { .. } => {
++            InputResult::Command(_)
++            | InputResult::ServiceTierCommand(_)
++            | InputResult::CmCommand { .. } => {
                  if self.sparkle.draft.get() == SparkleDraft::Command {
                      self.sparkle.draft.set(SparkleDraft::Untouched);
                      self.sparkle.command_input.borrow_mut().clear();
@@ -579,7 +663,7 @@ index f75d17f..7fd31c6 100644
              .collect();
          assert_eq!(
 diff --git a/codex-rs/tui/src/bottom_pane/slash_commands.rs b/codex-rs/tui/src/bottom_pane/slash_commands.rs
-index 4c455ed..b4813bd 100644
+index 4c455ed..1355478 100644
 --- a/codex-rs/tui/src/bottom_pane/slash_commands.rs
 +++ b/codex-rs/tui/src/bottom_pane/slash_commands.rs
 @@ -21,6 +21,7 @@ pub(crate) struct ServiceTierCommand {
@@ -622,7 +706,7 @@ index 4c455ed..b4813bd 100644
          }
      }
  }
-@@ -104,12 +109,28 @@ pub(crate) fn commands_for_input(
+@@ -104,12 +109,39 @@ pub(crate) fn commands_for_input(
              );
          }
      }
@@ -636,27 +720,40 @@ index 4c455ed..b4813bd 100644
 +fn cm_commands(service_tier_commands: &[ServiceTierCommand]) -> Vec<SlashCommandItem> {
 +    let graph = cm_runtime::commands::configured_graph().and_then(|graph| {
 +        let builtins = built_in_slash_commands();
-+        graph.check_names(cm_runtime::commands::Section::Tui,
-+            builtins.iter().map(|(name, _)| *name)
-+                .chain(service_tier_commands.iter().map(|command| command.name.as_str())))?;
++        graph.check_names(
++            cm_runtime::commands::Section::Tui,
++            builtins.iter().map(|(name, _)| *name).chain(
++                service_tier_commands
++                    .iter()
++                    .map(|command| command.name.as_str()),
++            ),
++        )?;
 +        Ok(graph)
 +    });
 +    match graph {
-+        Ok(graph) => graph.entries(cm_runtime::commands::Section::Tui)
-+            .cloned().map(SlashCommandItem::Cm).collect(),
-+        Err(error) => { cm_runtime::runtime::fail_registration(error); Vec::new() }
++        Ok(graph) => graph
++            .entries(cm_runtime::commands::Section::Tui)
++            .cloned()
++            .map(SlashCommandItem::Cm)
++            .collect(),
++        Err(error) => {
++            cm_runtime::runtime::fail_registration(error);
++            Vec::new()
++        }
 +    }
 +}
 +
  /// Find a single built-in command by a recognized name or alias, after applying feature gating.
  ///
  /// Side-conversation and token-activity gating are intentionally enforced by dispatch rather than
-@@ -141,6 +162,11 @@ pub(crate) fn find_slash_command(
+@@ -141,6 +173,13 @@ pub(crate) fn find_slash_command(
          return Some(SlashCommandItem::Builtin(cmd));
      }
  
-+    if let Some(command) = cm_commands(service_tier_commands).into_iter()
-+        .find(|command| command.command() == name) {
++    if let Some(command) = cm_commands(service_tier_commands)
++        .into_iter()
++        .find(|command| command.command() == name)
++    {
 +        return Some(command);
 +    }
 +
@@ -688,7 +785,7 @@ index c22beee..3c549b2 100644
              permission_shortcut_pending: false,
              show_welcome_banner: is_first_run,
 diff --git a/codex-rs/tui/src/chatwidget/input_flow.rs b/codex-rs/tui/src/chatwidget/input_flow.rs
-index 6b7562c..1dfece0 100644
+index 6b7562c..82ebf41 100644
 --- a/codex-rs/tui/src/chatwidget/input_flow.rs
 +++ b/codex-rs/tui/src/chatwidget/input_flow.rs
 @@ -13,6 +13,7 @@ use crate::bottom_pane::slash_commands::find_slash_command;
@@ -707,13 +804,15 @@ index 6b7562c..1dfece0 100644
              | InputResult::CommandWithArgs(..) => true,
              InputResult::Submitted { .. }
              | InputResult::Queued { .. }
-@@ -156,6 +158,12 @@ impl ChatWidget {
+@@ -156,6 +158,14 @@ impl ChatWidget {
                  self.handle_service_tier_command_dispatch(command);
                  self.cm_reviewed_command = None;
              }
 +            InputResult::CmCommand { command, input } => {
 +                let admission = self.cm_admit_command(cm_receipt);
-+                if !self.cm_claim_command(admission) { return; }
++                if !self.cm_claim_command(admission) {
++                    return;
++                }
 +                self.handle_cm_command_dispatch(command, input);
 +                self.cm_reviewed_command = None;
 +            }
@@ -733,26 +832,32 @@ index 2a34803..4e1b6bb 100644
          self.invalidate_permission_discovery();
          self.cancel_startup_submission();
 diff --git a/codex-rs/tui/src/chatwidget/session_flow.rs b/codex-rs/tui/src/chatwidget/session_flow.rs
-index 15f6a35..86e2abd 100644
+index 15f6a35..ae9b3f1 100644
 --- a/codex-rs/tui/src/chatwidget/session_flow.rs
 +++ b/codex-rs/tui/src/chatwidget/session_flow.rs
-@@ -72,6 +72,7 @@ impl ChatWidget {
+@@ -72,6 +72,9 @@ impl ChatWidget {
          let previous_thread_id = self.thread_id;
          let connector_scope_changed = previous_thread_id != Some(session.thread_id)
              || self.config.cwd.as_path() != session.cwd.as_path();
-+        if connector_scope_changed { self.cm_command_owner.take(); }
++        if connector_scope_changed {
++            self.cm_command_owner.take();
++        }
          self.thread_id = Some(session.thread_id);
          self.daybreak_enabled = self.config.features.enabled(Feature::CliDaybreak)
              && session.daybreak_enabled
 diff --git a/codex-rs/tui/src/chatwidget/slash_dispatch.rs b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
-index 6b4d880..45325fd 100644
+index 6b4d880..3a182f6 100644
 --- a/codex-rs/tui/src/chatwidget/slash_dispatch.rs
 +++ b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
-@@ -41,6 +41,40 @@ const RAW_USAGE: &str = "Usage: /raw [on|off]";
+@@ -41,6 +41,55 @@ const RAW_USAGE: &str = "Usage: /raw [on|off]";
  const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
  
  impl ChatWidget {
-+    pub(super) fn handle_cm_command_dispatch(&mut self, command: cm_runtime::commands::Command, input: Option<String>) {
++    pub(super) fn handle_cm_command_dispatch(
++        &mut self,
++        command: cm_runtime::commands::Command,
++        input: Option<String>,
++    ) {
 +        let result = (|| {
 +            if self.active_side_conversation || self.blocks_direct_input {
 +                anyhow::bail!("CM commands require the current main UI owner");
@@ -764,13 +869,19 @@ index 6b4d880..45325fd 100644
 +            if self.cm_command_owner.is_none() {
 +                self.cm_command_owner = Some(cm_runtime::commands::UiOwner::new()?);
 +            }
-+            Ok::<_, anyhow::Error>(self.cm_command_owner.as_ref().expect("current UI owner")
-+                .begin(&graph, &command.spec.name, input.as_deref())?)
++            Ok::<_, anyhow::Error>(
++                self.cm_command_owner
++                    .as_ref()
++                    .expect("current UI owner")
++                    .begin(&graph, &command.spec.name, input.as_deref())?,
++            )
 +        })();
 +        match result {
 +            Ok(work) => {
 +                let tx = self.app_event_tx.clone();
-+                tokio::spawn(async move { tx.send(AppEvent::CmCommandCompleted(Box::new(work.run().await))); });
++                tokio::spawn(async move {
++                    tx.send(AppEvent::CmCommandCompleted(Box::new(work.run().await)));
++                });
 +            }
 +            Err(error) => self.add_error_message(error.to_string()),
 +        }
@@ -778,8 +889,13 @@ index 6b4d880..45325fd 100644
 +        self.bottom_pane.record_pending_slash_command_history();
 +    }
 +
-+    pub(crate) fn on_cm_command_completed(&mut self, mut completion: cm_runtime::commands::UiCompletion) {
-+        let Some(owner) = self.cm_command_owner.as_ref() else { return; };
++    pub(crate) fn on_cm_command_completed(
++        &mut self,
++        mut completion: cm_runtime::commands::UiCompletion,
++    ) {
++        let Some(owner) = self.cm_command_owner.as_ref() else {
++            return;
++        };
 +        match owner.apply(&mut completion) {
 +            Ok(text) => self.add_info_message(text, None),
 +            Err(error) => self.add_error_message(error.to_string()),
@@ -789,7 +905,7 @@ index 6b4d880..45325fd 100644
      /// Dispatch a bare slash command and record its staged local-history entry.
      ///
      /// The composer stages history before returning `InputResult::Command`; this wrapper commits
-@@ -1228,6 +1262,10 @@ impl ChatWidget {
+@@ -1228,6 +1277,10 @@ impl ChatWidget {
                      self.handle_service_tier_command_dispatch(command);
                      QueueDrain::Continue
                  }
@@ -800,7 +916,7 @@ index 6b4d880..45325fd 100644
              };
              self.cm_reviewed_command = None;
              return result;
-@@ -1246,6 +1284,16 @@ impl ChatWidget {
+@@ -1246,6 +1299,18 @@ impl ChatWidget {
              );
              return QueueDrain::Stop;
          }
@@ -809,7 +925,9 @@ index 6b4d880..45325fd 100644
 +                UserMessageSource::ReviewedPrompt(admission) => Some(admission),
 +                _ => None,
 +            };
-+            if !self.cm_claim_command(admission) { return QueueDrain::Stop; }
++            if !self.cm_claim_command(admission) {
++                return QueueDrain::Stop;
++            }
 +            self.handle_cm_command_dispatch(command.clone(), Some(rest.trim().to_string()));
 +            self.cm_reviewed_command = None;
 +            return QueueDrain::Continue;

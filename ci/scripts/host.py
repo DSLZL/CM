@@ -172,6 +172,10 @@ def schemas(root, logs):
     cfg = load_config(root)
     for unit in cfg["units"]:
         execute(root, logs, "g03-" + unit["id"] + "-early-fmt", build_commands(unit, cfg)["fmt"])
+    if cfg["task_id"] == "CM-G06":
+        execute(root, logs, "g06-fixture-early-fmt", ["rustfmt", "--edition", "2024", "--check",
+            *(str(root / "fixtures/sdk-seams" / name) for name in
+                ("fixture.rs", "runtime_probe.rs", "stream_probe.rs", "core_probe.rs"))])
     tree = root / HOST
     before = {row["path"]: row for row in manifest(tree)}
     env = {**os.environ, "CARGO_TARGET_DIR": str(Path(os.environ["CARGO_TARGET_DIR"]) / "g03-schema"),

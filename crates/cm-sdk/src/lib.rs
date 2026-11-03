@@ -84,7 +84,12 @@ impl Host {
         let header = unsafe { api.cast::<Header>().read() };
         if header.major != 2
             || header.minor != minor
-            || header.struct_size < (if minor == 3 { size_of::<v23::HostApi>() } else { size_of::<v22::HostApi>() }) as u32
+            || header.struct_size
+                < (if minor == 3 {
+                    size_of::<v23::HostApi>()
+                } else {
+                    size_of::<v22::HostApi>()
+                }) as u32
             || header.struct_size > 4096
         {
             return Err(format!("ABI 2.{minor} Host required"));
@@ -98,17 +103,25 @@ impl Host {
                 return Err("missing/short continuation services".into());
             }
             let header = unsafe { services.cast::<Header>().read() };
-            if header.major != 2 || header.minor != 3 || header.struct_size != size_of::<v23::ContinuationApi>() as u32 {
+            if header.major != 2
+                || header.minor != 3
+                || header.struct_size != size_of::<v23::ContinuationApi>() as u32
+            {
                 return Err("invalid continuation header".into());
             }
             let services = unsafe { services.read() };
-            if services.reserved != 0 || services.start.is_none() || services.poll.is_none()
-                || services.cancel.is_none() || services.release.is_none()
+            if services.reserved != 0
+                || services.start.is_none()
+                || services.poll.is_none()
+                || services.cancel.is_none()
+                || services.release.is_none()
             {
                 return Err("invalid continuation services".into());
             }
             Some(services)
-        } else { None };
+        } else {
+            None
+        };
         let api = unsafe { api.cast::<v22::HostApi>().read() };
         if api.runtime.is_null()
             || !(api.runtime as usize).is_multiple_of(align_of::<v22::HostRuntimeApi>())
@@ -405,8 +418,12 @@ fn valid_request_scopes(event: u32, thread: Handle, turn: Handle) -> bool {
     match event {
         v22::THREAD_START..=v22::THREAD_STOP => thread != Handle::NONE && turn == Handle::NONE,
         v22::TURN_START..=v22::SAMPLING_BUDGET => thread != Handle::NONE && turn != Handle::NONE,
-        v22::SUBMIT_REVIEW | v23::CLI_CALL | v23::TUI_CALL => thread == Handle::NONE && turn == Handle::NONE,
-        v22::TOOL_CONCURRENCY | v23::TOOL_AROUND | v23::STREAM_EVENT => thread != Handle::NONE && turn != Handle::NONE,
+        v22::SUBMIT_REVIEW | v23::CLI_CALL | v23::TUI_CALL => {
+            thread == Handle::NONE && turn == Handle::NONE
+        }
+        v22::TOOL_CONCURRENCY | v23::TOOL_AROUND | v23::STREAM_EVENT => {
+            thread != Handle::NONE && turn != Handle::NONE
+        }
         _ => false,
     }
 }
@@ -467,14 +484,30 @@ unsafe impl Sync for Contributions {}
 #[macro_export]
 macro_rules! export_mod {
     ($module:ty, $id:literal, $factory:path, $contributions:expr) => {
-        $crate::__export_mod!($module, $id, $factory, $contributions, 2, $crate::Host::negotiate, $crate::dispatch::<$module>);
+        $crate::__export_mod!(
+            $module,
+            $id,
+            $factory,
+            $contributions,
+            2,
+            $crate::Host::negotiate,
+            $crate::dispatch::<$module>
+        );
     };
 }
 
 #[macro_export]
 macro_rules! export_sdk_mod {
     ($module:ty, $id:literal, $factory:path, $contributions:expr) => {
-        $crate::__export_mod!($module, $id, $factory, $contributions, 3, $crate::Host::negotiate_sdk, $crate::dispatch_sdk::<$module>);
+        $crate::__export_mod!(
+            $module,
+            $id,
+            $factory,
+            $contributions,
+            3,
+            $crate::Host::negotiate_sdk,
+            $crate::dispatch_sdk::<$module>
+        );
     };
 }
 
@@ -509,7 +542,11 @@ macro_rules! __export_mod {
             static TABLE: $crate::ExportTable = $crate::ExportTable(v22::ModApi {
                 base: abi::v21::ModApi {
                     base: abi::v2::ModApi {
-                        header: abi::Header { struct_size: std::mem::size_of::<v22::ModApi>() as u32, major: 2, minor: $minor },
+                        header: abi::Header {
+                            struct_size: std::mem::size_of::<v22::ModApi>() as u32,
+                            major: 2,
+                            minor: $minor,
+                        },
                         mod_id: abi::Bytes::from_static($id),
                         contributions: std::ptr::null(),
                         contribution_count: 0,
@@ -591,11 +628,7 @@ mod tests {
             owned,
             Handle::NONE
         ));
-        assert!(!valid_request_scopes(
-            v23::TUI_CALL + 1,
-            owned,
-            owned
-        ));
+        assert!(!valid_request_scopes(v23::TUI_CALL + 1, owned, owned));
     }
 
     #[test]

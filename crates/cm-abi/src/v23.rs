@@ -29,7 +29,8 @@ pub struct NextOutput {
 }
 
 pub type Start = unsafe extern "C" fn(Handle, Handle, *mut Handle, *mut ErrorBuffer) -> u32;
-pub type Poll = unsafe extern "C" fn(Handle, Handle, Handle, *mut NextOutput, *mut ErrorBuffer) -> u32;
+pub type Poll =
+    unsafe extern "C" fn(Handle, Handle, Handle, *mut NextOutput, *mut ErrorBuffer) -> u32;
 pub type Task = unsafe extern "C" fn(Handle, Handle, Handle, *mut ErrorBuffer) -> u32;
 
 #[repr(C)]
@@ -52,7 +53,11 @@ pub struct HostApi {
 pub type ModApi = v22::ModApi;
 
 pub const fn header<T>() -> Header {
-    Header { struct_size: core::mem::size_of::<T>() as u32, major: 2, minor: 3 }
+    Header {
+        struct_size: core::mem::size_of::<T>() as u32,
+        major: 2,
+        minor: 3,
+    }
 }
 
 #[cfg(test)]

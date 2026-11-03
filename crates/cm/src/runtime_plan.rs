@@ -72,7 +72,13 @@ impl HostIdentity {
             target: loader::TARGET.into(),
             api_version: field("host_api_version")?,
             capabilities,
-            abis: vec!["1.0".into(), "2.0".into(), "2.1".into(), "2.2".into(), "2.3".into()],
+            abis: vec![
+                "1.0".into(),
+                "2.0".into(),
+                "2.1".into(),
+                "2.2".into(),
+                "2.3".into(),
+            ],
             patch_map_sha256,
             prepared_slots,
         })
@@ -500,14 +506,18 @@ fn resolve(
                     Kind::TuiCommand => cm_abi::v23::TUI_COMMAND,
                     _ => unreachable!("runtime kind"),
                 };
-                let continuation = matches!(contribution.kind, Kind::ToolAround | Kind::ToolReplacement);
+                let continuation =
+                    matches!(contribution.kind, Kind::ToolAround | Kind::ToolReplacement);
                 let ordered = continuation || contribution.kind == Kind::ResponseStream;
                 let sdk = contribution.kind.abi() >= cm_abi::v23::KIND_TOOL_AROUND;
                 let valid_resource = if continuation {
                     contribution.resource == "exec_command"
                 } else if matches!(
                     contribution.kind,
-                    Kind::SamplingBudget | Kind::SubmitReview | Kind::ToolConcurrency | Kind::ResponseStream
+                    Kind::SamplingBudget
+                        | Kind::SubmitReview
+                        | Kind::ToolConcurrency
+                        | Kind::ResponseStream
                 ) {
                     contribution.resource == capability
                 } else {
@@ -550,7 +560,9 @@ fn resolve(
                     "unknown resource/capability or priority out of bounds",
                 ));
             }
-            if contribution.kind.runtime() && !matches!(contribution.kind, Kind::ToolAround | Kind::ResponseStream) {
+            if contribution.kind.runtime()
+                && !matches!(contribution.kind, Kind::ToolAround | Kind::ResponseStream)
+            {
                 let name = (contribution.kind.abi(), contribution.resource.clone());
                 if let Some(previous) =
                     runtime_names.insert(name, format!("{id}::{}", contribution.id))
@@ -558,7 +570,10 @@ fn resolve(
                     let mut error = failure(
                         if matches!(
                             contribution.kind,
-                            Kind::SamplingBudget | Kind::SubmitReview | Kind::ToolConcurrency | Kind::ToolReplacement
+                            Kind::SamplingBudget
+                                | Kind::SubmitReview
+                                | Kind::ToolConcurrency
+                                | Kind::ToolReplacement
                         ) {
                             "exclusive_conflict"
                         } else {
@@ -651,9 +666,16 @@ fn resolve(
     }
     for (key, (owner, hook)) in &hooks {
         if hook.kind == Kind::ToolReplacement
-            && let Some((other, _)) = hooks.iter().find(|(_, (_, item))| item.kind == Kind::ToolAround && item.resource == hook.resource)
+            && let Some((other, _)) = hooks.iter().find(|(_, (_, item))| {
+                item.kind == Kind::ToolAround && item.resource == hook.resource
+            })
         {
-            let mut error = failure("exclusive_conflict", owner, Some(&hook.id), "tool replacement and around composition is unsupported");
+            let mut error = failure(
+                "exclusive_conflict",
+                owner,
+                Some(&hook.id),
+                "tool replacement and around composition is unsupported",
+            );
             error.resource = Some(hook.resource.clone());
             error.related_contributions = vec![key.clone(), other.clone()];
             return Err(error);

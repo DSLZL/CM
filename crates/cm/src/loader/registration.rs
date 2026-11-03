@@ -306,7 +306,10 @@ impl CompositionMod {
             host.base.base.header = cm_abi::v22::header::<cm_abi::v22::HostApi>();
         }
         let continuation = crate::runtime::continuation_services();
-        let mut sdk_host = cm_abi::v23::HostApi { base: host, continuation: &continuation };
+        let mut sdk_host = cm_abi::v23::HostApi {
+            base: host,
+            continuation: &continuation,
+        };
         if manifest.abi_minor == 3 {
             sdk_host.base.base.base.header = cm_abi::v23::header::<cm_abi::v23::HostApi>();
         }
@@ -522,8 +525,10 @@ impl CompositionMod {
                         && resource == cm_abi::v22::SUBMIT_REVIEW_CAPABILITY
                     || descriptor.kind == cm_abi::v22::KIND_TOOL_CONCURRENCY
                         && resource == cm_abi::v22::TOOL_CONCURRENCY_CAPABILITY
-                    || matches!(descriptor.kind, cm_abi::v23::KIND_TOOL_AROUND | cm_abi::v23::KIND_TOOL_REPLACEMENT)
-                        && resource == "exec_command"
+                    || matches!(
+                        descriptor.kind,
+                        cm_abi::v23::KIND_TOOL_AROUND | cm_abi::v23::KIND_TOOL_REPLACEMENT
+                    ) && resource == "exec_command"
                     || descriptor.kind == cm_abi::v23::KIND_RESPONSE_STREAM
                         && resource == cm_abi::v23::RESPONSE_STREAM)
                 {
