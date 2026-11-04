@@ -1193,6 +1193,22 @@ def check_distribution_verifier_binding():
                 pass
             else:
                 raise AssertionError("Unbound verifier execution escaped the outer audit")
+        route = '10 sendto(5<NETLINK:[25061]>, "<payload redacted>", 40, 0, {sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, 12) = 40'
+        audited = {"status": "pass", "distribution_verifier_executions": [execution],
+            "network": [route], "kernel_route_sockets": [("10", "5", "NETLINK:[25061]")]}
+        audit_offline_bootstrap(audited)
+        audit_offline_bootstrap(audited | {"network": []})
+        for invalid in (audited | {"distribution_verifier_executions": []},
+            audited | {"network": [route.replace("25061", "25062")]},
+            audited | {"network": [route.replace("10 sendto", "11 sendto")]},
+            audited | {"network": ['10 connect(5<TCP:[25061]>, {sa_family=AF_INET}, 16) = 0']},
+            audited | {"network": ['10 socketpair(AF_UNIX, SOCK_STREAM, 0, [5, 6]) = 0']}):
+            try:
+                audit_offline_bootstrap(invalid)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError("Unexpected offline bootstrap network accepted")
 
 
 def bind_distribution_verifiers(calls, consumer_root):
@@ -1271,6 +1287,15 @@ def bind_distribution_verifiers(calls, consumer_root):
                 r"/work/s01/bootstrap/roots\.jsonl", options["--custom-trusted-root"])
         accepted.add(line)
     return accepted
+
+
+def audit_offline_bootstrap(audit):
+    assert audit["status"] == "pass" and audit["distribution_verifier_executions"]
+    routes = {tuple(row) for row in audit["kernel_route_sockets"]}
+    for line in audit["network"]:
+        # observe() already validates destinations; only its bound kernel route messages are offline.
+        match = re.match(r"(\d+)\s+sendto\((\d+)<(NETLINK:\[[^\]]+\])>, ", line)
+        assert match and match.groups() in routes, "Unexpected offline bootstrap network: " + line
 
 
 @ci_progress.case()
@@ -1853,7 +1878,7 @@ def consume():
                     sandbox=["/usr/bin/bwrap", *base[1:]]), 300)
                 assert current.returncode == 0, "Current distribution proof verification failed"
                 current_audit = observe(trusted / label, evidence, consumer_root=temp)
-                assert current_audit["distribution_verifier_executions"] and not current_audit["network"]
+                audit_offline_bootstrap(current_audit)
             stage = "strict isolation probes"
             result = ci_progress.run(logs, "consumer-probes", [*base, "--", *driver, "probe"], 180)
             write(logs / "consumer-probes.json", {"return_code": result.returncode, "stage": stage})
