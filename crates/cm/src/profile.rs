@@ -111,9 +111,10 @@ impl Generation {
         };
         if !format
             || self.provenance.len() > 32
-            || self.provenance.iter().any(|(id, proof)| {
-                self.installed.get(id) != Some(&proof.object_sha256)
-            })
+            || self
+                .provenance
+                .iter()
+                .any(|(id, proof)| self.installed.get(id) != Some(&proof.object_sha256))
             || self.installed.len() > 32
             || self.consumed.len() > 4096
             || self

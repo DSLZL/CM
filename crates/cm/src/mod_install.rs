@@ -107,7 +107,10 @@ fn ingest_with_proof(
         }
         if old == &snapshot.sha256 {
             if let Some((proof, pins)) = proof {
-                transaction.next.provenance.insert(snapshot.id.clone(), proof);
+                transaction
+                    .next
+                    .provenance
+                    .insert(snapshot.id.clone(), proof);
                 transaction.pin_inputs(pins);
             }
             transaction.next.consumed.insert(snapshot.sha256);
@@ -184,7 +187,10 @@ fn ingest_with_proof(
     result?;
     transaction.next.provenance.remove(&snapshot.id);
     if let Some((proof, pins)) = proof {
-        transaction.next.provenance.insert(snapshot.id.clone(), proof);
+        transaction
+            .next
+            .provenance
+            .insert(snapshot.id.clone(), proof);
         transaction.pin_inputs(pins);
     }
     transaction
@@ -203,12 +209,23 @@ pub fn run(home: &Path, command: Command<'_>, options: &Options) -> Result<Value
     let mut transaction = Transaction::begin(home, host)?;
     match command {
         Command::Install(input) => ingest(&mut transaction, input, None)?,
-        Command::InstallVerified { package, receipt, bundle } => {
-            ingest_with_proof(&mut transaction, package, None, Some((receipt, bundle)))?
-        }
-        Command::ReplaceVerified { id, package, from, receipt, bundle } => {
-            ingest_with_proof(&mut transaction, package, Some((id, from)), Some((receipt, bundle)))?
-        }
+        Command::InstallVerified {
+            package,
+            receipt,
+            bundle,
+        } => ingest_with_proof(&mut transaction, package, None, Some((receipt, bundle)))?,
+        Command::ReplaceVerified {
+            id,
+            package,
+            from,
+            receipt,
+            bundle,
+        } => ingest_with_proof(
+            &mut transaction,
+            package,
+            Some((id, from)),
+            Some((receipt, bundle)),
+        )?,
         Command::Replace { id, package, from } => {
             ingest(&mut transaction, package, Some((id, from)))?
         }

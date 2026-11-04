@@ -987,12 +987,8 @@ pub(crate) fn sealed_snapshot(bytes: &[u8]) -> Result<File, String> {
 
 pub(crate) fn sealed_named_snapshot(bytes: &[u8], name: &std::ffi::CStr) -> Result<File, String> {
     // Seal the verified buffer, never reopen the package path for dlopen.
-    let fd = unsafe {
-        libc::memfd_create(
-            name.as_ptr(),
-            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
-        )
-    };
+    let fd =
+        unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
     if fd < 0 {
         return Err(format!("memfd_create: {}", std::io::Error::last_os_error()));
     }

@@ -23,7 +23,10 @@ fn failure(message: &str) -> LoadError {
 }
 
 fn sha(value: &str, length: usize) -> bool {
-    value.len() == length && value.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    value.len() == length
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
 #[derive(Deserialize)]
@@ -86,9 +89,12 @@ fn receipt(bytes: &[u8]) -> Result<Receipt, LoadError> {
     if bytes.len() > 256 * 1024 {
         return Err(failure("receipt exceeds bound"));
     }
-    let value: Value = serde_json::from_slice(bytes).map_err(|_| failure("invalid receipt JSON"))?;
+    let value: Value =
+        serde_json::from_slice(bytes).map_err(|_| failure("invalid receipt JSON"))?;
     if crate::config::json_bytes(&value) != bytes {
-        return Err(failure("receipt is not canonical JSON or has duplicate keys"));
+        return Err(failure(
+            "receipt is not canonical JSON or has duplicate keys",
+        ));
     }
     let parsed: Receipt = serde_json::from_value(value)
         .map_err(|_| failure("unknown receipt fields or invalid types"))?;
@@ -174,8 +180,13 @@ fn collect_verifier(mut child: Child, timeout: Duration) -> Result<Vec<u8>, Load
         .ok()
         .and_then(Result::ok)
         .ok_or_else(|| failure("verifier diagnostics failed"))?;
-    if status.is_none_or(|s| !s.success()) || stdout.len() as u64 > LIMIT || stderr.len() as u64 > LIMIT {
-        return Err(failure("offline signature verification failed or timed out"));
+    if status.is_none_or(|s| !s.success())
+        || stdout.len() as u64 > LIMIT
+        || stderr.len() as u64 > LIMIT
+    {
+        return Err(failure(
+            "offline signature verification failed or timed out",
+        ));
     }
     Ok(stdout)
 }
@@ -412,7 +423,14 @@ mod tests {
         ] {
             assert!(verify_output(invalid, bytes, &signer()).is_err());
         }
-        assert!(verify_output(&serde_json::to_vec(&vec![row; 9]).unwrap(), bytes, &signer()).is_err());
+        assert!(
+            verify_output(
+                &serde_json::to_vec(&vec![row; 9]).unwrap(),
+                bytes,
+                &signer()
+            )
+            .is_err()
+        );
         assert!(verify_signature(bytes, b"", &signer()).is_err());
         assert!(verify_signature(bytes, &vec![0; LIMIT as usize + 1], &signer()).is_err());
     }
