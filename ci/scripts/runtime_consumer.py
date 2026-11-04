@@ -87,7 +87,8 @@ def validate_runtime_inventory(root, entries):
         assert not forbidden.fullmatch(path.name), path
         assert path.name not in ("Cargo.toml", "Cargo.lock", "Makefile", "CMakeLists.txt")
         assert path.suffix not in (".rs", ".c", ".h", ".a") or path.as_posix() in (
-            "inputs/mods/s01/a/build.rs", "inputs/mods/s01/b/build.rs"), path
+            "inputs/mods/s01/a/build.rs", "inputs/mods/s01/b/build.rs",
+            "inputs/mods/s01/a/proc-macro.rs", "inputs/mods/s01/b/proc-macro.rs"), path
         if "link" in entry:
             target = Path(entry["link"])
             assert not target.is_absolute() and (root / path).resolve().is_relative_to(root), path
@@ -1168,6 +1169,7 @@ def check_distribution_verifier_binding():
         for path, value in zip(paths, values):
             write(root / path, value)
         for path in ("fixture/s01-bootstrap/gh", "inputs/host/codex-resources/gh"):
+            (root / path).parent.mkdir(parents=True, exist_ok=True)
             (root / path).write_bytes(helper)
         arguments = ["/proc/2/fd/5", "attestation", "verify", "/proc/2/fd/6", "--bundle", "/proc/2/fd/7",
             "--custom-trusted-root", "/proc/2/fd/8", "--repo", policy["builder_repository"],

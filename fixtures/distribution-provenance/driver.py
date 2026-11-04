@@ -246,8 +246,9 @@ def case_install_boundary():
     command(PROFILE, "list")
     command(PROFILE, "doctor")
     source = INPUTS / "mods/s01/a"
-    assert (source / "build.rs").is_file() and (source / "post-install.sh").is_file()
+    assert all((source / name).is_file() for name in ("build.rs", "proc-macro.rs", "post-install.sh"))
     assert not (WORK / "install-script-executed").exists()
+    assert not (WORK / "proc-macro-executed").exists()
     return report(2, "source_attachments_are_inert_data", {"object": state(PROFILE)[1]["installed"], "installer_builds": 0})
 
 
