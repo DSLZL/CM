@@ -2,9 +2,15 @@
 mod fixture;
 use cm_sdk::{abi::Bytes, v22, v23};
 const OWNER: &str = "sdk-a";
+
+extern "C" fn cache_proof_constructor() {
+    fixture::constructor();
+    fixture::record("author-cache-proof", v22::Handle::NONE, "");
+}
+
 #[used]
 #[unsafe(link_section = ".init_array")]
-static CONSTRUCTOR: extern "C" fn() = fixture::constructor;
+static CONSTRUCTOR: extern "C" fn() = cache_proof_constructor;
 const DESCRIPTORS: &[v22::RuntimeContribution] = &[
     v22::RuntimeContribution {
         header: v22::header::<v22::RuntimeContribution>(),
