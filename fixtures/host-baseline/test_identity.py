@@ -234,13 +234,9 @@ class IdentityTests(unittest.TestCase):
             cache = root / "cache"
             binaries = root / "target/host" / host.TARGET / "dev-small"
             binaries.mkdir(parents=True)
-            package = root / "cm-host-package"
-            (package / "bin").mkdir(parents=True)
             for name in ("codex", "codex-code-mode-host"):
                 (binaries / name).write_bytes(("original " + name).encode())
                 (binaries / name).chmod(0o755)
-                (package / "bin" / name).write_bytes((binaries / name).read_bytes())
-                (package / "bin" / name).chmod(0o755)
             host.write(logs / "host-identity.json", self.sealed)
             events = [{"phase": "helper-" + phase, "return_code": 0, "command": ["cargo", phase]}
                       for phase in ("fmt", "clippy", "test", "build")]
@@ -253,35 +249,32 @@ class IdentityTests(unittest.TestCase):
             with patch.dict(os.environ, {"CM_HOST_BUILD_CACHE_DIR": str(cache), "CARGO_TARGET_DIR": str(root / "target"),
                     "CM_CI_ARTIFACT_DIR": str(root / "artifacts"), "RUNNER_TEMP": str(root),
                     "ACTIONS_CACHE_MODE": "write"}), patch.object(host, "load_config", return_value={"build_profile": "dev-small"}), \
-                    patch.object(host, "verify_binary") as verify:
+                    patch.object(host, "verify_sources") as sources, patch.object(host, "verify_binary") as verify:
                 host.restore_build(ROOT, logs)
                 self.assertEqual(host.read(logs / "host-build-cache.json")["status"], "miss")
+                sources.side_effect = RuntimeError("changed source inputs")
                 with self.assertRaises(RuntimeError):
                     host.save_build(ROOT, logs)
-                baseline_path = root / "artifacts/evidence/host-baseline-build.json"
-                baseline = {"host_identity": self.sealed, "executable_sha256": host.sha(binaries / "codex"),
-                    "package_manifest_sha256": host.manifest_digest(host.manifest(package)),
-                    "source_repository": os.environ["CM_SOURCE_REPOSITORY"], "source_sha": os.environ["CM_SOURCE_SHA"],
-                    "workflow_repository": os.environ["GITHUB_REPOSITORY"], "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"],
-                    "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-                    "job": os.environ["GITHUB_JOB"]}
-                for key in ("host_identity", "source_sha", "executable_sha256", "package_manifest_sha256"):
-                    host.write(baseline_path, {**baseline, key: None})
-                    with self.subTest(changed=key), self.assertRaises(RuntimeError):
-                        host.save_build(ROOT, logs)
-                    self.assertFalse(cache.exists())
-                host.write(baseline_path, baseline)
-                (binaries / "codex-code-mode-host").write_bytes(b"changed helper")
+                self.assertFalse(cache.exists())
+                sources.side_effect = None
+                verify.side_effect = RuntimeError("wrong embedded Host identity")
                 with self.assertRaises(RuntimeError):
                     host.save_build(ROOT, logs)
-                (binaries / "codex-code-mode-host").write_bytes((package / "bin/codex-code-mode-host").read_bytes())
+                self.assertFalse(cache.exists())
+                verify.side_effect = None
+                verify.reset_mock()
                 host.save_build(ROOT, logs)
+                verify.assert_called_once_with(binaries / "codex", self.sealed)
+                self.assertFalse((root / "artifacts/evidence/host-baseline-build.json").exists())
                 original = host.read(cache / "build.json")
+                (binaries / "codex-code-mode-host").write_bytes(b"downstream Python acceptance changed a file")
+                self.assertEqual((cache / "codex-code-mode-host").read_bytes(), b"original codex-code-mode-host")
                 for name in ("codex", "codex-code-mode-host"):
                     (binaries / name).unlink()
                 binaries.rmdir()
                 host.restore_build(ROOT, logs)
-                verify.assert_called_once_with(cache / "codex", self.sealed)
+                verify.assert_called_with(cache / "codex", self.sealed)
+                self.assertEqual(verify.call_count, 2)
                 self.assertEqual(host.reused_build(ROOT, logs), original)
                 self.assertEqual(host.build_log(logs, "host-test").read_text(), "original successful host-test")
                 self.assertEqual(host.read(logs / "host-build-cache.json")["origin"], original["origin"])
