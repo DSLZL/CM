@@ -222,8 +222,6 @@ fn verify_signature(bytes: &[u8], bundle: &[u8], signer: &Signer) -> Result<Inpu
         .args([
             "--repo",
             "DSLZL/CM-build-linux-x64",
-            "--signer-workflow",
-            "DSLZL/CM-build-linux-x64/.github/workflows/build.yml",
             "--cert-identity",
             "https://github.com/DSLZL/CM-build-linux-x64/.github/workflows/build.yml@refs/heads/main",
             "--cert-oidc-issuer",

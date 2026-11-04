@@ -1173,7 +1173,6 @@ def check_distribution_verifier_binding():
             (root / path).write_bytes(helper)
         arguments = ["/proc/2/fd/5", "attestation", "verify", "/proc/2/fd/6", "--bundle", "/proc/2/fd/7",
             "--custom-trusted-root", "/proc/2/fd/8", "--repo", policy["builder_repository"],
-            "--signer-workflow", policy["builder_repository"] + "/" + policy["workflow"],
             "--cert-identity", "https://github.com/" + policy["builder_repository"] + "/" + policy["workflow"] + "@" + policy["ref"],
             "--cert-oidc-issuer", policy["issuer"], "--source-ref", policy["ref"],
             "--source-digest", "a" * 40, "--signer-digest", "a" * 40, "--deny-self-hosted-runners", "--format", "json"]
@@ -1184,6 +1183,9 @@ def check_distribution_verifier_binding():
         execution = '11 execve("/proc/2/fd/5", ' + json.dumps(arguments) + ', 0x1) = 0'
         assert bind_distribution_verifiers([*calls, execution], Path(temporary)) == {execution}
         for invalid in ([*calls[:2], calls[3], execution], [*calls, execution.replace('"--repo"', '"--unknown"')],
+            [*calls, execution.replace(policy["workflow"], ".github/workflows/other.yml")],
+            [*calls, execution.replace(policy["ref"], "refs/heads/other")],
+            [*calls, execution.replace('"--cert-identity"', '"--signer-workflow"')],
             [*calls, execution.replace('"/proc/2/fd/7"', '"/work/unbound-bundle"')]):
             try:
                 bind_distribution_verifiers(invalid, Path(temporary))
@@ -1253,7 +1255,6 @@ def bind_distribution_verifiers(calls, consumer_root):
                 options[key] = arguments[position + 1]
                 position += 2
         required = {"--repo": policy["builder_repository"],
-            "--signer-workflow": policy["builder_repository"] + "/" + policy["workflow"],
             "--cert-identity": "https://github.com/" + policy["builder_repository"] + "/" + policy["workflow"] + "@" + policy["ref"],
             "--cert-oidc-issuer": policy["issuer"], "--source-ref": policy["ref"],
             "--deny-self-hosted-runners": True, "--format": "json"}

@@ -87,7 +87,6 @@ def verified_subject(name, *, helper=None, roots=None, good=True):
     policy = distribution.read(POLICY)
     args = [str(helper), "attestation", "verify", str(receipt), "--bundle", str(PROOFS / "bundle.jsonl"),
         "--custom-trusted-root", str(roots), "--repo", policy["builder_repository"],
-        "--signer-workflow", policy["builder_repository"] + "/" + policy["workflow"],
         "--cert-identity", "https://github.com/" + policy["builder_repository"] + "/" + policy["workflow"] + "@" + policy["ref"],
         "--cert-oidc-issuer", policy["issuer"], "--source-ref", policy["ref"],
         "--source-digest", value["signer"]["workflow_sha"], "--signer-digest", value["signer"]["workflow_sha"],
