@@ -308,7 +308,7 @@ def audit_network(lines, directory, ports, kernel_routes=(), tcp_connections=())
             tcp_inode = re.fullmatch(r'TCP:\[(\d+)\]', descriptor)
             # Cross-namespace decoding can retain only the observed socket inode.
             assert ((unix and (unix[1] in unix_connections or (unix[1], unix[2]) in unix_pairs))
-                    or (pair_end and any(pair_end[1] == inode for inode, _ in unix_pairs))
+                    or (pair_end and (pair_end[1] in unix_connections or any(pair_end[1] == inode for inode, _ in unix_pairs)))
                     or (tcp_inode and tcp_inode[1] in connected_tcp)
                     or (tcp and tcp[1] in ports)), "Unknown socket peer: " + line
 
@@ -402,6 +402,9 @@ def check_network_audit():
     assert "observer-canary" not in sanitized and "<payload redacted>" in sanitized
     assert sanitized.endswith(', 25, MSG_NOSIGNAL, NULL, 0) = 25')
     audit_network([connect, send, tcp, *complete_syscalls(split), sanitized], directory, {"8080"})
+    bare_send = redact_syscalls(send).replace("41->42", "41")
+    audit_network([connect, bare_send], directory, set())
+    audit_network([connect, bare_send.replace("1 sendto", "2 sendto")], directory, set())
     bare_pair = pair.replace("51->52", "51").replace("52->51", "52")
     bare_ipc = sanitized.replace("51->52", "51")
     audit_network([bare_pair, bare_ipc], directory, set())
@@ -458,7 +461,8 @@ def check_network_audit():
         except AssertionError:
             continue
         raise AssertionError("Network audit accepted an unknown Netlink peer")
-    for unknown in ([send], [connect, send.replace("41->42", "43->42")],
+    for unknown in ([send], [bare_send], [connect, bare_send.replace("[41]", "[43]")],
+                    [connect, send.replace("41->42", "43->42")],
                     [bare_ipc], [bare_pair, bare_ipc.replace('[51]', '[53]')],
                     [other_thread.replace('[51]', '[53]'), bare_pair],
                     [bare_pair, bare_ipc.replace('UNIX-STREAM', 'UNIX-DGRAM')],
