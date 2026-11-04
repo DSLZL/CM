@@ -87,16 +87,21 @@ def package_inventory(host):
     return [entry for entry in inventory(host) if not entry["path"].startswith(("g02a-legacy/", "review-legacy/"))]
 
 
+def host_manifest(directory, frozen):
+    import host
+    manifest = read(directory / "cm-runtime-files.json")
+    canonical = [entry for entry in host.manifest(directory)
+                 if not entry["path"].startswith(("g02a-legacy/", "review-legacy/"))]
+    assert [entry for entry in canonical if entry["path"] != "cm-runtime-files.json"] == manifest["files"], "Host assets differ from registered inventory"
+    assert host.manifest_digest(canonical) == frozen["package_manifest_sha256"], "Frozen Host package manifest changed"
+    return manifest, canonical
+
+
 def audit(inputs, frozen):
-    import host as host_module
     from runtime_consumer import system_package_owners
     host = inputs / "host"
     assert sha(host / "bin/codex") == frozen["executable_sha256"]
-    manifest = read(host / "cm-runtime-files.json")
-    canonical = [entry for entry in host_module.manifest(host)
-                 if not entry["path"].startswith(("g02a-legacy/", "review-legacy/"))]
-    assert [entry for entry in canonical if entry["path"] != "cm-runtime-files.json"] == manifest["files"]
-    assert host_module.manifest_digest(canonical) == frozen["package_manifest_sha256"]
+    manifest, canonical = host_manifest(host, frozen)
     selected = {"host/" + name for name in HELPERS}
     for entry in canonical:
         if entry["mode"] != "120000":
@@ -242,6 +247,33 @@ def self_check():
         else:
             raise AssertionError("Invalid binary metadata accepted")
     with tempfile.TemporaryDirectory() as temporary:
+        import host
+        package = Path(temporary) / "host"
+        package.mkdir()
+        payload = package / "payload"
+        payload.write_bytes(b"registered Host asset")
+        write(package / "cm-runtime-files.json", {"files": host.manifest(package)})
+        expected = host.manifest(package)
+        frozen = {"package_manifest_sha256": host.manifest_digest(expected)}
+        for name in ("g02a-legacy", "review-legacy"):
+            reference = package / name / "bin/codex"
+            reference.parent.mkdir(parents=True)
+            reference.write_bytes(b"private test reference")
+        assert host_manifest(package, frozen)[1] == expected
+        for mutation in ("extra", "bytes", "frozen"):
+            payload.write_bytes(b"registered Host asset")
+            extra = package / "unregistered.so"
+            if mutation == "extra":
+                extra.write_bytes(b"not a registered distribution asset")
+            elif mutation == "bytes":
+                payload.write_bytes(b"changed registered bytes")
+            try:
+                host_manifest(package, {"package_manifest_sha256": "0" * 64} if mutation == "frozen" else frozen)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError("Unregistered or changed Host distribution accepted: " + mutation)
+            extra.unlink(missing_ok=True)
         path = Path(temporary) / "library"
         path.touch()
         with patch.object(sys.modules[__name__], "system_path", side_effect=lambda value: Path(value)):
