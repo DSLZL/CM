@@ -166,13 +166,13 @@ def prepare(root, logs):
 
 def schemas(root, logs):
     """Regenerate pinned schema assets on the hosted worker before sealing Host inputs."""
-    if load_config(root)["task_id"] not in ("CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if load_config(root)["task_id"] not in ("CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         return
     verify_sources(root, logs)
     cfg = load_config(root)
     for unit in cfg["units"]:
         execute(root, logs, "g03-" + unit["id"] + "-early-fmt", build_commands(unit, cfg)["fmt"])
-    if cfg["task_id"] == "CM-G06":
+    if cfg["task_id"] in ("CM-G06", "CM-S01"):
         execute(root, logs, "g06-fixture-early-fmt", ["rustfmt", "--edition", "2024", "--check",
             *(str(root / "fixtures/sdk-seams" / name) for name in
                 ("fixture.rs", "runtime_probe.rs", "stream_probe.rs", "core_probe.rs")),
@@ -217,6 +217,7 @@ def schemas(root, logs):
 
 
 def native(root, logs):
+    import distribution_provenance
     host = root / HOST
     os.environ["CODEX_REPO_ROOT"] = str(host)
     sys.path.insert(0, str(host / "scripts"))
@@ -252,10 +253,11 @@ def native(root, logs):
         tools[tool] = {"sha256": sha(path), "version": subprocess.check_output([str(path), "-Vv"], text=True).strip()}
     inputs = {"v8": {key: {"name": Path(value).name, "sha256": sha(Path(value))}
                      for key, value in v8_env.items()},
-              "native_packages": versions, "native_files_sha256": digest(native_files), "rust_tools": tools}
+              "native_packages": versions, "native_files_sha256": digest(native_files), "rust_tools": tools,
+              "distribution_verifier": distribution_provenance.verifier(root, logs)}
     write(logs / "native-files.json", native_files)
     write(root / ADAPTER / "inputs/native.json", inputs)
-    append_environment(v8_env)
+    append_environment({**v8_env, "CM_DISTRIBUTION_GH_SHA256": inputs["distribution_verifier"]["sha256"]})
 
 
 def helper(root, logs):
@@ -309,6 +311,10 @@ def verify_sources(root, logs):
     native_path = root / ADAPTER / "inputs/native.json"
     if native_path.is_file():
         native_inputs = read(native_path)
+        verifier = native_inputs["distribution_verifier"]
+        verifier_path = Path(os.environ["RUNNER_TEMP"]) / "cm-distribution-verifier/gh"
+        if sha(verifier_path) != verifier["sha256"] or os.environ.get("CM_DISTRIBUTION_GH_SHA256") != verifier["sha256"]:
+            raise RuntimeError("Distribution verifier or compiled-in pin drift")
         for key, entry in native_inputs["v8"].items():
             if sha(Path(os.environ[key])) != entry["sha256"]:
                 raise RuntimeError("Verified V8 artifact drift: " + key)
@@ -665,9 +671,11 @@ def acceptance(root, logs, report_name="acceptance.json"):
             "native": read(root / ADAPTER / "inputs/native.json"),
             "note": "Resolved dependency and license declarations; not a license-compliance certification."}
     write(package / "dependency-inventory.json", sbom)
+    import distribution_provenance
+    distribution_provenance.host_materials(root, package, metadata, logs, identity)
     system_files = set()
     for component in (package / "bin/codex", package / "bin/codex-code-mode-host",
-                      package / "codex-resources/bwrap", package / "codex-path/rg"):
+                      package / "codex-resources/bwrap", package / "codex-resources/gh", package / "codex-path/rg"):
         dynamic = subprocess.run(["ldd", str(component)], capture_output=True, text=True)
         if "not found" in dynamic.stdout:
             raise RuntimeError("Unresolved packaged runtime dependency: " + str(component))

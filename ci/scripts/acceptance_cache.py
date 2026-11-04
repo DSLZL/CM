@@ -31,25 +31,25 @@ def recipes(root):
         "mod-pinned-snapshot-build": (root, cargo_args(runtime, "test", cfg, cfg["test_profile"]) +
             ["--lib", "--no-run", "--message-format=json"], target / "host", "cm_runtime"),
     }
-    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         probe = Path(os.environ["RUNNER_TEMP"]) / "cm-m02-native-probe-source"
         specs["m02-native-probe-build"] = (probe, ["cargo", "test", "--locked", "--manifest-path",
             "codex-rs/Cargo.toml", "--target", TARGET, "--profile", cfg["test_profile"],
             "--package", "codex-core", "--lib", "--no-run", "--message-format=json"],
             target / "m02-native-probe", "codex_core")
-    if cfg["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if cfg["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         probe = Path(os.environ["RUNNER_TEMP"]) / "cm-review-tui-probe-source"
         specs["review-tui-probe-build"] = (probe, ["cargo", "test", "--locked", "--manifest-path",
             "codex-rs/Cargo.toml", "--target", TARGET, "--profile", cfg["test_profile"],
             "-p", "codex-tui", "--lib", "--no-run", "--message-format=json"],
             target / "review-tui-probe", "codex_tui")
-    if cfg["task_id"] in ("CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if cfg["task_id"] in ("CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         specs["g03-local-backend-contract"] = (root, cargo_args({**unit, "packages": ["codex-app-server"]},
             "test", cfg, cfg["test_profile"]) + ["--lib", "cm_tool_concurrency_origin_tests::", "--", "--nocapture"],
             target / "host", None)
     result = {label: {"cwd": str(cwd), "command": command, "target_directory": str(target), "binary": binary}
               for label, (cwd, command, target, binary) in specs.items()}
-    if cfg["task_id"] == "CM-G06":
+    if cfg["task_id"] in ("CM-G06", "CM-S01"):
         import sdk_seams
         result.update(sdk_seams.recipes(root))
     return result
@@ -79,7 +79,7 @@ def identify(root, logs):
         "native_tools": {name: {key: value for key, value in tool.items() if key != "path"}
                          for name, tool in compatibility["native"].items()},
         "native": host.read(root / host.ADAPTER / "inputs/native.json")}
-    if load_config(root)["task_id"] == "CM-G06":
+    if load_config(root)["task_id"] in ("CM-G06", "CM-S01"):
         import sdk_seams
         legacy["sdk_author_inputs"] = {label: sdk_seams.author_inputs(root, label)
                                        for label in specs if label.startswith("g06-")}

@@ -10,7 +10,13 @@
   },
   "host_release_id": "cm-host-0.14.0-g06",
   "host_api_version": "0.11.0",
-  "abis": ["1.0", "2.0", "2.1", "2.2", "2.3"],
+  "abis": [
+    "1.0",
+    "2.0",
+    "2.1",
+    "2.2",
+    "2.3"
+  ],
   "runtime_slots": "runtime-slots.json",
   "capabilities": [
     "core.tool_parallel_eligibility.v1",
@@ -87,7 +93,10 @@
     "crates/cm/src/commands.rs": "codex-rs/cm/src/commands.rs",
     "crates/cm/src/commands/ui.rs": "codex-rs/cm/src/commands/ui.rs",
     "adapters/codex-e4568a3/core-tool-continuation.rs": "codex-rs/core/src/tools/cm_tool_continuation.rs",
-    "adapters/codex-e4568a3/cli-commands.rs": "codex-rs/cli/src/cm_commands.rs"
+    "adapters/codex-e4568a3/cli-commands.rs": "codex-rs/cli/src/cm_commands.rs",
+    "crates/cm/src/provenance.rs": "codex-rs/cm/src/provenance.rs",
+    "crates/cm/src/distribution-policy.json": "codex-rs/cm/src/distribution-policy.json",
+    "crates/cm/src/distribution-root.jsonl": "codex-rs/cm/src/distribution-root.jsonl"
   },
   "patches": [
     "cli.patch",

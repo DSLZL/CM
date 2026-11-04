@@ -565,6 +565,7 @@ pub(crate) struct InstallationSnapshot {
     pub id: String,
     pub sha256: String,
     pub files: BTreeMap<String, Vec<u8>>,
+    pub archive: Option<(u64, String)>,
     pub pins: Vec<InputPin>,
     pub tree: Option<BTreeSet<String>>,
 }
@@ -641,6 +642,11 @@ pub(crate) fn installation_snapshot(
         id,
         sha256: hash(&serde_json::to_vec(&identities).expect("content identities serialize")),
         files,
+        archive: if package.extension().is_some_and(|s| s == "cmod") {
+            captured.first().map(|pin| (pin.size, pin.sha256.clone()))
+        } else {
+            None
+        },
         pins: captured,
         tree,
     })
@@ -976,10 +982,14 @@ fn zip_files(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, String> {
 }
 
 pub(crate) fn sealed_snapshot(bytes: &[u8]) -> Result<File, String> {
+    sealed_named_snapshot(bytes, c"cm-mod-v1")
+}
+
+pub(crate) fn sealed_named_snapshot(bytes: &[u8], name: &std::ffi::CStr) -> Result<File, String> {
     // Seal the verified buffer, never reopen the package path for dlopen.
     let fd = unsafe {
         libc::memfd_create(
-            c"cm-mod-v1".as_ptr(),
+            name.as_ptr(),
             libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
         )
     };

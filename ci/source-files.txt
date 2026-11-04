@@ -212,3 +212,11 @@ fixtures/sdk-seams/driver.py
 fixtures/sdk-seams/fixture.rs
 fixtures/sdk-seams/runtime_probe.rs
 fixtures/sdk-seams/stream_probe.rs
+ci/scripts/distribution_provenance.py
+crates/cm/src/distribution-policy.json
+crates/cm/src/distribution-root.jsonl
+crates/cm/src/provenance.rs
+docs/distribution.md
+fixtures/distribution-provenance/acceptance.sh
+fixtures/distribution-provenance/driver.py
+schemas/release-receipt.schema.json

@@ -86,7 +86,8 @@ def validate_runtime_inventory(root, entries):
         path = Path(entry["path"])
         assert not forbidden.fullmatch(path.name), path
         assert path.name not in ("Cargo.toml", "Cargo.lock", "Makefile", "CMakeLists.txt")
-        assert path.suffix not in (".rs", ".c", ".h", ".a"), path
+        assert path.suffix not in (".rs", ".c", ".h", ".a") or path.as_posix() in (
+            "inputs/mods/s01/a/build.rs", "inputs/mods/s01/b/build.rs"), path
         if "link" in entry:
             target = Path(entry["link"])
             assert not target.is_absolute() and (root / path).resolve().is_relative_to(root), path
@@ -160,7 +161,7 @@ def produce():
     lock = sha(root / unit["lockfile"])
     authors = {"a": read(logs / "mod-build.json")}
     for variant in ("normal", "two-limiters", "init-fail", *ENTRY_INVALID, *CALL_INVALID,
-                    *(("config",) if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06") else ())):
+                    *(("config",) if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01") else ())):
         target = Path(os.environ["CARGO_TARGET_DIR"]) / ("output-limit-" + variant)
         assert not target.exists(), "Independent author target must start empty"
         env = {**os.environ, "CARGO_TARGET_DIR": str(target), "CM_LIMIT_VARIANT": variant}
@@ -205,7 +206,7 @@ def produce():
         shutil.copyfile(root / relative, destination)
     metadata_audit = None
     binary_packages = None
-    if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if cfg["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         import mod_manifest
         legacy = read(artifact / "evidence/runtime-plan-determinism.json")["mods"]["a/normal"]
         composition.install(inputs, legacy, directory="m01-legacy-v2")
@@ -236,46 +237,50 @@ def produce():
                       "prepared_profile": inventory(inputs / "official/profile")}
     write(logs / "official-profile-setup.json", official_setup)
     runtime_sdk = None
-    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if cfg["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         from runtime_sdk import prepare
         runtime_sdk = prepare(inputs, package, authors)
-    if cfg["task_id"] in ("CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if cfg["task_id"] in ("CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         import managed_package
         managed_package.prepare(inputs, package, frozen, logs)
-    if cfg["task_id"] in ("CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if cfg["task_id"] in ("CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         import runtime_state
         runtime_state.prepare(inputs, package, frozen, logs, authors)
     m05 = None
-    if cfg["task_id"] in ("CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if cfg["task_id"] in ("CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         import mod_author
         m05 = mod_author.prepare(inputs, package, frozen, logs)
     g02a = None
-    if cfg["task_id"] in ("CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if cfg["task_id"] in ("CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         import turn_budget
         g02a = turn_budget.prepare(inputs, package, frozen, logs, authors, runtime_sdk)
     review = None
-    if cfg["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if cfg["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         import review_before_send
         review = review_before_send.prepare(inputs, package, frozen, logs, authors, runtime_sdk)
     concurrency = None
-    if cfg["task_id"] in ("CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if cfg["task_id"] in ("CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         import tool_concurrency
         concurrency = tool_concurrency.prepare(inputs, package, frozen, logs, authors, runtime_sdk)
-    if cfg["task_id"] in ("CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if cfg["task_id"] in ("CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         import runtime_qualification
         runtime_qualification.prepare(inputs, frozen)
     hooks = None
-    if cfg["task_id"] in ("CM-G01", "CM-G05", "CM-G06"):
+    if cfg["task_id"] in ("CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         import runtime_hooks
         hooks = runtime_hooks.prepare(inputs, frozen, logs, authors)
     upgrade = None
-    if cfg["task_id"] in ("CM-G05", "CM-G06"):
+    if cfg["task_id"] in ("CM-G05", "CM-G06", "CM-S01"):
         import runtime_upgrade
         upgrade = runtime_upgrade.prepare(inputs, frozen)
     seams = None
-    if cfg["task_id"] == "CM-G06":
+    if cfg["task_id"] in ("CM-G06", "CM-S01"):
         import sdk_seams
         seams = sdk_seams.prepare(root, inputs, package, frozen, logs, authors)
+    distribution = None
+    if cfg["task_id"] == "CM-S01":
+        import distribution_provenance
+        distribution = distribution_provenance.prepare(root, inputs, frozen, logs, authors)
     write(inputs / "producer.json", {"schema_version": 1, "task_id": cfg["task_id"], "target": TARGET,
         "provenance": provenance(), "producer_job": os.environ["GITHUB_JOB"], "host": frozen, "authors": authors,
         "entry_invalid": ENTRY_INVALID, "call_invalid": CALL_INVALID,
@@ -284,7 +289,7 @@ def produce():
         "official_profile_setup": official_setup, "c_layout": read(logs / "output-limit-c-layout.log"),
         "metadata_source_attachment_audit": metadata_audit, "binary_packages": binary_packages,
         "runtime_sdk": runtime_sdk, "m05": m05, "g02a": g02a, "review": review, "concurrency": concurrency,
-        "hooks": hooks, "upgrade": upgrade, "sdk_seams": seams})
+        "hooks": hooks, "upgrade": upgrade, "sdk_seams": seams, "distribution": distribution})
     entries = inventory(inputs)
     write(inputs / "input-manifest.json", {"files": entries, "sha256": digest(entries)})
     write(logs / "consumer-input-links.json", [entry for entry in entries if "link" in entry])
@@ -397,6 +402,8 @@ def rootfs(inputs, root):
             system(dependency)
     for name in ("host", "mods", "official"):
         copy_runtime_tree(inputs / name, root / "inputs" / name)
+    if (inputs / "distribution").is_dir():
+        copy_runtime_tree(inputs / "distribution", root / "inputs/distribution")
     if read(inputs / "producer.json").get("upgrade"):
         import runtime_upgrade
         runtime_upgrade.mount_reference(inputs, root, system)
@@ -1148,6 +1155,121 @@ def bind_tui_mcp_listener(record, metadata, bound_hosts, observer):
     return {"port": port, "listener_inode": inode, "accepted_socket_inodes": sorted(connections)}
 
 
+def check_distribution_verifier_binding():
+    with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as temporary:
+        root = Path(temporary) / "rootfs"
+        paths = ("fixture/s01-producer.json", "fixture/crates/cm/src/distribution-policy.json",
+            "fixture/s01-bootstrap/identity.json", "inputs/host/cm-host.json")
+        policy = read(Path(os.environ["CM_SOURCE_DIR"]) / "crates/cm/src/distribution-policy.json")
+        helper = b"audit parser fixture, not a cryptographic verifier"
+        identity = hashlib.sha256(helper).hexdigest()
+        values = ({}, policy, {"binary_sha256": identity},
+            {"inputs": {"native": {"distribution_verifier": {"sha256": identity}}}})
+        for path, value in zip(paths, values):
+            write(root / path, value)
+        for path in ("fixture/s01-bootstrap/gh", "inputs/host/codex-resources/gh"):
+            (root / path).write_bytes(helper)
+        arguments = ["/proc/2/fd/5", "attestation", "verify", "/proc/2/fd/6", "--bundle", "/proc/2/fd/7",
+            "--custom-trusted-root", "/proc/2/fd/8", "--repo", policy["builder_repository"],
+            "--signer-workflow", policy["builder_repository"] + "/" + policy["workflow"],
+            "--cert-identity", "https://github.com/" + policy["builder_repository"] + "/" + policy["workflow"] + "@" + policy["ref"],
+            "--cert-oidc-issuer", policy["issuer"], "--source-ref", policy["ref"],
+            "--source-digest", "a" * 40, "--signer-digest", "a" * 40, "--deny-self-hosted-runners", "--format", "json"]
+        calls = ['10 getpid() = 2',
+            '10 memfd_create("cm-distribution-verifier", MFD_CLOEXEC|MFD_ALLOW_SEALING) = 4',
+            '10 fcntl(4, F_ADD_SEALS, F_SEAL_SEAL|F_SEAL_SHRINK|F_SEAL_GROW|F_SEAL_WRITE) = 0',
+            '10 openat(AT_FDCWD, "/proc/self/fd/4", O_RDONLY|O_CLOEXEC) = 5</memfd:cm-distribution-verifier (deleted)>']
+        execution = '11 execve("/proc/2/fd/5", ' + json.dumps(arguments) + ', 0x1) = 0'
+        assert bind_distribution_verifiers([*calls, execution], Path(temporary)) == {execution}
+        for invalid in ([*calls[:2], calls[3], execution], [*calls, execution.replace('"--repo"', '"--unknown"')],
+            [*calls, execution.replace('"/proc/2/fd/7"', '"/work/unbound-bundle"')]):
+            try:
+                bind_distribution_verifiers(invalid, Path(temporary))
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError("Unbound verifier execution escaped the outer audit")
+
+
+def bind_distribution_verifiers(calls, consumer_root):
+    """Attribute only pinned gh attestation verification, including sealed Host snapshots."""
+    root = consumer_root / "rootfs"
+    if not (root / "fixture/s01-producer.json").is_file():
+        return set()
+    policy = read(root / "fixture/crates/cm/src/distribution-policy.json")
+    bootstrap = read(root / "fixture/s01-bootstrap/identity.json")
+    helper = root / "inputs/host/codex-resources/gh"
+    identity = read(root / "inputs/host/cm-host.json")
+    expected = identity["inputs"]["native"]["distribution_verifier"]["sha256"]
+    assert sha(helper) == expected == bootstrap["binary_sha256"]
+    assert sha(root / "fixture/s01-bootstrap/gh") == expected
+    inner, created, sealed, readonly = {}, set(), set(), set()
+    for line in calls:
+        pid = line.split(None, 1)[0]
+        own = re.search(r'getpid\(\) = (\d+)', line)
+        if own:
+            inner[pid] = own[1]
+        allocation = re.search(r'memfd_create\("cm-distribution-verifier", MFD_CLOEXEC\|MFD_ALLOW_SEALING\) = (\d+)', line)
+        if allocation:
+            created.add((pid, allocation[1]))
+        seal = re.search(r'fcntl\((\d+)(?:<[^>]+>)?, F_ADD_SEALS, ([A-Z_|]+)\) = 0', line)
+        if seal and (pid, seal[1]) in created:
+            assert set(seal[2].split("|")) == {"F_SEAL_WRITE", "F_SEAL_GROW", "F_SEAL_SHRINK", "F_SEAL_SEAL"}
+            sealed.add((pid, seal[1]))
+        opened = re.search(r'openat\(AT_FDCWD(?:<[^>]*>)?, "/proc/self/fd/(\d+)", O_RDONLY\|O_CLOEXEC\) = (\d+)</memfd:cm-distribution-verifier \(deleted\)>', line)
+        if opened and (pid, opened[1]) in sealed:
+            readonly.add((pid, opened[2]))
+    descriptors = {(inner.get(pid, pid), fd) for pid, fd in readonly}
+    accepted = set()
+    for line in calls:
+        execution = re.search(r'execve\("([^"]+)", (\[[^\n]*?\]), ', line)
+        if not execution:
+            continue
+        path = execution[1]
+        descriptor = re.fullmatch(r"/proc/(\d+)/fd/(\d+)", path)
+        direct = path == "/fixture/s01-bootstrap/gh"
+        if not direct and not descriptor:
+            continue
+        arguments = json.loads(execution[2])
+        if arguments[1:3] != ["attestation", "verify"]:
+            continue
+        assert line.endswith(" = 0"), "Unsuccessful verifier exec"
+        if descriptor:
+            assert (descriptor[1], descriptor[2]) in descriptors, "Unbound sealed verifier executable"
+            assert re.fullmatch(r"/proc/" + descriptor[1] + r"/fd/\d+", arguments[3])
+        else:
+            assert re.fullmatch(r"/fixture/s01-proofs/subjects/(?:cm-host|sdk-a|sdk-b)\.json", arguments[3])
+        options, position = {}, 4
+        while position < len(arguments):
+            key = arguments[position]
+            assert key not in options
+            if key == "--deny-self-hosted-runners":
+                options[key] = True
+                position += 1
+            else:
+                assert position + 1 < len(arguments)
+                options[key] = arguments[position + 1]
+                position += 2
+        required = {"--repo": policy["builder_repository"],
+            "--signer-workflow": policy["builder_repository"] + "/" + policy["workflow"],
+            "--cert-identity": "https://github.com/" + policy["builder_repository"] + "/" + policy["workflow"] + "@" + policy["ref"],
+            "--cert-oidc-issuer": policy["issuer"], "--source-ref": policy["ref"],
+            "--deny-self-hosted-runners": True, "--format": "json"}
+        assert set(options) == {*required, "--bundle", "--custom-trusted-root", "--source-digest", "--signer-digest"}
+        assert all(options[key] == value for key, value in required.items())
+        assert re.fullmatch(r"[0-9a-f]{40}", options["--source-digest"])
+        assert options["--source-digest"] == options["--signer-digest"]
+        if descriptor:
+            assert all(re.fullmatch(r"/proc/" + descriptor[1] + r"/fd/\d+", options[key])
+                for key in ("--bundle", "--custom-trusted-root"))
+        else:
+            assert options["--bundle"] == "/fixture/s01-proofs/bundle.jsonl"
+            assert options["--custom-trusted-root"] == "/fixture/s01-bootstrap/distribution-root.jsonl" or re.fullmatch(
+                r"/work/s01/bootstrap/roots\.jsonl", options["--custom-trusted-root"])
+        accepted.add(line)
+    return accepted
+
+
 @ci_progress.case()
 def observe(directory, evidence, *, consumer_root=None, result_paths=None):
     import observer
@@ -1157,7 +1279,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
                "ci/scripts/runtime_state.py", "ci/scripts/mod_author.py", "fixtures/turn-budget/driver.py",
                "fixtures/review-before-send/driver.py", "fixtures/tool-concurrency/driver.py",
                "fixtures/runtime-qualification/driver.py", "fixtures/runtime-hooks/driver.py", "fixtures/compatibility/driver.py",
-               "fixtures/sdk-seams/driver.py")
+               "fixtures/sdk-seams/driver.py", "fixtures/distribution-provenance/driver.py")
     network = []
     sockets = []
     tcp_metadata = []
@@ -1167,6 +1289,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
     file_count = 0
     executable_memory = []
     process_calls = []
+    verifier_calls = []
     trace_files = sorted(directory.glob("syscalls.*"))
     started = time.monotonic()
     for index, path in enumerate(trace_files, 1):
@@ -1176,6 +1299,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
         path.write_text(text, encoding="utf-8")
         assert not re.search(r'\b(?:sendto|recvfrom)\([^\n]*?, "(?!<payload redacted>)', text)
         calls = observer.complete_syscalls(text.splitlines())
+        verifier_calls.extend(line for line in calls if re.match(r'\d+\s+(?:execve|memfd_create|fcntl|openat|getpid)\(', line))
         process_calls.extend(line for line in calls if re.match(r'\d+\s+(?:execve|clone|clone3|fork|vfork|getpid|gettid)\(', line))
         bwrap_executions.update(observer.bound_bwrap_executions(calls,
             ("/inputs/host/codex-resources/bwrap", "/work/m03/process/独立 Host/codex-resources/bwrap",
@@ -1206,8 +1330,9 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
     hook_probes = bind_hook_probes(executions, consumer_root or directory.parent)
     sdk_probes = bind_sdk_probes(executions, consumer_root or directory.parent)
     code_mode = bind_code_mode(process_calls, executable_memory, evidence, consumer_root or directory.parent, result_paths)
+    verifiers = bind_distribution_verifiers(verifier_calls, consumer_root or directory.parent)
     observer.audit_executions(executions, python_scripts=scripts, sandbox_aliases=aliases,
-        bwrap_executions=bwrap_executions, native_probes=[*native_probes, *concurrency_probes, *hook_probes, *sdk_probes, *code_mode["executables"]])
+        bwrap_executions=bwrap_executions | verifiers, native_probes=[*native_probes, *concurrency_probes, *hook_probes, *sdk_probes, *code_mode["executables"]])
     ports = set()
     tui_listeners = []
     for path in sorted(evidence.rglob("result.json") if result_paths is None else result_paths):
@@ -1246,6 +1371,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
         "tui_mcp_listeners": tui_listeners,
         "sandbox_aliases": [{"path": path, "target": alias_targets[path]} for path in sorted(aliases)],
         "packaged_bwrap_fd_executions": sorted(bwrap_executions),
+        "distribution_verifier_executions": sorted(verifiers),
         "bound_host_executables": bound_hosts,
         "file_load_count": file_count, "trace_files": [path.name for path in trace_files],
         "compiler_linker_jit_build_service_calls": 0, "unclassified_executable_memory": code_mode["unclassified"],
@@ -1557,7 +1683,7 @@ def consume():
     assert producer["provenance"] == {**provenance(), "CM_SOURCE_SHA": origin["source_sha"],
         "GITHUB_WORKFLOW_SHA": origin["workflow_sha"], "GITHUB_RUN_ID": str(origin["run_id"]),
         "GITHUB_RUN_ATTEMPT": str(origin["run_attempt"]), "CM_REQUEST_ID": origin["request_id"]}, "Original producer provenance changed"
-    assert producer["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06") and producer["target"] == TARGET
+    assert producer["task_id"] in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01") and producer["target"] == TARGET
     m05_only = producer["task_id"] == "CM-M05" and producer["m05"]["build_kind"] == "mod-only"
     if producer["task_id"] == "CM-M05":
         assert producer["m05"]["build_kind"] == os.environ["CM_BUILD_KIND"]
@@ -1574,50 +1700,50 @@ def consume():
     import mod_manifest
     report_audit_self_check()
     m01_acceptance = None
-    if not m05_only and producer["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if not m05_only and producer["task_id"] in ("CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         m01_acceptance = {"schema_version": 1, "task_id": "CM-M01", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M01-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(mod_manifest.REPORTS, 1)]}
     m02_acceptance = None
-    if not m05_only and producer["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if not m05_only and producer["task_id"] in ("CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         import runtime_sdk
         m02_acceptance = {"schema_version": 1, "task_id": "CM-M02", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M02-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(runtime_sdk.REPORTS, 1)]}
     m03_acceptance = None
-    if not m05_only and producer["task_id"] in ("CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if not m05_only and producer["task_id"] in ("CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         import managed_package
         m03_acceptance = {"schema_version": 1, "task_id": "CM-M03", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M03-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(managed_package.REPORTS, 1)]}
     m04_acceptance = None
-    if not m05_only and producer["task_id"] in ("CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if not m05_only and producer["task_id"] in ("CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         import runtime_state
         m04_acceptance = {"schema_version": 1, "task_id": "CM-M04", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M04-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(runtime_state.REPORTS, 1)]}
     m05_acceptance = None
-    if producer["task_id"] in ("CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if producer["task_id"] in ("CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         import mod_author
         m05_acceptance = {"schema_version": 1, "task_id": "CM-M05", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-M05-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(mod_author.REPORTS, 1)]}
     g02a_acceptance = None
-    if producer["task_id"] in ("CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if producer["task_id"] in ("CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         cases = budget_cases(producer)
         g02a_acceptance = {"schema_version": 1, "task_id": "CM-G02A", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [
                 {"id": "CM-G02A-AC0" + str(index), "status": "not_run", "phase": "g02a-" + case,
                  "evidence": ["evidence/budget-" + case + ".json"]} for index, case in enumerate(cases, 1)]}
     review_acceptance = None
-    if producer["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if producer["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         review_steps = review_cases(producer)
         review_acceptance = {"schema_version": 1, "task_id": "CM-G02B", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [
                 {"id": "CM-G02B-AC0" + str(index), "status": "not_run", "phase": "review-" + case,
                  "evidence": ["evidence/review-" + case + ".json"]} for index, case in enumerate(review_steps, 1)]}
     concurrency_acceptance = None
-    if producer["task_id"] in ("CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if producer["task_id"] in ("CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         concurrency_steps = [label.removeprefix("concurrency-") for label in retry.PHASES if label.startswith("concurrency-")]
         assert len(concurrency_steps) == 7 and producer["concurrency"]["cases"] == concurrency_steps
         concurrency_acceptance = {"schema_version": 1, "task_id": "CM-G03", "target": TARGET, "status": "not_run",
@@ -1625,30 +1751,36 @@ def consume():
                 {"id": "CM-G03-AC0" + str(index), "status": "not_run", "phase": "concurrency-" + case,
                  "evidence": ["evidence/concurrency-" + case + ".json"]} for index, case in enumerate(concurrency_steps, 1)]}
     g04_acceptance = None
-    if producer["task_id"] in ("CM-G04", "CM-G01", "CM-G05", "CM-G06"):
+    if producer["task_id"] in ("CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         import runtime_qualification
         g04_acceptance = {"schema_version": 1, "task_id": "CM-G04", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-G04-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(runtime_qualification.REPORTS, 1)]}
     hooks_acceptance = None
-    if producer["task_id"] in ("CM-G01", "CM-G05", "CM-G06"):
+    if producer["task_id"] in ("CM-G01", "CM-G05", "CM-G06", "CM-S01"):
         import runtime_hooks
         hooks_acceptance = {"schema_version": 1, "task_id": "CM-G01", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-G01-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(runtime_hooks.REPORTS, 1)]}
     upgrade_acceptance = None
-    if producer["task_id"] in ("CM-G05", "CM-G06"):
+    if producer["task_id"] in ("CM-G05", "CM-G06", "CM-S01"):
         import runtime_upgrade
         upgrade_acceptance = {"schema_version": 1, "task_id": "CM-G05", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-G05-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(runtime_upgrade.REPORTS, 1)]}
     seams_acceptance = None
-    if producer["task_id"] == "CM-G06":
+    if producer["task_id"] in ("CM-G06", "CM-S01"):
         import sdk_seams
         seams_acceptance = {"schema_version": 1, "task_id": "CM-G06", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-G06-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(sdk_seams.REPORTS, 1)]}
-    acceptance = seams_acceptance or upgrade_acceptance or hooks_acceptance or g04_acceptance or concurrency_acceptance or review_acceptance or g02a_acceptance or m05_acceptance or m04_acceptance or m03_acceptance or m02_acceptance or m01_acceptance or p04_acceptance
+    distribution_acceptance = None
+    if producer["task_id"] == "CM-S01":
+        import distribution_provenance
+        distribution_acceptance = {"schema_version": 1, "task_id": "CM-S01", "target": TARGET, "status": "not_run",
+            "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-S01-AC0" + str(index),
+            "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(distribution_provenance.REPORTS, 1)]}
+    acceptance = distribution_acceptance or seams_acceptance or upgrade_acceptance or hooks_acceptance or g04_acceptance or concurrency_acceptance or review_acceptance or g02a_acceptance or m05_acceptance or m04_acceptance or m03_acceptance or m02_acceptance or m01_acceptance or p04_acceptance
     write(artifact / "acceptance.json", acceptance)
     stage = "rootfs"
     try:
@@ -1699,13 +1831,31 @@ def consume():
             base += ["--setenv", key, value]
         driver = [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B", "/fixture/fixtures/runtime-consumer/driver.py"]
         try:
+            trusted = temp / "trusted-observer"
+            trusted.mkdir()
+            trace = ["strace", "-ff", "-qq", "-yy", "--pidns-translation", "-s", "1024", "-e",
+                "trace=execve,execveat,socket,getsockname,accept,accept4,connect,sendto,recvfrom,socketpair,symlink,symlinkat,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl,readlink,mmap,mprotect,memfd_create,clone,clone3,fork,vfork,getpid,gettid",
+                "-o", "CM_PHASE_TRACE", "--"]
+
+            def command(label, arguments, sandbox=base):
+                directory = trusted / label
+                directory.mkdir(exist_ok=True)
+                return [str(directory / "syscalls") if part == "CM_PHASE_TRACE" else part for part in trace] + ([*sandbox, "--"] if sandbox else []) + arguments
+            current_audit = None
+            if distribution_acceptance is not None:
+                stage = "independent offline bootstrap before candidate execution"
+                label = "s01-current-verification"
+                current = ci_progress.run(logs, label, command(label, [*CONSUMER_ENV_PREFIX,
+                    "/usr/bin/python3", "-B", "/fixture/fixtures/distribution-provenance/driver.py", "verify-current"],
+                    sandbox=["/usr/bin/bwrap", *base[1:]]), 300)
+                assert current.returncode == 0, "Current distribution proof verification failed"
+                current_audit = observe(trusted / label, evidence, consumer_root=temp)
+                assert current_audit["distribution_verifier_executions"] and not current_audit["network"]
             stage = "strict isolation probes"
             result = ci_progress.run(logs, "consumer-probes", [*base, "--", *driver, "probe"], 180)
             write(logs / "consumer-probes.json", {"return_code": result.returncode, "stage": stage})
             assert result.returncode == 0, "Strict namespace/probe setup failed"
             assert not canary_hits
-            trusted = temp / "trusted-observer"
-            trusted.mkdir()
             report_names = {"consumer-matrix": [Path(row["evidence"][0]).name for row in p04_acceptance["checks"]]}
             for label, report_set in (("m01", m01_acceptance), ("m02", m02_acceptance), ("m03", m03_acceptance),
                                       ("m04", m04_acceptance), ("m05", m05_acceptance)):
@@ -1730,30 +1880,25 @@ def consume():
                 phase_reports["g05"] = list(runtime_upgrade.REPORTS)
             if seams_acceptance is not None:
                 phase_reports["g06"] = list(sdk_seams.REPORTS)
+            if distribution_acceptance is not None:
+                phase_reports["s01"] = list(distribution_provenance.REPORTS)
             for phase in phase_reports:
                 for case in runtime_cases.GROUPS[phase]:
                     report_names[phase + "-" + case] = [phase + "/" + case + "/reports.json"]
             checkpoints = retry.Checkpoints(sys.modules[__name__], validation, closure, temp, evidence, logs, report_names, canary_hits)
             stage = "independent isolated matrices"
-            trace = ["strace", "-ff", "-qq", "-yy", "--pidns-translation", "-s", "1024", "-e",
-                "trace=execve,execveat,socket,getsockname,accept,accept4,connect,sendto,recvfrom,socketpair,symlink,symlinkat,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl,readlink,mmap,mprotect,memfd_create,clone,clone3,fork,vfork,getpid,gettid",
-                "-o", "CM_PHASE_TRACE", "--"]
-
-            def command(label, arguments, sandbox=base):
-                directory = trusted / label
-                directory.mkdir(exist_ok=True)
-                return [str(directory / "syscalls") if part == "CM_PHASE_TRACE" else part for part in trace] + ([*sandbox, "--"] if sandbox else []) + arguments
 
             write(logs / "consumer-command.json", {"command": command("consumer-matrix", [*driver, "matrix"]),
                 "cache_mode": "none", "producer_input_manifest_sha256": manifest["sha256"], "provenance": provenance()})
             commands = []
-            for phase in ("p04", "m01", "m02", "m05", "g04", "g01", "g05", "g06"):
+            for phase in ("p04", "m01", "m02", "m05", "g04", "g01", "g05", "g06", "s01"):
                 if phase not in phase_reports or m05_only and phase == "p04":
                     continue
                 wrapper = {"p04": "fixtures/runtime-consumer/driver.py", "m01": "ci/scripts/mod_manifest.py",
                     "m02": "ci/scripts/runtime_sdk.py", "m05": "ci/scripts/mod_author.py",
                     "g04": "fixtures/runtime-qualification/driver.py", "g01": "fixtures/runtime-hooks/driver.py",
-                    "g05": "fixtures/compatibility/driver.py", "g06": "fixtures/sdk-seams/driver.py"}[phase]
+                    "g05": "fixtures/compatibility/driver.py", "g06": "fixtures/sdk-seams/driver.py",
+                    "s01": "fixtures/distribution-provenance/driver.py"}[phase]
                 for case in runtime_cases.GROUPS[phase]:
                     if phase == "g04" and case == "missing-library":
                         continue
@@ -1822,6 +1967,8 @@ def consume():
             # Audit and sanitize even on a failed matrix, before exporting any trace.
             stage = "outer runtime audit"
             audits = {label: row["audit"] for label, row in checkpoints.results.items() if row["status"] == "pass"}
+            if current_audit is not None:
+                audits["s01-current-verification"] = current_audit
             audit = {"status": "pass", "compiler_linker_jit_build_service_calls": 0,
                 "unclassified_executable_memory": [], "steps": audits,
                 "normal_business_interpreter": {label: row["normal_business_interpreter"] for label, row in audits.items()
@@ -1918,6 +2065,9 @@ def consume():
             if seams_acceptance is not None:
                 sdk_seams.reports(evidence, checkpoints.results, audit)
                 report_sets.append(seams_acceptance)
+            if distribution_acceptance is not None:
+                distribution_provenance.reports(evidence, checkpoints.results, audit)
+                report_sets.append(distribution_acceptance)
             for report_set in report_sets:
                 for check in report_set["checks"]:
                     path = evidence / Path(check["evidence"][0]).name
@@ -1978,6 +2128,9 @@ def consume():
             if seams_acceptance is not None:
                 write(artifact / "g05-baseline-acceptance.json", upgrade_acceptance)
                 write(logs / "g05-baseline-acceptance.json", upgrade_acceptance)
+            if distribution_acceptance is not None:
+                write(artifact / "g06-baseline-acceptance.json", seams_acceptance)
+                write(logs / "g06-baseline-acceptance.json", seams_acceptance)
         finally:
             stopped.set()
             thread.join(timeout=1)

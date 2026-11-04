@@ -76,6 +76,8 @@ pub fn run(home: &Path, command: Command, options: &Options) -> Result<Value, Lo
                     .iter()
                     .any(|cap| !host.capabilities.contains(cap));
             let declared = json!({"version": candidate.manifest.version, "format_version": candidate.manifest.format_version,
+                "distribution": managed.as_ref().and_then(|s| s.generation.provenance.get(&id))
+                    .map(crate::provenance::Proof::summary).unwrap_or_else(|| json!({"status":"unverified_provenance","native_sandbox":false})),
                 "manifest_sha256": candidate.manifest_sha256, "content_sha256": content,
                 "metadata": candidate.manifest.binary_manifest.as_ref().map(crate::manifest::BinaryManifest::summary),
                 "qualification": {"declared":true,"verified":false,"unsupported":unsupported}});
@@ -151,6 +153,10 @@ pub fn run(home: &Path, command: Command, options: &Options) -> Result<Value, Lo
     };
     Ok(crate::diagnostics::metadata(
         json!({"schema_version":1,"plan":prepared.plan(),"plan_sha256":prepared.plan().sha256(),
+        "distribution": managed.as_ref().map(|s| s.generation.installed.keys().map(|id| {
+            (id.clone(), s.generation.provenance.get(id).map(crate::provenance::Proof::summary)
+                .unwrap_or_else(|| json!({"status":"unverified_provenance","native_sandbox":false})))
+        }).collect::<BTreeMap<_, _>>()),
         "lock_sha256":loader::hash(&mod_lock::canonical(prepared.plan())),"lock":lock_state,
         "already_native_executed":false,"qualification":{"verified":false}}),
     ))

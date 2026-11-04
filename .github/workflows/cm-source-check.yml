@@ -66,7 +66,8 @@ jobs:
           missing = [p for p in paths if p not in tracked or not Path(p).is_file() or Path(p).is_symlink()]
           assert not missing, f"Required CI files missing from this commit: {missing}"
           worker = json.loads(Path("ci/worker-files.json").read_text(encoding="utf-8"))
-          assert len(worker["files"]) == 8
+          assert len(worker["files"]) == 11
+          assert len({row["destination"] for row in worker["files"]}) == len(worker["files"])
           assert all(row["source"] in paths for row in worker["files"]), "Worker inputs must be published"
           cfg = json.loads(Path(".github/cm-ci.json").read_text())
           if cfg["task_id"] == "CM-G05":
@@ -78,9 +79,10 @@ jobs:
                   "DSLZL/CM", "DSLZL/CM-build-linux-x64", 41431503923, 1)
               assert all(baseline[key]["id"] > 0 and len(baseline[key]["digest"]) == 64
                          for key in ("product_artifact", "input_artifact"))
-          if cfg["task_id"] == "CM-G06":
-              assert cfg["required_checks"] == [f"CM-G06-AC{i:02}" for i in range(1, 8)]
-              assert cfg["acceptance_script"] == "fixtures/sdk-seams/acceptance.sh"
+          if cfg["task_id"] in ("CM-G06", "CM-S01"):
+              if cfg["task_id"] == "CM-G06":
+                  assert cfg["required_checks"] == [f"CM-G06-AC{i:02}" for i in range(1, 8)]
+                  assert cfg["acceptance_script"] == "fixtures/sdk-seams/acceptance.sh"
               adapter = json.loads(Path("adapters/codex-e4568a3/source.json").read_text())
               assert adapter["host_api_version"] == "0.11.0" and "sdk-seams.patch" in adapter["patches"]
               assert len(adapter["capabilities"]) == 14
@@ -91,8 +93,21 @@ jobs:
                   assert author["workspace"] == {} and author["lib"]["crate-type"] == ["cdylib"]
                   assert sorted(row["name"] for row in lock["package"]) == ["cm-abi", "cm-sdk", "cm-sdk-seams-" + owner]
 
+          if cfg["task_id"] == "CM-S01":
+              assert cfg["required_checks"] == [f"CM-S01-AC{i:02}" for i in range(1, 6)]
+              assert cfg["acceptance_script"] == "fixtures/distribution-provenance/acceptance.sh"
+              policy = json.loads(Path("crates/cm/src/distribution-policy.json").read_text())
+              assert (policy["source_repository_id"], policy["builder_repository_id"]) == (1430833890, 1430833977)
+              assert policy["workflow"] == ".github/workflows/build.yml" and policy["ref"] == "refs/heads/main"
+              assert policy["verifier"]["version"] == "2.103.3" and len(policy["verifier"]["archive_sha256"]) == 64
+              assert len([json.loads(line) for line in Path("crates/cm/src/distribution-root.jsonl").read_text().splitlines()]) == 2
+              schema = json.loads(Path("schemas/release-receipt.schema.json").read_text())
+              assert schema["additionalProperties"] is False and set(schema["required"]) == set(schema["properties"])
+              for path in ("crates/cm/src/provenance.rs", "crates/cm/src/distribution-policy.json", "crates/cm/src/distribution-root.jsonl"):
+                  assert path in cfg["native_identity_files"]
           scripts = [Path("ci/scripts") / (name + ".py") for name in
-                     ("record_run", "worker_policy", "dispatch_build", "acceptance_cache", "retry", "runtime_cases", "sdk_seams")]
+                     ("record_run", "worker_policy", "dispatch_build", "acceptance_cache", "retry", "runtime_cases", "sdk_seams", "distribution_provenance")]
+          scripts.append(Path("fixtures/distribution-provenance/driver.py"))
           for script in scripts:
               py_compile.compile(str(script), cfile=str(Path(os.environ["RUNNER_TEMP"]) / (script.stem + ".pyc")),
                                  doraise=True)

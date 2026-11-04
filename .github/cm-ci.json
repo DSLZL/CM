@@ -1,15 +1,13 @@
 {
   "schema_version": 1,
   "configured": true,
-  "task_id": "CM-G06",
+  "task_id": "CM-S01",
   "required_checks": [
-    "CM-G06-AC01",
-    "CM-G06-AC02",
-    "CM-G06-AC03",
-    "CM-G06-AC04",
-    "CM-G06-AC05",
-    "CM-G06-AC06",
-    "CM-G06-AC07"
+    "CM-S01-AC01",
+    "CM-S01-AC02",
+    "CM-S01-AC03",
+    "CM-S01-AC04",
+    "CM-S01-AC05"
   ],
   "target": "x86_64-unknown-linux-gnu",
   "rust_toolchain": "1.95.0",
@@ -39,7 +37,7 @@
       "no_default_features": false
     }
   ],
-  "acceptance_script": "fixtures/sdk-seams/acceptance.sh",
+  "acceptance_script": "fixtures/distribution-provenance/acceptance.sh",
   "cargo_config_files": [
     "adapters/codex-e4568a3/host/codex-rs/.cargo/config.toml"
   ],
@@ -105,7 +103,10 @@
     "crates/cm/src/commands/ui.rs",
     "adapters/codex-e4568a3/core-tool-continuation.rs",
     "adapters/codex-e4568a3/cli-commands.rs",
-    "adapters/codex-e4568a3/sdk-seams.patch"
+    "adapters/codex-e4568a3/sdk-seams.patch",
+    "crates/cm/src/provenance.rs",
+    "crates/cm/src/distribution-policy.json",
+    "crates/cm/src/distribution-root.jsonl"
   ],
   "generated_native_identity_files": [
     "adapters/codex-e4568a3/inputs/native.json"

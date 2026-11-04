@@ -14,7 +14,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 index 7bd8ec8..cd27673 100644
 --- a/codex-rs/cli/src/main.rs
 +++ b/codex-rs/cli/src/main.rs
-@@ -1017,12 +1017,59 @@ impl FeatureToggles {
+@@ -1017,12 +1017,67 @@ impl FeatureToggles {
  
  #[derive(Debug, Parser)]
  struct CmCli {
@@ -38,6 +38,10 @@ index 7bd8ec8..cd27673 100644
 +    /// Validate and install a precompiled package; enable a new ID next startup.
 +    Install {
 +        package: std::path::PathBuf,
++        #[arg(long, requires = "bundle")]
++        receipt: Option<std::path::PathBuf>,
++        #[arg(long, requires = "receipt")]
++        bundle: Option<std::path::PathBuf>,
 +    },
 +    /// Replace the exact installed object without compiling either artifact.
 +    Replace {
@@ -45,6 +49,10 @@ index 7bd8ec8..cd27673 100644
 +        package: std::path::PathBuf,
 +        #[arg(long)]
 +        from: String,
++        #[arg(long, requires = "bundle")]
++        receipt: Option<std::path::PathBuf>,
++        #[arg(long, requires = "receipt")]
++        bundle: Option<std::path::PathBuf>,
 +    },
 +    Enable {
 +        id: String,
@@ -74,7 +82,7 @@ index 7bd8ec8..cd27673 100644
      List,
      Plan,
      Doctor,
-@@ -1035,3 +1082,18 @@ enum CmCommand {
+@@ -1035,3 +1090,18 @@ enum CmCommand {
 +#[derive(Debug, Parser)]
 +enum CmStateCommand {
 +    Path {
@@ -93,7 +101,7 @@ index 7bd8ec8..cd27673 100644
  #[derive(Debug, Parser)]
  struct FeaturesCli {
      #[command(subcommand)]
-@@ -1067,6 +1129,29 @@ fn stage_str(stage: Stage) -> &'static str {
+@@ -1067,6 +1137,29 @@ fn stage_str(stage: Stage) -> &'static str {
  fn main() -> anyhow::Result<()> {
      codex_build_info::initialize!();
      let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
@@ -123,7 +131,7 @@ index 7bd8ec8..cd27673 100644
      arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
          // Keep the CLI dispatcher off the runtime's stack while the TUI rebuilds a thread.
          Box::pin(cli_main(arg0_paths, remote_control_disabled)).await?;
-@@ -1126,20 +1211,103 @@ async fn cli_main(
+@@ -1126,20 +1219,135 @@ async fn cli_main(
          profile: cm_profile,
          overrides: cm_set,
      };
@@ -169,7 +177,20 @@ index 7bd8ec8..cd27673 100644
 +                check,
 +                variants,
 +            } => cm_runtime::upgrade::run(&home, candidate, *check, variants, &cm_options),
-+            CmCommand::Install { package } => cm_runtime::mod_install::run(
++            CmCommand::Install {
++                package,
++                receipt: Some(receipt),
++                bundle: Some(bundle),
++            } => cm_runtime::mod_install::run(
++                &home,
++                cm_runtime::mod_install::Command::InstallVerified {
++                    package,
++                    receipt,
++                    bundle,
++                },
++                &cm_options,
++            ),
++            CmCommand::Install { package, .. } => cm_runtime::mod_install::run(
 +                &home,
 +                cm_runtime::mod_install::Command::Install(package),
 +                &cm_options,
@@ -191,7 +212,26 @@ index 7bd8ec8..cd27673 100644
 +            ),
 +            CmCommand::Launch { args } => cm_runtime::launcher::launch(&home, args, &cm_options)
 +                .map(|()| serde_json::json!({})),
-+            CmCommand::Replace { id, package, from } => cm_runtime::mod_install::run(
++            CmCommand::Replace {
++                id,
++                package,
++                from,
++                receipt: Some(receipt),
++                bundle: Some(bundle),
++            } => cm_runtime::mod_install::run(
++                &home,
++                cm_runtime::mod_install::Command::ReplaceVerified {
++                    id,
++                    package,
++                    from,
++                    receipt,
++                    bundle,
++                },
++                &cm_options,
++            ),
++            CmCommand::Replace {
++                id, package, from, ..
++            } => cm_runtime::mod_install::run(
 +                &home,
 +                cm_runtime::mod_install::Command::Replace { id, package, from },
 +                &cm_options,
@@ -234,7 +274,7 @@ index 7bd8ec8..cd27673 100644
              Ok(value) => println!("{}", serde_json::to_string(&value)?),
              Err(error) => {
                  eprintln!("{}", serde_json::to_string(&error)?);
-@@ -1157,7 +1325,7 @@ async fn cli_main(
+@@ -1157,7 +1365,7 @@ async fn cli_main(
      }
  
      // Metadata/helper commands never execute Mod code. Other Core entry points
@@ -243,7 +283,7 @@ index 7bd8ec8..cd27673 100644
      let cm_business = matches!(
          &subcommand,
          None | Some(Subcommand::Agents(_))
-@@ -1176,11 +1344,22 @@ async fn cli_main(
+@@ -1176,11 +1384,22 @@ async fn cli_main(
              if command.subcommand.is_none() && !command.managed_daemon && !command.remote_control
                  && matches!(command.listen, codex_app_server::AppServerTransport::Stdio));
          let cm_supported_backend = root_remote.is_none() && (local_exec || local_stdio);

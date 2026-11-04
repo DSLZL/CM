@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/DSLZL/CM/schemas/release-receipt.schema.json",
+  "title": "CM release receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "domain": {
+      "const": "cm.release-receipt.v1"
+    },
+    "role": {
+      "enum": [
+        "host",
+        "mod"
+      ]
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "target": {
+      "const": "x86_64-unknown-linux-gnu"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "const": "DSLZL/CM"
+        },
+        "repository_id": {
+          "const": 1430833890
+        },
+        "sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "required": [
+        "repository",
+        "repository_id",
+        "sha"
+      ]
+    },
+    "signer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "const": "DSLZL/CM-build-linux-x64"
+        },
+        "repository_id": {
+          "const": 1430833977
+        },
+        "workflow": {
+          "const": ".github/workflows/build.yml"
+        },
+        "workflow_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "run_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "repository",
+        "repository_id",
+        "workflow",
+        "workflow_sha",
+        "run_id",
+        "attempt"
+      ]
+    },
+    "production_origin": {
+      "type": "object",
+      "minProperties": 1
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "archive_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "archive_size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "object_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "payload_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "archive_sha256",
+        "archive_size",
+        "object_sha256",
+        "manifest_sha256",
+        "payload_sha256"
+      ]
+    },
+    "contracts": {
+      "type": "object"
+    },
+    "materials": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sbom": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "notice": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "source": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "sbom",
+        "notice",
+        "source"
+      ]
+    },
+    "policy_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "schema_version",
+    "domain",
+    "role",
+    "name",
+    "version",
+    "target",
+    "source",
+    "signer",
+    "production_origin",
+    "artifact",
+    "contracts",
+    "materials",
+    "policy_sha256"
+  ]
+}

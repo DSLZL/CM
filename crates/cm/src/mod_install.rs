@@ -11,6 +11,18 @@ use crate::profile::{self, Directory, Transaction};
 #[derive(Clone, Copy)]
 pub enum Command<'a> {
     Install(&'a Path),
+    InstallVerified {
+        package: &'a Path,
+        receipt: &'a Path,
+        bundle: &'a Path,
+    },
+    ReplaceVerified {
+        id: &'a str,
+        package: &'a Path,
+        from: &'a str,
+        receipt: &'a Path,
+        bundle: &'a Path,
+    },
     Replace {
         id: &'a str,
         package: &'a Path,
@@ -26,6 +38,15 @@ pub(crate) fn ingest(
     transaction: &mut Transaction,
     input: &Path,
     replacement: Option<(&str, &str)>,
+) -> Result<(), LoadError> {
+    ingest_with_proof(transaction, input, replacement, None)
+}
+
+fn ingest_with_proof(
+    transaction: &mut Transaction,
+    input: &Path,
+    replacement: Option<(&str, &str)>,
+    proof_paths: Option<(&Path, &Path)>,
 ) -> Result<(), LoadError> {
     let input = std::path::absolute(input).map_err(|e| profile::failure(&e.to_string()))?;
     let home = &transaction.root.path;
@@ -52,6 +73,9 @@ pub(crate) fn ingest(
         ));
     }
     let snapshot = loader::installation_snapshot(&input)?;
+    let proof = proof_paths
+        .map(|(receipt, bundle)| crate::provenance::Proof::capture(&snapshot, receipt, bundle))
+        .transpose()?;
     let was_enabled = transaction.next.enabled.contains(&snapshot.id);
     if let Some((id, expected)) = replacement {
         if snapshot.id != id
@@ -82,6 +106,10 @@ pub(crate) fn ingest(
             ));
         }
         if old == &snapshot.sha256 {
+            if let Some((proof, pins)) = proof {
+                transaction.next.provenance.insert(snapshot.id.clone(), proof);
+                transaction.pin_inputs(pins);
+            }
             transaction.next.consumed.insert(snapshot.sha256);
             return Ok(());
         }
@@ -154,6 +182,11 @@ pub(crate) fn ingest(
         let _ = profile::discard(&transaction.objects, &name);
     }
     result?;
+    transaction.next.provenance.remove(&snapshot.id);
+    if let Some((proof, pins)) = proof {
+        transaction.next.provenance.insert(snapshot.id.clone(), proof);
+        transaction.pin_inputs(pins);
+    }
     transaction
         .next
         .installed
@@ -170,6 +203,12 @@ pub fn run(home: &Path, command: Command<'_>, options: &Options) -> Result<Value
     let mut transaction = Transaction::begin(home, host)?;
     match command {
         Command::Install(input) => ingest(&mut transaction, input, None)?,
+        Command::InstallVerified { package, receipt, bundle } => {
+            ingest_with_proof(&mut transaction, package, None, Some((receipt, bundle)))?
+        }
+        Command::ReplaceVerified { id, package, from, receipt, bundle } => {
+            ingest_with_proof(&mut transaction, package, Some((id, from)), Some((receipt, bundle)))?
+        }
         Command::Replace { id, package, from } => {
             ingest(&mut transaction, package, Some((id, from)))?
         }
@@ -191,6 +230,7 @@ pub fn run(home: &Path, command: Command<'_>, options: &Options) -> Result<Value
                 Command::Remove(_) => {
                     transaction.next.enabled.remove(id);
                     transaction.next.installed.remove(id);
+                    transaction.next.provenance.remove(id);
                 }
                 _ => unreachable!(),
             }

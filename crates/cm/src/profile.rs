@@ -82,6 +82,8 @@ pub(crate) struct Generation {
     pub lock_sha256: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<crate::state::View>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provenance: BTreeMap<String, crate::provenance::Proof>,
 }
 
 impl Default for Generation {
@@ -95,6 +97,7 @@ impl Default for Generation {
             config_sha256: None,
             lock_sha256: String::new(),
             state: None,
+            provenance: BTreeMap::new(),
         }
     }
 }
@@ -107,6 +110,10 @@ impl Generation {
             _ => false,
         };
         if !format
+            || self.provenance.len() > 32
+            || self.provenance.iter().any(|(id, proof)| {
+                self.installed.get(id) != Some(&proof.object_sha256)
+            })
             || self.installed.len() > 32
             || self.consumed.len() > 4096
             || self
@@ -181,19 +188,21 @@ impl Snapshot {
         generation: Generation,
     ) -> Result<Self, LoadError> {
         generation.validate().map_err(|e| failure(&e))?;
+        let mut pins = crate::provenance::verify_generation(home, &generation)?;
         let directory = Directory::open(home).map_err(|e| failure(&e))?;
         let (marker, pin) =
             loader::read_input(&home.join(".cm-owner"), 128).map_err(|e| failure(&e))?;
         if marker != OWNER {
             return Err(failure("invalid CM ownership marker"));
         }
+        pins.push(pin);
         Ok(Self {
             generation_id: loader::hash(&canonical(&generation)),
             generation,
             host,
             home: home.into(),
             root_identity: identity(&directory.file)?,
-            pins: vec![pin],
+            pins,
         })
     }
 }
@@ -522,6 +531,10 @@ pub(crate) struct Transaction {
 }
 
 impl Transaction {
+    pub(crate) fn pin_inputs(&mut self, pins: Vec<InputPin>) {
+        self.pinned_inputs.extend(pins);
+    }
+
     pub(crate) fn revalidate(&self) -> Result<(), LoadError> {
         for directory in [&self.root, &self.objects, &self.generations]
             .into_iter()
@@ -867,6 +880,43 @@ mod tests {
             );
             assert_eq!(std::fs::read(home.join("cm-profile.json")).unwrap(), old);
             std::fs::remove_dir_all(home).unwrap();
+        }
+    }
+
+    #[test]
+    fn distribution_sidecar_and_verifier_pins_are_revalidated_before_commit() {
+        for name in ["receipt.json", "proof.jsonl", "gh"] {
+            for change in ["replace", "edit", "remove"] {
+                let home = root();
+                let source = root();
+                let mut transaction = Transaction::begin(&home, host()).unwrap();
+                let old = b"accepted profile";
+                std::fs::write(home.join("cm-profile.json"), old).unwrap();
+                transaction.old = Some(
+                    loader::read_input(&home.join("cm-profile.json"), LIMIT)
+                        .unwrap()
+                        .1,
+                );
+                let path = source.join(name);
+                std::fs::write(&path, b"owned snapshot bytes").unwrap();
+                transaction.pin_inputs(vec![loader::read_input(&path, LIMIT).unwrap().1]);
+                match change {
+                    "replace" => {
+                        std::fs::rename(&path, source.join("old-inode")).unwrap();
+                        std::fs::write(&path, b"owned snapshot bytes").unwrap();
+                    }
+                    "edit" => std::fs::write(&path, b"changed bytes").unwrap(),
+                    _ => std::fs::remove_file(&path).unwrap(),
+                }
+                assert!(
+                    transaction
+                        .commit(&crate::config::Options::default())
+                        .is_err()
+                );
+                assert_eq!(std::fs::read(home.join("cm-profile.json")).unwrap(), old);
+                std::fs::remove_dir_all(home).unwrap();
+                std::fs::remove_dir_all(source).unwrap();
+            }
         }
     }
 

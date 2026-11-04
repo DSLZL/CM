@@ -4,6 +4,18 @@
   "repository": "DSLZL/CM-build-linux-x64",
   "files": [
     {
+      "source": "ci/scripts/distribution_provenance.py",
+      "destination": ".github/scripts/distribution_provenance.py"
+    },
+    {
+      "source": "crates/cm/src/distribution-policy.json",
+      "destination": ".github/scripts/distribution-policy.json"
+    },
+    {
+      "source": "crates/cm/src/distribution-root.jsonl",
+      "destination": ".github/scripts/distribution-root.jsonl"
+    },
+    {
       "source": "ci/worker/build.yml",
       "destination": ".github/workflows/build.yml"
     },
