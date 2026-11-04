@@ -259,6 +259,9 @@ def audit_network(lines, directory, ports, kernel_routes=(), tcp_connections=())
     connected_tcp = set(tcp_connections)
     # Per-thread trace files do not preserve cross-thread creation/send order.
     for line in lines:
+        connection = re.fullmatch(r'\d+\s+connect\(\d+<UNIX-STREAM:\[(\d+)\]>, \{sa_family=AF_UNIX, sun_path="([^"]+)"\}, \d+\) = 0', line)
+        if connection and Path(connection[2]).is_relative_to(directory) and ".." not in Path(connection[2]).parts:
+            unix_connections.add(connection[1])
         if re.match(r'\d+\s+socketpair\(', line):
             fd = r'\d+<UNIX(?:-STREAM)?:\[(\d+)(?:->(\d+))?\]>'
             pair = re.fullmatch(r'\d+\s+socketpair\(AF_UNIX, SOCK_STREAM(?:\|SOCK_(?:CLOEXEC|NONBLOCK))*, 0, \['
@@ -291,7 +294,6 @@ def audit_network(lines, directory, ports, kernel_routes=(), tcp_connections=())
                 if scoped:
                     inode = re.fullmatch(r'UNIX(?:-[A-Z]+)?:\[(\d+)[^\]]*\]', descriptor)
                     assert inode, "Missing Unix socket identity: " + line
-                    unix_connections.add(inode[1])
             else:
                 port = re.search(r'sin6?_port=htons\(([0-9]+)\)', address[1])
                 local = 'inet_addr("127.0.0.1")' in address[1] or 'inet_pton(AF_INET6, "::1",' in address[1]
@@ -404,7 +406,8 @@ def check_network_audit():
     audit_network([connect, send, tcp, *complete_syscalls(split), sanitized], directory, {"8080"})
     bare_send = redact_syscalls(send).replace("41->42", "41")
     audit_network([connect, bare_send], directory, set())
-    audit_network([connect, bare_send.replace("1 sendto", "2 sendto")], directory, set())
+    audit_network([bare_send, connect], directory, set())
+    audit_network([bare_send.replace("1 sendto", "2 sendto"), connect], directory, set())
     bare_pair = pair.replace("51->52", "51").replace("52->51", "52")
     bare_ipc = sanitized.replace("51->52", "51")
     audit_network([bare_pair, bare_ipc], directory, set())
@@ -462,6 +465,9 @@ def check_network_audit():
             continue
         raise AssertionError("Network audit accepted an unknown Netlink peer")
     for unknown in ([send], [bare_send], [connect, bare_send.replace("[41]", "[43]")],
+                    [connect.replace(" = 0", " = -1 ECONNREFUSED (Connection refused)"), bare_send],
+                    [connect.replace("/fixture/", "/fixture/../outside/"), bare_send],
+                    [connect.replace("UNIX-STREAM", "UNIX-DGRAM"), bare_send],
                     [connect, send.replace("41->42", "43->42")],
                     [bare_ipc], [bare_pair, bare_ipc.replace('[51]', '[53]')],
                     [other_thread.replace('[51]', '[53]'), bare_pair],
