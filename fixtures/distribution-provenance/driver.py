@@ -279,6 +279,7 @@ def case_stale():
 
 
 def case_digests():
+    PROFILE.mkdir(mode=0o700)
     values = {}
     for owner in ("a", "b"):
         name = "sdk-" + owner
@@ -301,11 +302,13 @@ def case_digests():
 
 def case_compatibility():
     verified = verified_subject("sdk-a")
+    install(PROFILE)
     old = INPUTS / "upgrade-baseline/host/bin/codex"
     assert old.is_file() and distribution.sha(old) != distribution.sha(BINARY)
     incompatible = command(PROFILE / "old-host", "install", INPUTS / "mods/s01/a", binary=old, good=False)
-    assert any(word in incompatible["stderr"].lower() for word in ("compat", "abi", "capability", "host api")), incompatible
-    install(PROFILE)
+    diagnostic = json.loads(incompatible["stderr"].splitlines()[0])
+    assert diagnostic["code"] == "compatibility" and diagnostic["already_native_executed"] is False, incompatible
+    assert state(PROFILE / "old-host") is None
     before = state(PROFILE)
     source = WORK / "bad-abi"
     shutil.copytree(INPUTS / "mods/s01/b", source)
@@ -354,7 +357,8 @@ def case_legacy():
     assert value["mods"]["sdk-a"]["distribution"]["status"] == "unverified_provenance"
     install(PROFILE)
     assert command(PROFILE, "list")["mods"]["sdk-a"]["distribution"]["status"] == "verified_provenance"
-    command(PROFILE, "scan")
+    scanned = command(PROFILE, "launch", "--", "cm", "--home", PROFILE, "list")
+    assert scanned["mods"]["sdk-a"]["distribution"]["status"] == "verified_provenance"
     assert state(PROFILE)[1]["provenance"]["sdk-a"]
     accepted = state(PROFILE)
     previous_generation = json.loads(accepted[0])["generation"]
