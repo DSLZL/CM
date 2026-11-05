@@ -307,7 +307,8 @@ def case_compatibility():
     assert old.is_file() and distribution.sha(old) != distribution.sha(BINARY)
     incompatible = command(PROFILE / "old-host", "install", INPUTS / "mods/s01/a", binary=old, good=False)
     diagnostic = json.loads(incompatible["stderr"].splitlines()[0])
-    assert diagnostic["code"] == "compatibility" and diagnostic["already_native_executed"] is False, incompatible
+    # The frozen pre-2.3 Host rejects this valid newer manifest while parsing.
+    assert diagnostic["code"] == "manifest_parse" and diagnostic["already_native_executed"] is False, incompatible
     assert state(PROFILE / "old-host") is None
     before = state(PROFILE)
     source = WORK / "bad-abi"
