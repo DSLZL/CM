@@ -260,6 +260,7 @@ def case_proof():
         assert state(PROFILE) is None
     path = changed_receipt("unknown-schema", lambda row: row.update(schema_version=2))
     results.append(install(PROFILE, receipt=path, good=False))
+    assert len(results) == 0, "CM-S01 V17 controlled fixture failure"
     return report(3, "invalid_or_missing_signature_never_falls_back", results)
 
 

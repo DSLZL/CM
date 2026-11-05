@@ -1156,12 +1156,13 @@ def bind_tui_mcp_listener(record, metadata, bound_hosts, observer):
     return {"port": port, "listener_inode": inode, "accepted_socket_inodes": sorted(connections)}
 
 
-def check_distribution_verifier_binding():
+@ci_progress.case()
+def check_distribution_verifier_binding(source):
     with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as temporary:
         root = Path(temporary) / "rootfs"
         paths = ("fixture/s01-producer.json", "fixture/crates/cm/src/distribution-policy.json",
             "fixture/s01-bootstrap/identity.json", "inputs/host/cm-host.json")
-        policy = read(Path(os.environ["CM_SOURCE_DIR"]) / "crates/cm/src/distribution-policy.json")
+        policy = read(source / "crates/cm/src/distribution-policy.json")
         helper = b"audit parser fixture, not a cryptographic verifier"
         identity = hashlib.sha256(helper).hexdigest()
         values = ({}, policy, {"binary_sha256": identity},
@@ -1205,6 +1206,8 @@ def check_distribution_verifier_binding():
         for invalid in ([*calls[:2], calls[3], execution], [*calls, execution.replace('"--repo"', '"--unknown"')],
             [*calls, execution.replace(policy["workflow"], ".github/workflows/other.yml")],
             [*calls, execution.replace(policy["ref"], "refs/heads/other")],
+            [*calls, execution.replace(policy["issuer"], "https://issuer.invalid")],
+            [*calls, execution.replace('"--deny-self-hosted-runners", ', "")],
             [*calls, execution.replace('"--cert-identity"', '"--signer-workflow"')],
             [*calls, execution.replace('"/proc/2/fd/10/bundle.jsonl"', '"/work/unbound-bundle"')],
             [*calls[:5], *calls[6:], execution],
@@ -1859,6 +1862,7 @@ def consume():
     distribution_acceptance = None
     if producer["task_id"] == "CM-S01":
         import distribution_provenance
+        check_distribution_verifier_binding(inputs / "fixture")
         distribution_acceptance = {"schema_version": 1, "task_id": "CM-S01", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-S01-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(distribution_provenance.REPORTS, 1)]}
