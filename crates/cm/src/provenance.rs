@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Read;
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::{DirBuilderExt, symlink};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -144,6 +145,43 @@ fn parent_path(file: &File) -> PathBuf {
     format!("/proc/{}/fd/{}", std::process::id(), file.as_raw_fd()).into()
 }
 
+struct BundleAlias(crate::profile::Directory);
+
+impl BundleAlias {
+    fn new(bundle: &File) -> Result<Self, LoadError> {
+        let path = std::env::temp_dir().join(crate::profile::temporary("distribution"));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .map_err(|_| failure("cannot create private proof directory"))?;
+        let directory = match crate::profile::Directory::open(&path) {
+            Ok(directory) => directory,
+            Err(_) => {
+                let _ = std::fs::remove_dir(&path);
+                return Err(failure("cannot pin private proof directory"));
+            }
+        };
+        let alias = Self(directory);
+        // gh selects its bundle parser by extension; keep the bytes in the sealed snapshot.
+        symlink(parent_path(bundle), alias.path())
+            .map_err(|_| failure("cannot name sealed proof bundle"))?;
+        Ok(alias)
+    }
+
+    fn path(&self) -> PathBuf {
+        parent_path(&self.0.file).join("bundle.jsonl")
+    }
+}
+
+impl Drop for BundleAlias {
+    fn drop(&mut self) {
+        unsafe { libc::unlinkat(self.0.file.as_raw_fd(), c"bundle.jsonl".as_ptr(), 0) };
+        if self.0.check().is_ok() {
+            let _ = std::fs::remove_dir(&self.0.path);
+        }
+    }
+}
+
 fn output(mut stream: impl Read) -> std::io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     (&mut stream).take(LIMIT + 1).read_to_end(&mut bytes)?;
@@ -210,13 +248,15 @@ fn verify_signature(bytes: &[u8], bundle: &[u8], signer: &Signer) -> Result<Inpu
     let helper = loader::sealed_named_snapshot(&helper, c"cm-distribution-verifier")
         .map_err(|_| failure("cannot pin verifier"))?;
     let subject = loader::sealed_snapshot(bytes).map_err(|_| failure("cannot pin receipt"))?;
-    let bundle = loader::sealed_snapshot(bundle).map_err(|_| failure("cannot pin bundle"))?;
+    let bundle = loader::sealed_named_snapshot(bundle, c"cm-distribution-bundle")
+        .map_err(|_| failure("cannot pin bundle"))?;
     let roots = loader::sealed_snapshot(ROOT).map_err(|_| failure("cannot pin roots"))?;
+    let bundle_alias = BundleAlias::new(&bundle)?;
     let child = Command::new(parent_path(&helper))
         .args(["attestation", "verify"])
         .arg(parent_path(&subject))
         .arg("--bundle")
-        .arg(parent_path(&bundle))
+        .arg(bundle_alias.path())
         .arg("--custom-trusted-root")
         .arg(parent_path(&roots))
         .args([
@@ -365,6 +405,35 @@ pub(crate) fn verify_generation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundle_alias_keeps_sealed_bytes_and_cleans_up() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let bytes = b"sealed bundle bytes";
+        let bundle = loader::sealed_named_snapshot(bytes, c"cm-distribution-bundle").unwrap();
+        let alias = BundleAlias::new(&bundle).unwrap();
+        let path = alias.path();
+        let directory = alias.0.path.clone();
+        assert_eq!(path.extension().unwrap(), "jsonl");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(
+            std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert!(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .and_then(|mut file| file.write_all(b"changed"))
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        drop(alias);
+        assert!(!path.exists());
+        assert!(!directory.exists());
+    }
 
     fn signer() -> Signer {
         Signer {

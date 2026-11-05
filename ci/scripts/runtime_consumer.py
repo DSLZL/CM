@@ -1171,22 +1171,34 @@ def check_distribution_verifier_binding():
         for path in ("fixture/s01-bootstrap/gh", "inputs/host/codex-resources/gh"):
             (root / path).parent.mkdir(parents=True, exist_ok=True)
             (root / path).write_bytes(helper)
-        arguments = ["/proc/2/fd/5", "attestation", "verify", "/proc/2/fd/6", "--bundle", "/proc/2/fd/7",
-            "--custom-trusted-root", "/proc/2/fd/8", "--repo", policy["builder_repository"],
+        arguments = ["/proc/2/fd/5", "attestation", "verify", "/proc/2/fd/6", "--bundle", "/proc/2/fd/10/bundle.jsonl",
+            "--custom-trusted-root", "/proc/2/fd/9", "--repo", policy["builder_repository"],
             "--cert-identity", "https://github.com/" + policy["builder_repository"] + "/" + policy["workflow"] + "@" + policy["ref"],
             "--cert-oidc-issuer", policy["issuer"], "--source-ref", policy["ref"],
             "--source-digest", "a" * 40, "--signer-digest", "a" * 40, "--deny-self-hosted-runners", "--format", "json"]
         calls = ['10 getpid() = 2',
             '10 memfd_create("cm-distribution-verifier", MFD_CLOEXEC|MFD_ALLOW_SEALING) = 4',
             '10 fcntl(4, F_ADD_SEALS, F_SEAL_SEAL|F_SEAL_SHRINK|F_SEAL_GROW|F_SEAL_WRITE) = 0',
-            '10 openat(AT_FDCWD, "/proc/self/fd/4", O_RDONLY|O_CLOEXEC) = 5</memfd:cm-distribution-verifier (deleted)>']
+            '10 openat(AT_FDCWD, "/proc/self/fd/4", O_RDONLY|O_CLOEXEC) = 5</memfd:cm-distribution-verifier (deleted)>',
+            '10 memfd_create("cm-distribution-bundle", MFD_CLOEXEC|MFD_ALLOW_SEALING) = 7',
+            '10 fcntl(7, F_ADD_SEALS, F_SEAL_SEAL|F_SEAL_SHRINK|F_SEAL_GROW|F_SEAL_WRITE) = 0',
+            '10 openat(AT_FDCWD, "/proc/self/fd/7", O_RDONLY|O_CLOEXEC) = 8</memfd:cm-distribution-bundle (deleted)>',
+            '10 symlink("/proc/2/fd/8", "/proc/2/fd/10/bundle.jsonl") = 0']
         execution = '11 execve("/proc/2/fd/5", ' + json.dumps(arguments) + ', 0x1) = 0'
         assert bind_distribution_verifiers([*calls, execution], Path(temporary)) == {execution}
+        actual = [line.replace('getpid() =', 'getpid()                                =')
+            .replace('fcntl(4,', 'fcntl(4</memfd:cm-distribution-verifier>(deleted),')
+            .replace('fcntl(7,', 'fcntl(7</memfd:cm-distribution-bundle>(deleted),')
+            .replace(' (deleted)>', '>(deleted)') for line in calls]
+        assert bind_distribution_verifiers([*actual, execution], Path(temporary)) == {execution}
         for invalid in ([*calls[:2], calls[3], execution], [*calls, execution.replace('"--repo"', '"--unknown"')],
             [*calls, execution.replace(policy["workflow"], ".github/workflows/other.yml")],
             [*calls, execution.replace(policy["ref"], "refs/heads/other")],
             [*calls, execution.replace('"--cert-identity"', '"--signer-workflow"')],
-            [*calls, execution.replace('"/proc/2/fd/7"', '"/work/unbound-bundle"')]):
+            [*calls, execution.replace('"/proc/2/fd/10/bundle.jsonl"', '"/work/unbound-bundle"')],
+            [*calls[:5], *calls[6:], execution],
+            [*calls[:-1], calls[-1].replace('/proc/2/fd/8', '/proc/2/fd/9'), execution],
+            [*calls[:-1], calls[-1].replace('/proc/2/fd/8', '/proc/3/fd/8'), execution]):
             try:
                 bind_distribution_verifiers(invalid, Path(temporary))
             except AssertionError:
@@ -1223,23 +1235,32 @@ def bind_distribution_verifiers(calls, consumer_root):
     expected = identity["inputs"]["native"]["distribution_verifier"]["sha256"]
     assert sha(helper) == expected == bootstrap["binary_sha256"]
     assert sha(root / "fixture/s01-bootstrap/gh") == expected
-    inner, created, sealed, readonly = {}, set(), set(), set()
+    inner, created, sealed, readonly = {}, {}, set(), {}
     for line in calls:
         pid = line.split(None, 1)[0]
-        own = re.search(r'getpid\(\) = (\d+)', line)
+        own = re.search(r'getpid\(\)\s+=\s+(\d+)', line)
         if own:
             inner[pid] = own[1]
-        allocation = re.search(r'memfd_create\("cm-distribution-verifier", MFD_CLOEXEC\|MFD_ALLOW_SEALING\) = (\d+)', line)
+        allocation = re.search(r'memfd_create\("cm-distribution-(verifier|bundle)", MFD_CLOEXEC\|MFD_ALLOW_SEALING\) = (\d+)', line)
         if allocation:
-            created.add((pid, allocation[1]))
-        seal = re.search(r'fcntl\((\d+)(?:<[^>]+>)?, F_ADD_SEALS, ([A-Z_|]+)\) = 0', line)
+            created[pid, allocation[2]] = allocation[1]
+        seal = re.search(r'fcntl\((\d+)(?:<[^>]+>(?:\(deleted\))?)?, F_ADD_SEALS, ([A-Z_|]+)\) = 0', line)
         if seal and (pid, seal[1]) in created:
             assert set(seal[2].split("|")) == {"F_SEAL_WRITE", "F_SEAL_GROW", "F_SEAL_SHRINK", "F_SEAL_SEAL"}
             sealed.add((pid, seal[1]))
-        opened = re.search(r'openat\(AT_FDCWD(?:<[^>]*>)?, "/proc/self/fd/(\d+)", O_RDONLY\|O_CLOEXEC\) = (\d+)</memfd:cm-distribution-verifier \(deleted\)>', line)
-        if opened and (pid, opened[1]) in sealed:
-            readonly.add((pid, opened[2]))
-    descriptors = {(inner.get(pid, pid), fd) for pid, fd in readonly}
+        opened = re.search(r'openat\(AT_FDCWD(?:<[^>]*>)?, "/proc/self/fd/(\d+)", O_RDONLY\|O_CLOEXEC\) = (\d+)</memfd:cm-distribution-(verifier|bundle)(?: \(deleted\)>|>\(deleted\))', line)
+        if opened and (pid, opened[1]) in sealed and created[pid, opened[1]] == opened[3]:
+            readonly[pid, opened[2]] = opened[3]
+    descriptors = {kind: {(inner.get(pid, pid), fd) for (pid, fd), name in readonly.items() if name == kind}
+        for kind in ("verifier", "bundle")}
+    aliases = set()
+    for line in calls:
+        alias = re.search(r'symlink\("/proc/(\d+)/fd/(\d+)", "(/proc/\d+/fd/\d+/bundle[.]jsonl)"\) = 0', line)
+        if alias and (alias[1], alias[2]) in descriptors["bundle"]:
+            pid = line.split(None, 1)[0]
+            assert inner.get(pid, pid) == alias[1]
+            assert alias[3].startswith("/proc/" + alias[1] + "/fd/")
+            aliases.add(alias[3])
     accepted = set()
     for line in calls:
         execution = re.search(r'execve\("([^"]+)", (\[[^\n]*?\]), ', line)
@@ -1255,7 +1276,7 @@ def bind_distribution_verifiers(calls, consumer_root):
             continue
         assert line.endswith(" = 0"), "Unsuccessful verifier exec"
         if descriptor:
-            assert (descriptor[1], descriptor[2]) in descriptors, "Unbound sealed verifier executable"
+            assert (descriptor[1], descriptor[2]) in descriptors["verifier"], "Unbound sealed verifier executable"
             assert re.fullmatch(r"/proc/" + descriptor[1] + r"/fd/\d+", arguments[3])
         else:
             assert re.fullmatch(r"/fixture/s01-proofs/subjects/(?:cm-host|sdk-a|sdk-b)\.json", arguments[3])
@@ -1279,8 +1300,9 @@ def bind_distribution_verifiers(calls, consumer_root):
         assert re.fullmatch(r"[0-9a-f]{40}", options["--source-digest"])
         assert options["--source-digest"] == options["--signer-digest"]
         if descriptor:
-            assert all(re.fullmatch(r"/proc/" + descriptor[1] + r"/fd/\d+", options[key])
-                for key in ("--bundle", "--custom-trusted-root"))
+            assert options["--bundle"] in aliases
+            assert options["--bundle"].startswith("/proc/" + descriptor[1] + "/fd/")
+            assert re.fullmatch(r"/proc/" + descriptor[1] + r"/fd/\d+", options["--custom-trusted-root"])
         else:
             assert options["--bundle"] == "/fixture/s01-proofs/bundle.jsonl"
             assert options["--custom-trusted-root"] == "/fixture/s01-bootstrap/distribution-root.jsonl" or re.fullmatch(
@@ -1327,7 +1349,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
         path.write_text(text, encoding="utf-8")
         assert not re.search(r'\b(?:sendto|recvfrom)\([^\n]*?, "(?!<payload redacted>)', text)
         calls = observer.complete_syscalls(text.splitlines())
-        verifier_calls.extend(line for line in calls if re.match(r'\d+\s+(?:execve|memfd_create|fcntl|openat|getpid)\(', line))
+        verifier_calls.extend(line for line in calls if re.match(r'\d+\s+(?:execve|memfd_create|fcntl|openat|getpid|symlink)\(', line))
         process_calls.extend(line for line in calls if re.match(r'\d+\s+(?:execve|clone|clone3|fork|vfork|getpid|gettid)\(', line))
         bwrap_executions.update(observer.bound_bwrap_executions(calls,
             ("/inputs/host/codex-resources/bwrap", "/work/m03/process/独立 Host/codex-resources/bwrap",
