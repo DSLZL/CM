@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "cases": {
+    "versions": {
+      "support_line": "GNU Linux x64",
+      "maintenance_years": null,
+      "stable_abi": [
+        "1.0",
+        "2.0",
+        "2.1",
+        "2.2"
+      ],
+      "experimental_abi": [
+        "2.3"
+      ],
+      "dimensions": [
+        "artifact",
+        "host_api",
+        "abi",
+        "capability",
+        "manifest",
+        "protocol",
+        "state",
+        "target",
+        "hook"
+      ],
+      "breaking_change": "new major or entry; versioned capability name",
+      "semver_implies_compatibility": false
+    },
+    "contracts": {
+      "sections": [
+        {
+          "id": "legacy-v1",
+          "abi": "1.0",
+          "entry": "cm_mod_entry_v1",
+          "host_size": 32,
+          "mod_size": 72,
+          "capabilities": [
+            "core.tool_parallel_eligibility.v1"
+          ],
+          "contract": "synchronous",
+          "maturity": "stable"
+        },
+        {
+          "id": "compose-v20",
+          "abi": "2.0",
+          "entry": "cm_mod_entry_v2",
+          "host_size": 56,
+          "mod_size": 64,
+          "capabilities": [
+            "core.tool_parallel_eligibility.compose.v1"
+          ],
+          "contract": "synchronous-next",
+          "maturity": "stable"
+        },
+        {
+          "id": "output-v21",
+          "abi": "2.1",
+          "entry": "cm_mod_entry_v2",
+          "host_size": 80,
+          "mod_size": 96,
+          "capabilities": [
+            "core.exec_output_limit.v1"
+          ],
+          "contract": "synchronous-next",
+          "maturity": "stable"
+        },
+        {
+          "id": "runtime-v22",
+          "abi": "2.2",
+          "entry": "cm_mod_entry_v2",
+          "host_size": 88,
+          "mod_size": 136,
+          "capabilities": [
+            "runtime.lifecycle.v1",
+            "runtime.tool.v1",
+            "runtime.context_section.v1",
+            "core.turn_sampling_budget.v1",
+            "tui.submit_review.v1",
+            "core.turn_tool_concurrency.v1"
+          ],
+          "contract": "request-runtime",
+          "maturity": "stable"
+        },
+        {
+          "id": "state-files",
+          "abi": "2.2",
+          "entry": "cm_mod_entry_v2",
+          "host_size": 88,
+          "mod_size": 136,
+          "capabilities": [
+            "state.files.v1"
+          ],
+          "contract": "filesystem",
+          "maturity": "stable"
+        }
+      ],
+      "experimental": {
+        "abi": "2.3",
+        "entry": "cm_mod_entry_v2",
+        "host_size": 96,
+        "mod_size": 136,
+        "continuation_size": 48,
+        "nested_runtime_abi": "2.2",
+        "capabilities": [
+          "core.tool_continuation.v1",
+          "core.response_stream_observe.v1",
+          "cli.command.v1",
+          "tui.command.v1"
+        ],
+        "contract": "request-runtime",
+        "maturity": "experimental"
+      },
+      "contracts": [
+        "synchronous",
+        "synchronous-next",
+        "request-runtime",
+        "filesystem"
+      ],
+      "required_evidence": [
+        "p04",
+        "m02",
+        "m04",
+        "g01",
+        "g06"
+      ]
+    },
+    "zero-mod": {
+      "scope": "same CM Host; Embedded exec; controlled provider and builtin exec_command",
+      "compare_to": "disabled restart",
+      "upstream_byte_equality": false,
+      "custom_host_differences": [
+        "CM management CLI",
+        "RuntimePlan and native loader",
+        "ABI services and prepared slots",
+        "patched source and lockfiles",
+        "packaged helpers"
+      ]
+    },
+    "abc": {
+      "scope": "one Embedded TUI process; Y review, sampling budget, typed tool concurrency policy",
+      "owners": [
+        "org.example.turn-budget",
+        "org.example.review-before-send",
+        "org.example.tool-concurrency"
+      ],
+      "budget": 2,
+      "full_program_integration": false
+    },
+    "conflict": {
+      "scope": "duplicate global sampling budget resource; plan rejects before native load"
+    },
+    "disable": {
+      "scope": "installed A disabled before fresh Embedded exec; no native Mod callbacks"
+    },
+    "labels": {
+      "levels": [
+        "declared",
+        "planned",
+        "compiled",
+        "contract-tested",
+        "platform-verified"
+      ],
+      "maturities": [
+        "stable",
+        "experimental"
+      ],
+      "platform_verified_requires": [
+        "exact_identity",
+        "environment",
+        "behavior_pass",
+        "zero_build",
+        "execution_origin"
+      ],
+      "changed_bytes_inherit": false
+    },
+    "boundaries": {
+      "upgrade": "G05 pinned H0 to current H1, A/B/AB only",
+      "exact_host": "build ID + ELF + qualification map",
+      "unsupported": [
+        "other platforms",
+        "arbitrary L4 hooks",
+        "hot unload",
+        "native sandbox",
+        "full program acceptance"
+      ],
+      "release_ready": false
+    }
+  }
+}

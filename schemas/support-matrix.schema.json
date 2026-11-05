@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/DSLZL/CM/blob/main/schemas/support-matrix.schema.json",
+  "title": "CM finite runtime support evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_id",
+    "status",
+    "generated_at",
+    "qualification",
+    "production_origin",
+    "rows",
+    "release_ready"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "task_id": {
+      "const": "CM-S02"
+    },
+    "status": {
+      "const": "pass"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "qualification": {
+      "type": "object"
+    },
+    "production_origin": {
+      "type": "object"
+    },
+    "release_ready": {
+      "const": false
+    },
+    "rows": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/row"
+      }
+    }
+  },
+  "$defs": {
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "level",
+        "maturity",
+        "kind",
+        "scope",
+        "identity",
+        "environment",
+        "interfaces",
+        "steps",
+        "evidence",
+        "exclusions",
+        "not_run_reason"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "level": {
+          "enum": [
+            "declared",
+            "planned",
+            "compiled",
+            "contract-tested",
+            "platform-verified"
+          ]
+        },
+        "maturity": {
+          "enum": [
+            "stable",
+            "experimental"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "sdk",
+            "exact-host",
+            "boundary"
+          ]
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identity": {
+          "type": "object"
+        },
+        "environment": {
+          "type": "object"
+        },
+        "interfaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "steps": {
+          "type": "object"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "not_run_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "size"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

@@ -220,3 +220,10 @@ docs/distribution.md
 fixtures/distribution-provenance/acceptance.sh
 fixtures/distribution-provenance/driver.py
 schemas/release-receipt.schema.json
+docs/versioning-policy.md
+docs/support-matrix.md
+schemas/support-matrix.schema.json
+ci/scripts/support_policy.py
+fixtures/compatibility-policy/acceptance.sh
+fixtures/compatibility-policy/driver.py
+fixtures/compatibility-policy/policy.json

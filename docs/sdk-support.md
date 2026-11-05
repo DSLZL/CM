@@ -1,7 +1,9 @@
-# 实验性 SDK 接入面（CM-G06 候选）
+# 实验性 SDK 接入面（CM-G06）
 
-本文描述 Host API `0.11.0` / ABI `2.3` 的候选实现。七项 G06 验收均为
-`not_run`；当前没有通过编译、原生回归或独立 Actions 验收的结论。
+本文描述 Host API `0.11.0` / ABI `2.3` 的实验性实现。七项有限 G06 验收已由
+[独立 Linux x64 R34](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/41759600155)
+复核；保留原生执行及复用来源，不扩大为任意后端或完整父项目验收。
+版本承诺和当前证据等级见 [版本政策](versioning-policy.md) 与 [支持矩阵](support-matrix.md)。
 原有 [ABI 2.2 SDK](runtime-sdk.md) 与作者模板继续使用原来的导出和协商接口。
 
 ## 能力和版本

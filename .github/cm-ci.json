@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "configured": true,
-  "task_id": "CM-S01",
+  "task_id": "CM-S02",
   "required_checks": [
-    "CM-S01-AC01",
-    "CM-S01-AC02",
-    "CM-S01-AC03",
-    "CM-S01-AC04",
-    "CM-S01-AC05"
+    "CM-S02-AC01",
+    "CM-S02-AC02",
+    "CM-S02-AC03",
+    "CM-S02-AC04",
+    "CM-S02-AC05"
   ],
   "target": "x86_64-unknown-linux-gnu",
   "rust_toolchain": "1.95.0",
@@ -37,7 +37,7 @@
       "no_default_features": false
     }
   ],
-  "acceptance_script": "fixtures/distribution-provenance/acceptance.sh",
+  "acceptance_script": "fixtures/compatibility-policy/acceptance.sh",
   "cargo_config_files": [
     "adapters/codex-e4568a3/host/codex-rs/.cargo/config.toml"
   ],

@@ -135,7 +135,7 @@ def main():
     receipt_record = exact(receipt_name)
     source_config = api("repos/" + source + "/contents/.github/cm-ci.json?ref=" + source_sha)
     task_id = json.loads(base64.b64decode(source_config["content"]))["task_id"]
-    consumer_required = task_id in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01")
+    consumer_required = task_id in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01", "CM-S02")
     consumer_artifact = exact("cm-linux-x64-consumer-artifacts-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
     jobs = get_run(run_path + "/attempts/" + str(run["run_attempt"]) + "/jobs?per_page=100")["jobs"]
     producer_jobs = [job for job in jobs if job["name"] in ("build-read / linux-x64", "build-write / linux-x64") and job["conclusion"] == "success"]
@@ -206,7 +206,7 @@ def main():
                     (worker, test_build["workflow_sha"], worker_sha)):
                 if api("repos/" + repository + "/compare/" + previous + "..." + current)["status"] not in ("ahead", "identical"):
                     raise RuntimeError("Test-build origin is not an ancestor of the requested source/workflow")
-    if task_id == "CM-S01":
+    if task_id in ("CM-S01", "CM-S02"):
         from worker_policy import artifact_binding
         signed = receipt.get("distribution") or {}
         signing_jobs = [job for job in jobs if job["name"] == "attest-distribution"]

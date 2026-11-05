@@ -1,8 +1,9 @@
 # 原生运行时 SDK（ABI 2.2）
 
 实验性 ABI 2.3 候选的工具 continuation、响应 metadata ACK 和 CLI/TUI 命令桥见
-[SDK 支持边界](sdk-support.md)。G06 尚未执行独立 Actions 验收；本文的既有 2.2
-导出、协商与模板不随该候选改写。
+[SDK 支持边界](sdk-support.md)。G06 的有限 Linux x64 验收已通过，仍为 experimental；
+本文的既有 2.2 导出、协商与模板继续保留。版本承诺及每个组合的证据等级见
+[版本政策](versioning-policy.md) 和 [支持矩阵](support-matrix.md)。
 
 本增量已通过独立 Linux x64 [M02 验收](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/40514837331)（源码 `825c11e`）。
 当前支持面为本地 Embedded
@@ -28,7 +29,7 @@ CM-G02A 新增 API 0.7.0 的 `core.turn_sampling_budget.v1` / `sampling_budget`�
 沿用 ABI 2.2 布局，使用独占全局预算资源，六项独立 Linux x64 验收已通过。
 策略、错误、恢复限制、独立检查点及实际验收来源见 [主采样预算](turn-budget.md)。
 
-CM-G02B 的待验收实现新增 API 0.8.0 的 `tui.submit_review.v1` / `submit_review`，
+CM-G02B 新增 API 0.8.0 的 `tui.submit_review.v1` / `submit_review`，
 沿用 ABI 2.2 布局，专用于本地 Embedded TUI 的 UI owner。它不扩展上述 Core
 贡献的后端支持面，完整输入、Y 确认和六阶段验收见 [发送前审核](review-before-send.md)。
 
@@ -93,6 +94,6 @@ Core 在 thread 发布、turn 启动、工具执行和模型请求前检查。�
 该测试可执行文件单独记录 SHA，不冒充打包 CLI 的 H。所有报告保留失败证据，
 M02 通过不表示完整 Core suite、其他平台或产品发布就绪。
 
-## G03 候选扩展
+## G03 扩展
 
-`core.turn_tool_concurrency.v1` 使用 ABI 2.2 的既有请求与 scope，新增 kind 11、event 14，无结构布局变更。策略事件使用真实 thread/turn handle，须由 SDK 校验；许可和队列留在 Host。入口、None/steer、Code Mode 和未覆盖路径见 [工具并发契约](tool-concurrency.md)。G03 仍待独立 Actions 验收。
+`core.turn_tool_concurrency.v1` 使用 ABI 2.2 的既有请求与 scope，新增 kind 11、event 14，无结构布局变更。策略事件使用真实 thread/turn handle，须由 SDK 校验；许可和队列留在 Host。入口、None/steer、Code Mode 和未覆盖路径见 [工具并发契约](tool-concurrency.md)。单项验收与 S02 有限 ABC、父项目完整集成分别记录。
