@@ -1514,6 +1514,7 @@ fn rollback(
     }
     transaction.next.installed = target.installed;
     transaction.next.enabled = target.enabled;
+    transaction.next.provenance = target.provenance;
     transaction.next.consumed.extend(target.consumed);
     transaction
         .state_guard

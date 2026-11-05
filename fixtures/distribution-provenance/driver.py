@@ -373,10 +373,17 @@ def case_legacy():
     command(PROFILE, "replace", "sdk-a", replacement, "--from", accepted[1]["installed"]["sdk-a"])
     assert "sdk-a" not in state(PROFILE)[1].get("provenance", {})
     assert command(PROFILE, "list")["mods"]["sdk-a"]["distribution"]["status"] == "unverified_provenance"
+    development_generation = json.loads(state(PROFILE)[0])["generation"]
     command(PROFILE, "rollback", previous_generation)
     restored = command(PROFILE, "list")
     assert restored["mods"]["sdk-a"]["distribution"]["status"] == "verified_provenance"
+    assert state(PROFILE)[1]["provenance"] == accepted[1]["provenance"]
+    command(PROFILE, "rollback", development_generation)
+    development = command(PROFILE, "list")
+    assert development["mods"]["sdk-a"]["distribution"]["status"] == "unverified_provenance"
+    assert "sdk-a" not in state(PROFILE)[1].get("provenance", {})
     return report(3, "development_packages_and_explicit_promotion", {"legacy": value, "rollback": restored,
+        "rollback_development": development,
         "scan_launch": {"command": scanned.args, "return_code": scanned.returncode,
             "stdout": scanned.stdout, "stderr": scanned.stderr}})
 
