@@ -358,8 +358,12 @@ def case_legacy():
     assert value["mods"]["sdk-a"]["distribution"]["status"] == "unverified_provenance"
     install(PROFILE)
     assert command(PROFILE, "list")["mods"]["sdk-a"]["distribution"]["status"] == "verified_provenance"
-    scanned = command(PROFILE, "launch", "--", "cm", "--home", PROFILE, "list")
-    assert scanned["mods"]["sdk-a"]["distribution"]["status"] == "verified_provenance"
+    scanned = subprocess.run([str(BINARY), "cm", "--home", str(PROFILE), "launch", "--", "--version"],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(WORK), "CODEX_HOME": str(PROFILE),
+            "LANG": "C.UTF-8", "GH_NO_UPDATE_NOTIFIER": "1"},
+        cwd=WORK, capture_output=True, text=True, timeout=120)
+    assert scanned.returncode == 0, scanned.stderr
+    assert command(PROFILE, "list")["mods"]["sdk-a"]["distribution"]["status"] == "verified_provenance"
     assert state(PROFILE)[1]["provenance"]["sdk-a"]
     accepted = state(PROFILE)
     previous_generation = json.loads(accepted[0])["generation"]
@@ -372,7 +376,9 @@ def case_legacy():
     command(PROFILE, "rollback", previous_generation)
     restored = command(PROFILE, "list")
     assert restored["mods"]["sdk-a"]["distribution"]["status"] == "verified_provenance"
-    return report(3, "development_packages_and_explicit_promotion", {"legacy": value, "rollback": restored})
+    return report(3, "development_packages_and_explicit_promotion", {"legacy": value, "rollback": restored,
+        "scan_launch": {"command": scanned.args, "return_code": scanned.returncode,
+            "stdout": scanned.stdout, "stderr": scanned.stderr}})
 
 
 def case_bootstrap():
