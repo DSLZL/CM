@@ -43,6 +43,7 @@ def case_versions():
     assert value["maintenance_years"] is None and not value["semver_implies_compatibility"]
     assert value["stable_abi"] == ["1.0", "2.0", "2.1", "2.2"] and value["experimental_abi"] == ["2.3"]
     assert len(value["dimensions"]) == len(set(value["dimensions"])) == 9
+    assert set(value["dimensions"]) == {"artifact", "host_api", "abi", "capability", "manifest", "protocol", "state", "target", "hook"}
     schema = mod_manifest.read(Path("/fixture/schemas/support-matrix.schema.json"))
     assert schema["properties"]["task_id"] == {"const": "CM-S02"}
     return report(0, "independent_version_dimensions", value)
