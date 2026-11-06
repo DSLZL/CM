@@ -79,13 +79,14 @@ def changed_receipt(name, update):
     return path
 
 
-def verified_subject(name, *, helper=None, roots=None, good=True):
+def verified_subject(name, *, helper=None, roots=None, good=True, receipt=None, bundle=None):
     helper = helper or BOOTSTRAP / "gh"
     roots = roots or BOOTSTRAP / "distribution-root.jsonl"
-    receipt = PROOFS / "subjects" / (name + ".json")
+    receipt = receipt or PROOFS / "subjects" / (name + ".json")
+    bundle = bundle or PROOFS / "bundle.jsonl"
     value = distribution.read(receipt)
     policy = distribution.read(POLICY)
-    args = [str(helper), "attestation", "verify", str(receipt), "--bundle", str(PROOFS / "bundle.jsonl"),
+    args = [str(helper), "attestation", "verify", str(receipt), "--bundle", str(bundle),
         "--custom-trusted-root", str(roots), "--repo", policy["builder_repository"],
         "--cert-identity", "https://github.com/" + policy["builder_repository"] + "/" + policy["workflow"] + "@" + policy["ref"],
         "--cert-oidc-issuer", policy["issuer"], "--source-ref", policy["ref"],

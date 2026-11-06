@@ -66,7 +66,7 @@ jobs:
           missing = [p for p in paths if p not in tracked or not Path(p).is_file() or Path(p).is_symlink()]
           assert not missing, f"Required CI files missing from this commit: {missing}"
           worker = json.loads(Path("ci/worker-files.json").read_text(encoding="utf-8"))
-          assert len(worker["files"]) == 11
+          assert len(worker["files"]) == 12
           assert len({row["destination"] for row in worker["files"]}) == len(worker["files"])
           assert all(row["source"] in paths for row in worker["files"]), "Worker inputs must be published"
           cfg = json.loads(Path(".github/cm-ci.json").read_text())
@@ -79,7 +79,7 @@ jobs:
                   "DSLZL/CM", "DSLZL/CM-build-linux-x64", 41431503923, 1)
               assert all(baseline[key]["id"] > 0 and len(baseline[key]["digest"]) == 64
                          for key in ("product_artifact", "input_artifact"))
-          if cfg["task_id"] in ("CM-G06", "CM-S01", "CM-S02"):
+          if cfg["task_id"] in ("CM-G06", "CM-S01", "CM-S02", "CM-S03"):
               if cfg["task_id"] == "CM-G06":
                   assert cfg["required_checks"] == [f"CM-G06-AC{i:02}" for i in range(1, 8)]
                   assert cfg["acceptance_script"] == "fixtures/sdk-seams/acceptance.sh"
@@ -93,9 +93,10 @@ jobs:
                   assert author["workspace"] == {} and author["lib"]["crate-type"] == ["cdylib"]
                   assert sorted(row["name"] for row in lock["package"]) == ["cm-abi", "cm-sdk", "cm-sdk-seams-" + owner]
 
-          if cfg["task_id"] in ("CM-S01", "CM-S02"):
-              assert cfg["required_checks"] == [f'{cfg["task_id"]}-AC{i:02}' for i in range(1, 6)]
-              fixture = "compatibility-policy" if cfg["task_id"] == "CM-S02" else "distribution-provenance"
+          if cfg["task_id"] in ("CM-S01", "CM-S02", "CM-S03"):
+              checks = 6 if cfg["task_id"] == "CM-S03" else 5
+              assert cfg["required_checks"] == [f'{cfg["task_id"]}-AC{i:02}' for i in range(1, checks + 1)]
+              fixture = {"CM-S01": "distribution-provenance", "CM-S02": "compatibility-policy", "CM-S03": "binary-index"}[cfg["task_id"]]
               assert cfg["acceptance_script"] == f"fixtures/{fixture}/acceptance.sh"
               policy = json.loads(Path("crates/cm/src/distribution-policy.json").read_text())
               assert (policy["source_repository_id"], policy["builder_repository_id"]) == (1430833890, 1430833977)
@@ -107,9 +108,10 @@ jobs:
               for path in ("crates/cm/src/provenance.rs", "crates/cm/src/distribution-policy.json", "crates/cm/src/distribution-root.jsonl"):
                   assert path in cfg["native_identity_files"]
           scripts = [Path("ci/scripts") / (name + ".py") for name in
-                     ("record_run", "worker_policy", "dispatch_build", "acceptance_cache", "retry", "runtime_cases", "sdk_seams", "distribution_provenance", "support_policy")]
+                     ("record_run", "worker_policy", "dispatch_build", "acceptance_cache", "retry", "runtime_cases", "sdk_seams", "distribution_provenance", "support_policy", "binary_index")]
           scripts.append(Path("fixtures/distribution-provenance/driver.py"))
           scripts.append(Path("fixtures/compatibility-policy/driver.py"))
+          scripts.append(Path("fixtures/binary-index/driver.py"))
           if cfg["task_id"] == "CM-S02":
               support = json.loads(Path("fixtures/compatibility-policy/policy.json").read_text())
               matrix = json.loads(Path("schemas/support-matrix.schema.json").read_text())

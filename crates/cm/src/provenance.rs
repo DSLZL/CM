@@ -30,23 +30,23 @@ fn sha(value: &str, length: usize) -> bool {
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Source {
-    repository: String,
-    repository_id: u64,
-    sha: String,
+pub(crate) struct Source {
+    pub repository: String,
+    pub repository_id: u64,
+    pub sha: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Signer {
-    repository: String,
-    repository_id: u64,
-    workflow: String,
-    workflow_sha: String,
-    run_id: u64,
-    attempt: u64,
+pub(crate) struct Signer {
+    pub repository: String,
+    pub repository_id: u64,
+    pub workflow: String,
+    pub workflow_sha: String,
+    pub run_id: u64,
+    pub attempt: u64,
 }
 
 #[derive(Deserialize)]
@@ -229,6 +229,37 @@ fn collect_verifier(mut child: Child, timeout: Duration) -> Result<Vec<u8>, Load
     Ok(stdout)
 }
 
+pub(crate) fn verify_index_statement(
+    bytes: &[u8],
+    bundle: &[u8],
+    domain: &str,
+    source: &Source,
+    signer: &Signer,
+    policy_sha256: &str,
+) -> Result<InputPin, LoadError> {
+    let policy: Value = serde_json::from_str(POLICY).expect("compiled policy");
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|_| failure("invalid signed index statement"))?;
+    if !matches!(domain, "cm.mod-index.v1" | "cm.index-qualification.v1")
+        || value["domain"] != domain
+        || value["schema_version"] != 1
+        || crate::config::json_bytes(&value) != bytes
+        || Some(source.repository.as_str()) != policy["source_repository"].as_str()
+        || Some(source.repository_id) != policy["source_repository_id"].as_u64()
+        || !sha(&source.sha, 40)
+        || Some(signer.repository.as_str()) != policy["builder_repository"].as_str()
+        || Some(signer.repository_id) != policy["builder_repository_id"].as_u64()
+        || Some(signer.workflow.as_str()) != policy["workflow"].as_str()
+        || !sha(&signer.workflow_sha, 40)
+        || signer.run_id == 0
+        || signer.attempt == 0
+        || policy_sha256 != loader::hash(POLICY.as_bytes())
+    {
+        return Err(failure("index statement violates the fixed distribution policy"));
+    }
+    verify_signature(bytes, bundle, signer)
+}
+
 fn verify_signature(bytes: &[u8], bundle: &[u8], signer: &Signer) -> Result<InputPin, LoadError> {
     if bundle.is_empty() || bundle.len() as u64 > LIMIT {
         return Err(failure("missing or oversized proof bundle"));
@@ -331,6 +362,21 @@ fn verify_output(stdout: &[u8], bytes: &[u8], signer: &Signer) -> Result<(), Loa
 }
 
 impl Proof {
+    pub(crate) fn verify_archive(
+        archive: &[u8],
+        receipt_bytes: &[u8],
+        bundle: &[u8],
+    ) -> Result<InputPin, LoadError> {
+        let parsed = receipt(receipt_bytes)?;
+        if parsed.role != "mod"
+            || parsed.artifact.archive_size != archive.len() as u64
+            || parsed.artifact.archive_sha256 != loader::hash(archive)
+        {
+            return Err(failure("signed Mod archive identity differs"));
+        }
+        verify_signature(receipt_bytes, bundle, &parsed.signer)
+    }
+
     pub(crate) fn capture(
         snapshot: &InstallationSnapshot,
         receipt_path: &Path,

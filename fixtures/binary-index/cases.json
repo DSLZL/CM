@@ -1,0 +1,281 @@
+{
+  "schema_version": 1,
+  "task_id": "CM-S03",
+  "cases": {
+    "index-envelope": {
+      "acceptance_id": "CM-S03-AC01",
+      "catalogs": [
+        "catalog"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "identity-conflict": {
+      "acceptance_id": "CM-S03-AC01",
+      "catalogs": [
+        "catalog",
+        "identity-conflict"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "namespace": {
+      "acceptance_id": "CM-S03-AC01",
+      "catalogs": [
+        "namespace"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "source-proof": {
+      "acceptance_id": "CM-S03-AC01",
+      "catalogs": [
+        "catalog"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "read-only": {
+      "acceptance_id": "CM-S03-AC02",
+      "catalogs": [
+        "catalog"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "missing-target": {
+      "acceptance_id": "CM-S03-AC02",
+      "catalogs": [
+        "missing-target"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "http-size": {
+      "acceptance_id": "CM-S03-AC02",
+      "catalogs": [],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "http-redirect": {
+      "acceptance_id": "CM-S03-AC02",
+      "catalogs": [],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "http-timeout": {
+      "acceptance_id": "CM-S03-AC02",
+      "catalogs": [],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "http-tls": {
+      "acceptance_id": "CM-S03-AC02",
+      "catalogs": [],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "archive-traversal": {
+      "acceptance_id": "CM-S03-AC03",
+      "catalogs": [
+        "traversal"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "archive-absolute": {
+      "acceptance_id": "CM-S03-AC03",
+      "catalogs": [
+        "absolute"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "archive-symlink": {
+      "acceptance_id": "CM-S03-AC03",
+      "catalogs": [
+        "symlink"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "archive-duplicate": {
+      "acceptance_id": "CM-S03-AC03",
+      "catalogs": [
+        "duplicate"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "archive-case-collision": {
+      "acceptance_id": "CM-S03-AC03",
+      "catalogs": [
+        "case-collision"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "archive-entry-limit": {
+      "acceptance_id": "CM-S03-AC03",
+      "catalogs": [
+        "entry-limit"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "archive-byte-limit": {
+      "acceptance_id": "CM-S03-AC03",
+      "catalogs": [
+        "byte-limit"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "archive-checksum": {
+      "acceptance_id": "CM-S03-AC03",
+      "catalogs": [
+        "catalog"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "plan-exact": {
+      "acceptance_id": "CM-S03-AC04",
+      "catalogs": [
+        "catalog"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": true
+    },
+    "plan-order": {
+      "acceptance_id": "CM-S03-AC04",
+      "catalogs": [
+        "catalog"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "plan-dependency": {
+      "acceptance_id": "CM-S03-AC04",
+      "catalogs": [
+        "dependency"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "plan-exclusive": {
+      "acceptance_id": "CM-S03-AC04",
+      "catalogs": [
+        "exclusive"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "plan-drift": {
+      "acceptance_id": "CM-S03-AC04",
+      "catalogs": [
+        "catalog"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "transaction-fault": {
+      "acceptance_id": "CM-S03-AC04",
+      "catalogs": [
+        "catalog"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "support-forgery": {
+      "acceptance_id": "CM-S03-AC05",
+      "catalogs": [
+        "catalog"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "support-exact": {
+      "acceptance_id": "CM-S03-AC05",
+      "catalogs": [
+        "catalog"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "support-update": {
+      "acceptance_id": "CM-S03-AC05",
+      "catalogs": [
+        "catalog",
+        "update"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": true
+    },
+    "offline-complete": {
+      "acceptance_id": "CM-S03-AC06",
+      "catalogs": [
+        "catalog"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": true
+    },
+    "offline-missing": {
+      "acceptance_id": "CM-S03-AC06",
+      "catalogs": [
+        "catalog"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    },
+    "refresh-running": {
+      "acceptance_id": "CM-S03-AC06",
+      "catalogs": [
+        "catalog",
+        "revoked"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": true,
+      "committed": true
+    },
+    "revoked-record": {
+      "acceptance_id": "CM-S03-AC06",
+      "catalogs": [
+        "catalog",
+        "revoked"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "native_execution": false,
+      "committed": false
+    }
+  }
+}

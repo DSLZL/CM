@@ -21,6 +21,7 @@ pub mod commands;
 pub mod config;
 mod diagnostics;
 mod hooks;
+pub mod index;
 pub mod launcher;
 mod loader;
 mod manifest;

@@ -1,0 +1,43 @@
+diff --git a/codex-rs/cli/Cargo.toml b/codex-rs/cli/Cargo.toml
+--- a/codex-rs/cli/Cargo.toml
++++ b/codex-rs/cli/Cargo.toml
+@@ -112,1 +112,2 @@
++reqwest = { workspace = true }
+ url = { workspace = true }
+diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
+--- a/codex-rs/Cargo.lock
++++ b/codex-rs/Cargo.lock
+@@ -2631,5 +2631,6 @@
+  "predicates",
+  "pretty_assertions",
+  "regex-lite",
++ "reqwest 0.12.28",
+  "serde",
+  "serde_json",
+diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
+--- a/codex-rs/cli/src/main.rs
++++ b/codex-rs/cli/src/main.rs
+@@ -1,4 +1,6 @@
+ use clap::Args;
+ #[path = "cm_commands.rs"]
+ mod cm_commands;
++#[path = "cm_index.rs"]
++mod cm_index;
+ use clap::CommandFactory;
+@@ -1036,3 +1038,5 @@
+ enum CmCommand {
++    /// Discover and install exact signed precompiled first-party Mods.
++    Index(cm_index::Args),
+     /// Run a command from the prechecked experimental SDK graph.
+     Run(cm_commands::Run),
+@@ -1236,3 +1240,4 @@
+             &command.command,
+-            CmCommand::Install { .. }
++            CmCommand::Index(_)
++                | CmCommand::Install { .. }
+                 | CmCommand::Replace { .. }
+@@ -1259,3 +1264,4 @@
+         let result = match &command.command {
++            CmCommand::Index(args) => cm_index::run(&home, args, &cm_options).await,
+             CmCommand::Run(command) => {
+                 cm_runtime::commands::run(

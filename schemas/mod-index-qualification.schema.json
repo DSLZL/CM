@@ -1,0 +1,465 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/DSLZL/CM/schemas/mod-index-qualification.schema.json",
+  "title": "CM exact post-consumer index qualification v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "domain": {
+      "const": "cm.index-qualification.v1"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "const": "DSLZL/CM"
+        },
+        "repository_id": {
+          "const": 1430833890
+        },
+        "sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "required": [
+        "repository",
+        "repository_id",
+        "sha"
+      ]
+    },
+    "signer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "const": "DSLZL/CM-build-linux-x64"
+        },
+        "repository_id": {
+          "const": 1430833977
+        },
+        "workflow": {
+          "const": ".github/workflows/build.yml"
+        },
+        "workflow_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "run_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "repository",
+        "repository_id",
+        "workflow",
+        "workflow_sha",
+        "run_id",
+        "attempt"
+      ]
+    },
+    "policy_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "record_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "build_id": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "executable_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "target": {
+          "const": "x86_64-unknown-linux-gnu"
+        },
+        "api_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,128}$"
+          },
+          "maxItems": 128,
+          "minItems": 0
+        },
+        "abis": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16
+          },
+          "maxItems": 8,
+          "minItems": 0
+        },
+        "patch_map_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prepared_slots": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,128}$"
+          },
+          "maxItems": 32,
+          "minItems": 0
+        }
+      },
+      "required": [
+        "build_id",
+        "executable_sha256",
+        "target",
+        "api_version",
+        "capabilities",
+        "abis",
+        "patch_map_sha256",
+        "prepared_slots"
+      ]
+    },
+    "abi_major": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "abi_minor_min": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9._-]{1,128}$"
+      },
+      "maxItems": 8,
+      "minItems": 1
+    },
+    "support_level": {
+      "enum": [
+        "sdk",
+        "exact_host",
+        "prepared_slot"
+      ]
+    },
+    "maturity": {
+      "enum": [
+        "stable",
+        "experimental"
+      ]
+    },
+    "consumer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "job_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "worker_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "image_os": {
+          "const": "ubuntu24"
+        },
+        "image_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "report": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+){0,15}$",
+              "maxLength": 512
+            },
+            "size": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16777216
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "path",
+            "size",
+            "sha256"
+          ]
+        },
+        "audit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+){0,15}$",
+              "maxLength": 512
+            },
+            "size": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16777216
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "path",
+            "size",
+            "sha256"
+          ]
+        }
+      },
+      "required": [
+        "run_id",
+        "attempt",
+        "job_id",
+        "source_sha",
+        "worker_sha",
+        "image_os",
+        "image_version",
+        "report",
+        "audit"
+      ]
+    },
+    "production_origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "workflow_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "run_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "run_attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "job": {
+          "enum": [
+            "build-read / linux-x64",
+            "build-write / linux-x64"
+          ]
+        },
+        "job_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "product_artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "size_in_bytes": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "digest",
+            "size_in_bytes"
+          ]
+        },
+        "input_artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "size_in_bytes": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "digest",
+            "size_in_bytes"
+          ]
+        }
+      },
+      "required": [
+        "source_sha",
+        "workflow_sha",
+        "run_id",
+        "run_attempt",
+        "request_id",
+        "job",
+        "job_id",
+        "product_artifact",
+        "input_artifact"
+      ]
+    },
+    "conditions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "const": "Embedded"
+        },
+        "target": {
+          "const": "x86_64-unknown-linux-gnu"
+        },
+        "cpu": {
+          "const": "x86-64"
+        },
+        "glibc_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "mods": {
+          "type": "object",
+          "maxProperties": 32,
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z0-9._-]{1,128}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "config_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state_contracts_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,128}$"
+          },
+          "maxItems": 32,
+          "minItems": 0
+        }
+      },
+      "required": [
+        "backend",
+        "target",
+        "cpu",
+        "glibc_version",
+        "mods",
+        "config_sha256",
+        "state_contracts_sha256",
+        "exclusions"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "domain",
+    "source",
+    "signer",
+    "policy_sha256",
+    "record_sha256",
+    "host",
+    "abi_major",
+    "abi_minor_min",
+    "capabilities",
+    "support_level",
+    "maturity",
+    "consumer",
+    "production_origin",
+    "conditions"
+  ]
+}

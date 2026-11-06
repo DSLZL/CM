@@ -6,6 +6,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use cm_abi::v2;
+use serde::Deserialize;
 use serde::Serialize;
 
 use crate::LoadError;
@@ -29,7 +30,8 @@ pub fn embedded_build_id() -> Result<String, LoadError> {
         .ok_or_else(|| LoadError::input("host_identity", "", "host_build_id"))
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HostIdentity {
     pub build_id: String,
     pub executable_sha256: String,

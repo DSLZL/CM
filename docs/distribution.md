@@ -24,6 +24,8 @@ The same paired flags apply to replace. Both flags are required together. Invali
 
 A legacy install without flags remains available for development and is reported as unverified_provenance. scan does not create trusted evidence. An explicit, successful verified install can associate proof with identical existing bytes. Immutable generation records retain receipt/bundle bytes, not a permanent trusted boolean. Listing, activation and runtime preparation revalidate the association against current object bytes and policy. New replacement bytes lose the old association.
 
+The candidate [official binary index](mod-discovery.md) uses separate `cm.mod-index.v1` and `cm.index-qualification.v1` signed domains. Index installs require paired raw archive and receipt evidence before extraction. An index origin signature alone cannot grant `platform_verified`; that label needs an exact, signed qualification issued after actual consumer checks and then consumed by a separate minimal verification job. Final receipt verification binds both consumer jobs and the qualification artifact. S03 acceptance remains pending independent Actions evidence.
+
 ## Provenance and native execution
 
 A verified source/signature is an origin statement. A candidate signature is not consumer acceptance or a release approval. ABI, capability, exact Host, CPU/glibc, native dependencies and state compatibility remain independent gates.

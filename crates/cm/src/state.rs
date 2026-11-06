@@ -287,6 +287,10 @@ impl Store {
     }
 
     fn open_mode(home: &Path, exclusive: bool, initialize: bool) -> Result<Self> {
+        Self::open_snapshot(home, exclusive, initialize, true)
+    }
+
+    fn open_snapshot(home: &Path, exclusive: bool, initialize: bool, acquire_lease: bool) -> Result<Self> {
         let child = |parent: &Directory, name: &str| {
             if initialize {
                 parent.child(name)
@@ -340,7 +344,7 @@ impl Store {
         } else {
             libc::LOCK_SH
         };
-        if unsafe { libc::flock(lease.as_raw_fd(), kind | libc::LOCK_NB) } != 0 {
+        if acquire_lease && unsafe { libc::flock(lease.as_raw_fd(), kind | libc::LOCK_NB) } != 0 {
             return Err(failure(
                 "state_busy",
                 "state is in use; exit CM runtimes before this operation",
@@ -968,6 +972,42 @@ pub(crate) fn exclusive(transaction: &mut Transaction) -> Result<()> {
         transaction.state_guard = Some(guard(&transaction.root.path, true)?);
     }
     Ok(())
+}
+
+/// A preview observes existing owned state without creating it or taking a runtime lease.
+pub(crate) fn preview(
+    home: &Path,
+    generation: &Generation,
+    contracts: &BTreeMap<String, Owner>,
+) -> Result<()> {
+    let Some(view) = &generation.state else {
+        return Ok(());
+    };
+    view.validate()?;
+    let store = Store::open_snapshot(home, false, false, false)?;
+    let tree = store.tree(view)?;
+    let capture = capture_tree(&tree, &view.owners)?;
+    for (id, next) in contracts {
+        if let Some(old) = view.owners.get(id)
+            && !old.compatible(next)
+            && !empty_owner(&tree, id, old)?
+        {
+            return Err(failure("state_compatibility", "state schema/version differs").owner(id, None));
+        }
+        if !view.owners.contains_key(id) && generation.enabled.contains(id)
+            && let Some(operation) = view.cleanups.get(id)
+        {
+            let pending = open_child(&store.trees, &operation.tree)?;
+            if present(&pending.path.join(id))? {
+                return Err(failure("state_ownership", "finish pending state cleanup before installation"));
+            }
+            pending.check().map_err(|_| failure("input_drift", "pending cleanup tree changed"))?;
+        }
+    }
+    for pin in capture.pins {
+        pin.revalidate()?;
+    }
+    store.revalidate()
 }
 
 pub(crate) fn reconcile(
@@ -1844,6 +1884,41 @@ mod tests {
             ..owner(1)
         }));
         assert!(!owner(1).compatible(&owner(2)));
+    }
+
+    #[test]
+    fn preview_preserves_state_and_rejects_incompatible_nonempty_owner() {
+        let home = Home::new();
+        let held = guard(&home.0, true).unwrap();
+        let view = fixture(&held.store);
+        let tree = held.store.tree(&view).unwrap();
+        let before = capture_tree(&tree, &view.owners).unwrap().entries;
+        let names_before = names(&held.store.trees).unwrap();
+        let generation = Generation { state: Some(view.clone()), ..Generation::default() };
+        preview(&home.0, &generation, &view.owners).unwrap();
+        let mut changed = view.owners.clone();
+        changed.insert("example-tool".into(), owner(2));
+        assert_eq!(preview(&home.0, &generation, &changed).unwrap_err().code, "state_compatibility");
+        assert_eq!(capture_tree(&tree, &view.owners).unwrap().entries, before);
+        assert_eq!(names(&held.store.trees).unwrap(), names_before);
+    }
+
+    #[test]
+    fn preview_rejects_symlink_in_pending_cleanup_tree() {
+        let home = Home::new();
+        let held = guard(&home.0, true).unwrap();
+        let mut view = new_view(&held.store).unwrap();
+        let alias = random_id().unwrap();
+        let external = home.0.join("external");
+        fs::DirBuilder::new().mode(0o700).create(&external).unwrap();
+        symlink(&external, held.store.trees.path.join(&alias)).unwrap();
+        view.cleanups.insert("example-tool".into(), Cleanup { tree: alias,
+            owner: "example-tool".into(), schema: "notes".into(), version: 1, operation: random_id().unwrap() });
+        let mut generation = Generation { state: Some(view), ..Generation::default() };
+        generation.enabled.insert("example-tool".into());
+        assert_eq!(preview(&home.0, &generation, &BTreeMap::from([("example-tool".into(), owner(1))]))
+            .unwrap_err().code, "state_ownership");
+        assert!(fs::read_dir(&external).unwrap().next().is_none());
     }
 
     #[test]

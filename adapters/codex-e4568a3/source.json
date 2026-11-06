@@ -6,9 +6,10 @@
   "original_files": {
     "codex-rs/Cargo.toml": "05c9740164aa212e1719bae3ad2ec50320b14480ac4171e11cc4ba77782c4f9c",
     "codex-rs/Cargo.lock": "319fbf5f0e3f1217f09e3bdeeae5bbd6b9da208e30495d7f5eb3102a76474812",
-    "codex-rs/rust-toolchain.toml": "570656042681cfd8795403a455baf9a33035331a07db0645e866bbcea89a3d64"
+    "codex-rs/rust-toolchain.toml": "570656042681cfd8795403a455baf9a33035331a07db0645e866bbcea89a3d64",
+    "codex-rs/cli/Cargo.toml": "a19f6f4d367c8222b54d575414961a36d1f771f71a11e5f14aa748869d7ebfac"
   },
-  "host_release_id": "cm-host-0.14.0-g06",
+  "host_release_id": "cm-host-0.15.0-s03",
   "host_api_version": "0.11.0",
   "abis": [
     "1.0",
@@ -35,7 +36,7 @@
     "tui.command.v1"
   ],
   "protocol_source": "codex-rs/protocol",
-  "stage": "experimental-sdk-seams",
+  "stage": "first-party-binary-index",
   "official_asset": {
     "url": "https://github.com/openai/codex/releases/download/rust-v0.163.0/codex-x86_64-unknown-linux-musl.tar.gz",
     "sha256": "beb339e8ecd9ba057a6bb2dc81ad8ca474812edfbf0fc5056ca818797648dde4",
@@ -96,7 +97,9 @@
     "adapters/codex-e4568a3/cli-commands.rs": "codex-rs/cli/src/cm_commands.rs",
     "crates/cm/src/provenance.rs": "codex-rs/cm/src/provenance.rs",
     "crates/cm/src/distribution-policy.json": "codex-rs/cm/src/distribution-policy.json",
-    "crates/cm/src/distribution-root.jsonl": "codex-rs/cm/src/distribution-root.jsonl"
+    "crates/cm/src/distribution-root.jsonl": "codex-rs/cm/src/distribution-root.jsonl",
+    "crates/cm/src/index.rs": "codex-rs/cm/src/index.rs",
+    "adapters/codex-e4568a3/cli-index.rs": "codex-rs/cli/src/cm_index.rs"
   },
   "patches": [
     "cli.patch",
@@ -107,7 +110,8 @@
     "sampling-budget.patch",
     "tui-review.patch",
     "tool-concurrency.patch",
-    "sdk-seams.patch"
+    "sdk-seams.patch",
+    "index.patch"
   ],
   "patched_paths": [
     "codex-rs/Cargo.lock",

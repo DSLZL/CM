@@ -42,11 +42,30 @@ pub(crate) fn ingest(
     ingest_with_proof(transaction, input, replacement, None)
 }
 
-fn ingest_with_proof(
+pub(crate) fn ingest_with_proof(
     transaction: &mut Transaction,
     input: &Path,
     replacement: Option<(&str, &str)>,
     proof_paths: Option<(&Path, &Path)>,
+) -> Result<(), LoadError> {
+    ingest_mode(transaction, input, replacement, proof_paths, false)
+}
+
+pub(crate) fn ingest_for_preview(
+    transaction: &mut Transaction,
+    input: &Path,
+    replacement: Option<(&str, &str)>,
+    proof_paths: (&Path, &Path),
+) -> Result<(), LoadError> {
+    ingest_mode(transaction, input, replacement, Some(proof_paths), true)
+}
+
+fn ingest_mode(
+    transaction: &mut Transaction,
+    input: &Path,
+    replacement: Option<(&str, &str)>,
+    proof_paths: Option<(&Path, &Path)>,
+    preview: bool,
 ) -> Result<(), LoadError> {
     let input = std::path::absolute(input).map_err(|e| profile::failure(&e.to_string()))?;
     let home = &transaction.root.path;
@@ -88,7 +107,7 @@ fn ingest_with_proof(
                 "replacement ID or expected old object differs",
             ));
         }
-        if transaction
+        if !preview && transaction
             .next
             .state
             .as_ref()

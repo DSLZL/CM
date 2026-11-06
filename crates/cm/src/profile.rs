@@ -674,11 +674,10 @@ impl Transaction {
         self.commit_checked(options, |_| Ok(()))
     }
 
-    pub(crate) fn commit_checked(
-        mut self,
+    fn prepare(
+        &mut self,
         options: &crate::config::Options,
-        check: impl Fn(&crate::runtime_plan::PreparedPlan) -> Result<(), LoadError>,
-    ) -> Result<serde_json::Value, LoadError> {
+    ) -> Result<crate::runtime_plan::PreparedPlan, LoadError> {
         let config = self.root.path.join("cm-runtime.toml");
         self.next.validate().map_err(|e| failure(&e))?;
         self.next.config_sha256 = if present(&config)? {
@@ -694,6 +693,27 @@ impl Transaction {
         let snapshot = Snapshot::candidate(&self.root.path, self.host.clone(), self.next.clone())?;
         let prepared = crate::runtime_plan::prepare_managed(&self.root.path, options, snapshot)?;
         prepared.revalidate()?;
+        self.revalidate()?;
+        Ok(prepared)
+    }
+
+    pub(crate) fn preview(
+        &mut self,
+        options: &crate::config::Options,
+    ) -> Result<crate::runtime_plan::PreparedPlan, LoadError> {
+        let prepared = self.prepare(options)?;
+        crate::state::preview(&self.root.path, &self.next, prepared.state_contracts())?;
+        prepared.revalidate()?;
+        self.revalidate()?;
+        Ok(prepared)
+    }
+
+    pub(crate) fn commit_checked(
+        mut self,
+        options: &crate::config::Options,
+        check: impl Fn(&crate::runtime_plan::PreparedPlan) -> Result<(), LoadError>,
+    ) -> Result<serde_json::Value, LoadError> {
+        let prepared = self.prepare(options)?;
         crate::state::reconcile(&mut self, prepared.state_contracts())?;
         let mut next = self.next.clone();
         next.lock_sha256 = loader::hash(&crate::mod_lock::canonical(prepared.plan()));

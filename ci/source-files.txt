@@ -227,3 +227,13 @@ ci/scripts/support_policy.py
 fixtures/compatibility-policy/acceptance.sh
 fixtures/compatibility-policy/driver.py
 fixtures/compatibility-policy/policy.json
+adapters/codex-e4568a3/cli-index.rs
+adapters/codex-e4568a3/index.patch
+ci/scripts/binary_index.py
+crates/cm/src/index.rs
+docs/mod-discovery.md
+fixtures/binary-index/acceptance.sh
+fixtures/binary-index/driver.py
+fixtures/binary-index/cases.json
+schemas/mod-index.schema.json
+schemas/mod-index-qualification.schema.json

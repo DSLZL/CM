@@ -166,13 +166,13 @@ def prepare(root, logs):
 
 def schemas(root, logs):
     """Regenerate pinned schema assets on the hosted worker before sealing Host inputs."""
-    if load_config(root)["task_id"] not in ("CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01", "CM-S02"):
+    if load_config(root)["task_id"] not in ("CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01", "CM-S02", "CM-S03"):
         return
     verify_sources(root, logs)
     cfg = load_config(root)
     for unit in cfg["units"]:
         execute(root, logs, "g03-" + unit["id"] + "-early-fmt", build_commands(unit, cfg)["fmt"])
-    if cfg["task_id"] in ("CM-G06", "CM-S01", "CM-S02"):
+    if cfg["task_id"] in ("CM-G06", "CM-S01", "CM-S02", "CM-S03"):
         execute(root, logs, "g06-fixture-early-fmt", ["rustfmt", "--edition", "2024", "--check",
             *(str(root / "fixtures/sdk-seams" / name) for name in
                 ("fixture.rs", "runtime_probe.rs", "stream_probe.rs", "core_probe.rs")),

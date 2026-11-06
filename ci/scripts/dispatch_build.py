@@ -135,7 +135,7 @@ def main():
     receipt_record = exact(receipt_name)
     source_config = api("repos/" + source + "/contents/.github/cm-ci.json?ref=" + source_sha)
     task_id = json.loads(base64.b64decode(source_config["content"]))["task_id"]
-    consumer_required = task_id in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01", "CM-S02")
+    consumer_required = task_id in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01", "CM-S02", "CM-S03")
     consumer_artifact = exact("cm-linux-x64-consumer-artifacts-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
     jobs = get_run(run_path + "/attempts/" + str(run["run_attempt"]) + "/jobs?per_page=100")["jobs"]
     producer_jobs = [job for job in jobs if job["name"] in ("build-read / linux-x64", "build-write / linux-x64") and job["conclusion"] == "success"]
@@ -206,7 +206,7 @@ def main():
                     (worker, test_build["workflow_sha"], worker_sha)):
                 if api("repos/" + repository + "/compare/" + previous + "..." + current)["status"] not in ("ahead", "identical"):
                     raise RuntimeError("Test-build origin is not an ancestor of the requested source/workflow")
-    if task_id in ("CM-S01", "CM-S02"):
+    if task_id in ("CM-S01", "CM-S02", "CM-S03"):
         from worker_policy import artifact_binding
         signed = receipt.get("distribution") or {}
         signing_jobs = [job for job in jobs if job["name"] == "attest-distribution"]
@@ -219,6 +219,9 @@ def main():
             or signed.get("job_conclusion") != "success" or signed.get("production_origin") != production
             or signed.get("consumer_job_id") != consumer_jobs[0]["id"]):
             raise RuntimeError("Distribution receipt differs from exact signing job, producer or consumer")
+    if task_id == "CM-S03":
+        from worker_policy import verify_index_receipt
+        verify_index_receipt(receipt.get("index") or {}, jobs=jobs, ci=ci, consumer=consumer, fetch=api)
     ci["conclusion"] = run["conclusion"]
     if kind == "qualification" and consumer_required:
         origin = {"run_id": run_id, "run_attempt": run["run_attempt"], "source_sha": source_sha,
@@ -229,7 +232,7 @@ def main():
         write(out, "host-origin.json", origin)
     write(out, "verified-worker-result.json", {"schema_version": 1, "implementation_commit": source_sha,
           "ci": ci, "artifact": artifact, "consumer_artifact": consumer_artifact, "input_artifact": input_artifact,
-          "consumer": receipt.get("consumer"), "distribution": receipt.get("distribution"),
+          "consumer": receipt.get("consumer"), "distribution": receipt.get("distribution"), "index": receipt.get("index"),
           "jobs": jobs, "receipt_artifact": receipt_record,
           "parent_run_url": "https://github.com/" + source + "/actions/runs/" + os.environ["GITHUB_RUN_ID"],
           "note": "CI provenance only. Review actual acceptance evidence before treating a task as complete."})

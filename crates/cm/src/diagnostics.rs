@@ -60,6 +60,26 @@ pub(crate) fn error(error: &LoadError) -> Value {
         .map(|value| identifier(value))
         .collect();
     let (expected, next) = match error.code.as_str() {
+        "index_offline_missing" => (
+            "the complete cached signed snapshot and every selected archive and proof",
+            "Restore the exact missing cached inputs or fetch and review them online, then preview again. Do not build locally.",
+        ),
+        "index_source" | "index_http" | "index_redirect" | "index_timeout" | "index_size" => (
+            "an explicit bounded file source or the original HTTP(S) origin",
+            "Check the source, certificate and transfer limits. Cross-origin redirects and credentials are unsupported.",
+        ),
+        "index_plan" => (
+            "a new independent absolute plan file in an owned private directory",
+            "Choose an unused plan path outside the Host, managed store/state/index and official profile, then preview again.",
+        ),
+        "index_qualification" => (
+            "a valid signed qualification bound to the exact record and tested conditions",
+            "Obtain intact qualification evidence. An origin signature alone cannot grant platform verification.",
+        ),
+        code if code.starts_with("index_") => (
+            "an intact first-party signed record with unchanged release identity and matching precompiled bytes",
+            "Review the record and exact archive/proof hashes; obtain corrected official inputs and preview again. Do not build locally.",
+        ),
         "hook_unsupported" => (
             "the exact Host's registered ABI-2 prepared eligibility policy slot",
             "Use a prepared-slot Mod matching cm-host-identity. Detour, layout, inline, async and signature hooks are unsupported.",
@@ -209,6 +229,19 @@ mod tests {
                 .as_str()
                 .is_some_and(|s| !s.is_empty())
         );
+    }
+
+    #[test]
+    fn index_failures_explain_recovery_without_exporting_source_credentials() {
+        let failure = LoadError::input("index_http", "sdk-a", "https://user:secret@invalid/catalog.json");
+        let value = error(&failure);
+        assert_eq!(value["code"], "index_http");
+        assert_eq!(value["mod_id"], "sdk-a");
+        assert_eq!(value["already_native_executed"], false);
+        assert!(!value.to_string().contains("secret"));
+        assert!(value["next_action"].as_str().unwrap().contains("certificate"));
+        let offline = error(&LoadError::input("index_offline_missing", "sdk-a", "missing"));
+        assert!(offline["next_action"].as_str().unwrap().contains("missing cached inputs"));
     }
 
     #[test]

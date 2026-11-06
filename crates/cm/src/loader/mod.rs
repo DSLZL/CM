@@ -548,7 +548,7 @@ fn prepare_bytes(
     })
 }
 
-const MAX_PACKAGE: u64 = 128 * 1024 * 1024;
+pub(crate) const MAX_PACKAGE: u64 = 128 * 1024 * 1024;
 const MAX_ENTRIES: usize = 256;
 
 pub(crate) struct Candidate {
@@ -650,6 +650,18 @@ pub(crate) fn installation_snapshot(
         pins: captured,
         tree,
     })
+}
+
+pub(crate) fn index_native_dependencies(snapshot: &InstallationSnapshot) -> Result<Vec<String>, crate::LoadError> {
+    let manifest = crate::manifest::parse(&snapshot.files["mod.toml"])?;
+    let binary = manifest.binary_manifest.as_ref().ok_or_else(|| {
+        crate::LoadError::input("index_manifest", &manifest.id, "format 3 required")
+    })?;
+    let mut needed = elf::check_declared(&snapshot.files[&manifest.payload], &binary.binary.glibc_min)
+        .map_err(|e| crate::LoadError::input("index_native", &manifest.id, &e))?;
+    needed.sort();
+    needed.dedup();
+    Ok(needed)
 }
 
 impl Candidate {
@@ -976,6 +988,13 @@ fn zip_files(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, String> {
                 }
             }
             parent = p.parent();
+        }
+    }
+    let mut folded = BTreeMap::new();
+    for path in &entries {
+        let key = path.to_ascii_lowercase();
+        if folded.insert(key, path).is_some_and(|old| old != path) {
+            return Err("package: ZIP case collision".into());
         }
     }
     Ok(files)

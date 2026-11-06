@@ -1,13 +1,14 @@
 {
   "schema_version": 1,
   "configured": true,
-  "task_id": "CM-S02",
+  "task_id": "CM-S03",
   "required_checks": [
-    "CM-S02-AC01",
-    "CM-S02-AC02",
-    "CM-S02-AC03",
-    "CM-S02-AC04",
-    "CM-S02-AC05"
+    "CM-S03-AC01",
+    "CM-S03-AC02",
+    "CM-S03-AC03",
+    "CM-S03-AC04",
+    "CM-S03-AC05",
+    "CM-S03-AC06"
   ],
   "target": "x86_64-unknown-linux-gnu",
   "rust_toolchain": "1.95.0",
@@ -37,7 +38,7 @@
       "no_default_features": false
     }
   ],
-  "acceptance_script": "fixtures/compatibility-policy/acceptance.sh",
+  "acceptance_script": "fixtures/binary-index/acceptance.sh",
   "cargo_config_files": [
     "adapters/codex-e4568a3/host/codex-rs/.cargo/config.toml"
   ],
@@ -106,7 +107,10 @@
     "adapters/codex-e4568a3/sdk-seams.patch",
     "crates/cm/src/provenance.rs",
     "crates/cm/src/distribution-policy.json",
-    "crates/cm/src/distribution-root.jsonl"
+    "crates/cm/src/distribution-root.jsonl",
+    "crates/cm/src/index.rs",
+    "adapters/codex-e4568a3/cli-index.rs",
+    "adapters/codex-e4568a3/index.patch"
   ],
   "generated_native_identity_files": [
     "adapters/codex-e4568a3/inputs/native.json"

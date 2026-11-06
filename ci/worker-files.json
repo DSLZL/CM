@@ -4,6 +4,10 @@
   "repository": "DSLZL/CM-build-linux-x64",
   "files": [
     {
+      "source": "ci/scripts/binary_index.py",
+      "destination": ".github/scripts/binary_index.py"
+    },
+    {
       "source": "ci/scripts/distribution_provenance.py",
       "destination": ".github/scripts/distribution_provenance.py"
     },
