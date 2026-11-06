@@ -1134,8 +1134,9 @@ def bind_tui_mcp_listener(record, metadata, bound_hosts, observer):
         ["launch", "--", "--image", "/profile/review/entry-coverage/probe-0/review.png", "--", "CM_M02_cli-image"]
         if initial_image else ["launch", "--"])
     assert command[4:] == expected
-    assert upgrade or concurrency or sdk_notice or command[3] in ("/profile/m03/terminal/tui", "/profile/m04/terminal/tui") or re.fullmatch(
-        r"/profile/review/(?:nondestructive|invalidation|key-events|entry-coverage|queue-lifecycle|plug-and-play)/[a-z0-9-]+", command[3])
+    assert upgrade or concurrency or sdk_notice or command[3] in (
+        "/profile/m03/terminal/tui", "/profile/m04/terminal/tui", "/profile/s02/abc") or re.fullmatch(
+        r"/profile/review/(?:nondestructive|invalidation|key-events|entry-coverage|queue-lifecycle|plug-and-play)/[a-z0-9-]+", command[3]), "Unregistered TUI MCP profile: " + command[3]
     assert record["tui"] and record["empty_launch_argv"] is (not (initial_image or concurrency))
     assert record["identity"]["proc_exe"] == command[0]
     assert record["identity"]["executable_sha256"] == bound_hosts[command[0]]
