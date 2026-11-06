@@ -233,15 +233,33 @@ mod tests {
 
     #[test]
     fn index_failures_explain_recovery_without_exporting_source_credentials() {
-        let failure = LoadError::input("index_http", "sdk-a", "https://user:secret@invalid/catalog.json");
+        let failure = LoadError::input(
+            "index_http",
+            "sdk-a",
+            "https://user:secret@invalid/catalog.json",
+        );
         let value = error(&failure);
         assert_eq!(value["code"], "index_http");
         assert_eq!(value["mod_id"], "sdk-a");
         assert_eq!(value["already_native_executed"], false);
         assert!(!value.to_string().contains("secret"));
-        assert!(value["next_action"].as_str().unwrap().contains("certificate"));
-        let offline = error(&LoadError::input("index_offline_missing", "sdk-a", "missing"));
-        assert!(offline["next_action"].as_str().unwrap().contains("missing cached inputs"));
+        assert!(
+            value["next_action"]
+                .as_str()
+                .unwrap()
+                .contains("certificate")
+        );
+        let offline = error(&LoadError::input(
+            "index_offline_missing",
+            "sdk-a",
+            "missing",
+        ));
+        assert!(
+            offline["next_action"]
+                .as_str()
+                .unwrap()
+                .contains("missing cached inputs")
+        );
     }
 
     #[test]

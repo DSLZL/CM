@@ -238,8 +238,8 @@ pub(crate) fn verify_index_statement(
     policy_sha256: &str,
 ) -> Result<InputPin, LoadError> {
     let policy: Value = serde_json::from_str(POLICY).expect("compiled policy");
-    let value: Value = serde_json::from_slice(bytes)
-        .map_err(|_| failure("invalid signed index statement"))?;
+    let value: Value =
+        serde_json::from_slice(bytes).map_err(|_| failure("invalid signed index statement"))?;
     if !matches!(domain, "cm.mod-index.v1" | "cm.index-qualification.v1")
         || value["domain"] != domain
         || value["schema_version"] != 1
@@ -255,7 +255,9 @@ pub(crate) fn verify_index_statement(
         || signer.attempt == 0
         || policy_sha256 != loader::hash(POLICY.as_bytes())
     {
-        return Err(failure("index statement violates the fixed distribution policy"));
+        return Err(failure(
+            "index statement violates the fixed distribution policy",
+        ));
     }
     verify_signature(bytes, bundle, signer)
 }

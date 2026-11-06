@@ -652,13 +652,16 @@ pub(crate) fn installation_snapshot(
     })
 }
 
-pub(crate) fn index_native_dependencies(snapshot: &InstallationSnapshot) -> Result<Vec<String>, crate::LoadError> {
+pub(crate) fn index_native_dependencies(
+    snapshot: &InstallationSnapshot,
+) -> Result<Vec<String>, crate::LoadError> {
     let manifest = crate::manifest::parse(&snapshot.files["mod.toml"])?;
     let binary = manifest.binary_manifest.as_ref().ok_or_else(|| {
         crate::LoadError::input("index_manifest", &manifest.id, "format 3 required")
     })?;
-    let mut needed = elf::check_declared(&snapshot.files[&manifest.payload], &binary.binary.glibc_min)
-        .map_err(|e| crate::LoadError::input("index_native", &manifest.id, &e))?;
+    let mut needed =
+        elf::check_declared(&snapshot.files[&manifest.payload], &binary.binary.glibc_min)
+            .map_err(|e| crate::LoadError::input("index_native", &manifest.id, &e))?;
     needed.sort();
     needed.dedup();
     Ok(needed)

@@ -107,11 +107,12 @@ fn ingest_mode(
                 "replacement ID or expected old object differs",
             ));
         }
-        if !preview && transaction
-            .next
-            .state
-            .as_ref()
-            .is_some_and(|view| view.contains_owner(id))
+        if !preview
+            && transaction
+                .next
+                .state
+                .as_ref()
+                .is_some_and(|view| view.contains_owner(id))
         {
             crate::state::exclusive(transaction)?;
         }

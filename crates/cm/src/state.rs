@@ -290,7 +290,12 @@ impl Store {
         Self::open_snapshot(home, exclusive, initialize, true)
     }
 
-    fn open_snapshot(home: &Path, exclusive: bool, initialize: bool, acquire_lease: bool) -> Result<Self> {
+    fn open_snapshot(
+        home: &Path,
+        exclusive: bool,
+        initialize: bool,
+        acquire_lease: bool,
+    ) -> Result<Self> {
         let child = |parent: &Directory, name: &str| {
             if initialize {
                 parent.child(name)
@@ -992,16 +997,24 @@ pub(crate) fn preview(
             && !old.compatible(next)
             && !empty_owner(&tree, id, old)?
         {
-            return Err(failure("state_compatibility", "state schema/version differs").owner(id, None));
+            return Err(
+                failure("state_compatibility", "state schema/version differs").owner(id, None),
+            );
         }
-        if !view.owners.contains_key(id) && generation.enabled.contains(id)
+        if !view.owners.contains_key(id)
+            && generation.enabled.contains(id)
             && let Some(operation) = view.cleanups.get(id)
         {
             let pending = open_child(&store.trees, &operation.tree)?;
             if present(&pending.path.join(id))? {
-                return Err(failure("state_ownership", "finish pending state cleanup before installation"));
+                return Err(failure(
+                    "state_ownership",
+                    "finish pending state cleanup before installation",
+                ));
             }
-            pending.check().map_err(|_| failure("input_drift", "pending cleanup tree changed"))?;
+            pending
+                .check()
+                .map_err(|_| failure("input_drift", "pending cleanup tree changed"))?;
         }
     }
     for pin in capture.pins {
@@ -1894,11 +1907,17 @@ mod tests {
         let tree = held.store.tree(&view).unwrap();
         let before = capture_tree(&tree, &view.owners).unwrap().entries;
         let names_before = names(&held.store.trees).unwrap();
-        let generation = Generation { state: Some(view.clone()), ..Generation::default() };
+        let generation = Generation {
+            state: Some(view.clone()),
+            ..Generation::default()
+        };
         preview(&home.0, &generation, &view.owners).unwrap();
         let mut changed = view.owners.clone();
         changed.insert("example-tool".into(), owner(2));
-        assert_eq!(preview(&home.0, &generation, &changed).unwrap_err().code, "state_compatibility");
+        assert_eq!(
+            preview(&home.0, &generation, &changed).unwrap_err().code,
+            "state_compatibility"
+        );
         assert_eq!(capture_tree(&tree, &view.owners).unwrap().entries, before);
         assert_eq!(names(&held.store.trees).unwrap(), names_before);
     }
@@ -1912,12 +1931,31 @@ mod tests {
         let external = home.0.join("external");
         fs::DirBuilder::new().mode(0o700).create(&external).unwrap();
         symlink(&external, held.store.trees.path.join(&alias)).unwrap();
-        view.cleanups.insert("example-tool".into(), Cleanup { tree: alias,
-            owner: "example-tool".into(), schema: "notes".into(), version: 1, operation: random_id().unwrap() });
-        let mut generation = Generation { state: Some(view), ..Generation::default() };
+        view.cleanups.insert(
+            "example-tool".into(),
+            Cleanup {
+                tree: alias,
+                owner: "example-tool".into(),
+                schema: "notes".into(),
+                version: 1,
+                operation: random_id().unwrap(),
+            },
+        );
+        let mut generation = Generation {
+            state: Some(view),
+            ..Generation::default()
+        };
         generation.enabled.insert("example-tool".into());
-        assert_eq!(preview(&home.0, &generation, &BTreeMap::from([("example-tool".into(), owner(1))]))
-            .unwrap_err().code, "state_ownership");
+        assert_eq!(
+            preview(
+                &home.0,
+                &generation,
+                &BTreeMap::from([("example-tool".into(), owner(1))])
+            )
+            .unwrap_err()
+            .code,
+            "state_ownership"
+        );
         assert!(fs::read_dir(&external).unwrap().next().is_none());
     }
 
