@@ -64,7 +64,9 @@ def empty_run(home, directory):
     seams = module("sdk-seams/driver.py")
     value = seams.real(home, directory)
     assert value["original_count"] == 1 and not value["mods"]
-    assert not any(row["event"] in ("dlopen-start", "entry-start", "init-start", "ready") for row in value["native"])
+    assert not any(row["event"] in ("dlopen-start", "entry-start", "init-start") for row in value["native"])
+    ready = [row["detail"] for row in value["native"] if row["event"] == "ready"]
+    assert len(ready) == 1 and ready[0]["mod_count"] == 0 and not ready[0]["plan"]["mods"]
     assert mod_manifest.sha(BINARY) == value["host_sha256"]
     return value
 

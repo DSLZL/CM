@@ -1364,7 +1364,8 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
                "ci/scripts/runtime_state.py", "ci/scripts/mod_author.py", "fixtures/turn-budget/driver.py",
                "fixtures/review-before-send/driver.py", "fixtures/tool-concurrency/driver.py",
                "fixtures/runtime-qualification/driver.py", "fixtures/runtime-hooks/driver.py", "fixtures/compatibility/driver.py",
-               "fixtures/sdk-seams/driver.py", "fixtures/distribution-provenance/driver.py")
+               "fixtures/sdk-seams/driver.py", "fixtures/distribution-provenance/driver.py",
+               "fixtures/compatibility-policy/driver.py")
     network = []
     sockets = []
     tcp_metadata = []
