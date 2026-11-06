@@ -10,7 +10,7 @@
 | H0 → H1 的 A、B、AB | stable SDK 入口 | G05 六组固定二进制配对；不得把 H0 或旧 H1 改名为另一个 H |
 | ABI 2.3 四个 seam | experimental | G06 有限工具/流/CLI/TUI 套件；不是通用 provider 改写 |
 | exact-host Hook | 单列 exact-host | G01 prepared slots 和明确形态，必须绑定 build ID/ELF/map |
-| 当前 H 的 no-Mod、禁用重启、同进程 ABC | S02 待验证 | 实现了具名用例；实际 Actions 通过前没有新的 platform-verified 结论 |
+| 当前 H 的 no-Mod、禁用重启、同进程 ABC | stable 入口 | [S02 R09](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42164580638) 的有限 GNU Linux x64 golden；精确字节、步骤与来源见运行工件 |
 | 其他平台、任意 L4 Hook、完整父项目集成 | deferred | 没有本任务的运行证据 |
 
 G05 已接受的配对证据来自 [R6](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/41527027753)
@@ -48,7 +48,7 @@ CPU/glibc/原生依赖、state owner/schema/version、exact-host 和篡改标签
 
 ## 增量验证规则
 
-测试/Python/政策变更不参与 native 编译身份。S01/S02 的 task_id 使用同一生产路由；
+仅资格测试的 Python 和政策数据不参与 native 编译身份。S01/S02 的 task_id 使用同一生产路由；
 required_checks 不参与编译，acceptance_script 按实际脚本内容入 key。相同脚本改路径
 不会重建，改生产命令会失效。其他 task 仍保留区分，实际编译选项、工具链、Rust 输入、
 环境和可达生产命令也保留。S02 与 S01 复用相同 native recipe，不忽略整个生产脚本。
@@ -58,5 +58,5 @@ required_checks 不参与编译，acceptance_script 按实际脚本内容入 key
 共享逻辑变更影响其真实依赖步骤；汇总报告和矩阵每轮重生，旧报告不直接改名为新资格。
 原大工件身份保持不变，只上传本轮轻量证据和新增检查点。
 
-本轮尚未执行新的 Linux Actions；文档与静态结构完成不等于上述资格已经通过。
-不承诺其他平台、native 沙箱、热卸载或 release-ready。
+S02 首轮 [R09](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42164580638) 的 362 项、五份验收报告、外层零构建审计及收据均已通过。
+每轮增量复用结果以对应工件和收据为准；不承诺其他平台、native 沙箱、热卸载或 release-ready。
