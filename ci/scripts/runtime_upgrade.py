@@ -34,7 +34,7 @@ def restore_reference(*, producer=False):
         return
     if os.environ.get("CM_SOURCE_DIR"):
         from linux_ci import load_config
-        if load_config(Path(os.environ["CM_SOURCE_DIR"]))["task_id"] not in ("CM-G05", "CM-G06", "CM-S01", "CM-S02"):
+        if load_config(Path(os.environ["CM_SOURCE_DIR"]))["task_id"] not in ("CM-G05", "CM-G06", "CM-S01", "CM-S02", "CM-S03"):
             return
     import runtime_consumer as host
     pin = host.read(path)

@@ -20,7 +20,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing Host build identity"))?;
         assert_eq!(build_id.len(), "sha256:".len() + 64);
         assert!(build_id.starts_with("sha256:"));
-        assert_eq!(identity["stage"], "experimental-sdk-seams");
+        assert_eq!(identity["stage"], "first-party-binary-index");
         assert_eq!(
             identity["abis"],
             serde_json::json!(["1.0", "2.0", "2.1", "2.2", "2.3"])
