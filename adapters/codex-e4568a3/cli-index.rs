@@ -128,9 +128,10 @@ impl Transport for Source {
                             .to_str()
                             .ok_or_else(|| failure("index_source", "UTF8 source required"))?
                     )),
-                    Resource::Artifact(relative) => {
-                        index.parent().expect("source parent").join(relative)
-                    }
+                    Resource::Artifact(relative) => index
+                        .parent()
+                        .ok_or_else(|| failure("index_source", "index file parent required"))?
+                        .join(relative),
                 };
                 index::read_transport_file(&path, limit)
             }
