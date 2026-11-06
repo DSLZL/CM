@@ -93,7 +93,7 @@ def verified_subject(name, *, helper=None, roots=None, good=True, receipt=None, 
         "--source-digest", value["signer"]["workflow_sha"], "--signer-digest", value["signer"]["workflow_sha"],
         "--deny-self-hosted-runners", "--format", "json"]
     result = subprocess.run(args, env={"PATH": "/nonexistent", "HOME": "/nonexistent", "GH_CONFIG_DIR": "/nonexistent",
-        "GH_NO_UPDATE_NOTIFIER": "1", "GH_PROMPT_DISABLED": "1"}, capture_output=True, text=True, timeout=30)
+        "GH_NO_UPDATE_NOTIFIER": "1", "GH_TELEMETRY": "disabled", "GH_PROMPT_DISABLED": "1"}, capture_output=True, text=True, timeout=30)
     assert (result.returncode == 0) == good, (args, result.stderr)
     if not good:
         return {"return_code": result.returncode}

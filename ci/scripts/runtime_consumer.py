@@ -358,7 +358,7 @@ def copy_runtime_tree(source, destination):
 
 
 @ci_progress.case()
-def rootfs(inputs, root):
+def rootfs(inputs, root, *, upgrade_baseline=True):
     root.mkdir()
     packages = {}
     copied = set()
@@ -408,7 +408,7 @@ def rootfs(inputs, root):
         copy_runtime_tree(inputs / name, root / "inputs" / name)
     if (inputs / "distribution").is_dir():
         copy_runtime_tree(inputs / "distribution", root / "inputs/distribution")
-    if read(inputs / "producer.json").get("upgrade"):
+    if upgrade_baseline and read(inputs / "producer.json").get("upgrade"):
         import runtime_upgrade
         runtime_upgrade.mount_reference(inputs, root, system)
     if (inputs / "probes").exists():
@@ -2342,7 +2342,8 @@ def consume_index_proof():
     temp = Path(os.environ["RUNNER_TEMP"]) / "cm-index-proof-consumer"
     temp.mkdir()
     root = temp / "rootfs"
-    closure = rootfs(inputs, root)
+    closure = rootfs(inputs, root, upgrade_baseline=False)
+    assert not (root / "inputs/upgrade-baseline").exists(), "Proof consumer must not require a historical Host"
     for name in ("profile", "work", "evidence", "trusted-observer"):
         (temp / name).mkdir()
     listener = socket.socket()

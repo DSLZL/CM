@@ -314,6 +314,7 @@ fn verify_signature(bytes: &[u8], bundle: &[u8], signer: &Signer) -> Result<Inpu
         .env("HOME", "/nonexistent")
         .env("GH_CONFIG_DIR", "/nonexistent")
         .env("GH_NO_UPDATE_NOTIFIER", "1")
+        .env("GH_TELEMETRY", "disabled")
         .env("GH_PROMPT_DISABLED", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
