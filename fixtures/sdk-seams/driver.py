@@ -227,7 +227,8 @@ def real(home, directory, *, mode="", tool=True, good=True, provider_mode="norma
                 stdout=out, stderr=err, start_new_session=True)
             try:
                 if on_wait:
-                    core.await_barrier(lambda: any(row["event"] == "waiting" for row in events(directory)["mods"]),
+                    core.await_barrier(lambda: any(row["event"] == "waiting" for row in
+                        core.trace_rows(directory / "events.jsonl", waiting=True)),
                         process, "native fixture explicit barrier")
                     on_wait(process, directory, provider)
                 return_code = process.wait(timeout=100)

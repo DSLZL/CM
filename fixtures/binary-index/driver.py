@@ -339,8 +339,10 @@ def case_plan_exclusive():
 def case_plan_drift():
     source = catalog()
     path, _ = plan(source)
-    command("scan")
+    current, _ = plan(source)
+    install(current)
     before = state()
+    assert before is not None
     result = install(path, good=False, code="input_drift")
     assert state() == before
     return report(3, "generation_drift", {"scope": case_data("plan-drift"), "rejection": result})
