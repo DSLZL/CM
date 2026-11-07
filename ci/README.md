@@ -299,8 +299,12 @@ invalidate their consumers. Ordinary S03 build configuration stays unchanged.
 
 Worker deployment now maps 16 canonical files, including the benchmark reusable
 workflow and role action. The benchmark requires explicit reviewed source, request,
-real PR and optional prior-run/seed identities. Cache saves require confirmed live
-capacity; unknown capacity gates new writes without deleting existing caches or
-re-uploading the large H seed. All new self-checks, native execution and six S04
-acceptance checks remain **NOT_RUN**. See [measurement boundaries, reports and
+real PR and optional prior-run/seed identities. Cache saves use the owner's confirmed
+10 GB repository limit and live usage, capped at the free-tier ceiling. The preflight,
+author seed saves and trust writer share this check; none requires the payment-gated
+storage-limit API. Missing confirmation, failed usage lookup or insufficient space
+denies writes without cache deletion, paid expansion or re-uploading the large H seed.
+AC06 has 30 successful fresh native starts and 30 exact measurement reuses; the new
+capacity check and remaining author/cache campaign require hosted validation.
+See [measurement boundaries, reports and
 operation](../docs/reproducibility-report.md) before publication or dispatch.

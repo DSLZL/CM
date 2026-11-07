@@ -2,15 +2,16 @@
 
 CM-S04 measures author builds separately from loading already qualified native
 artifacts. Frozen-artifact runtime verification passes **30/30 fresh starts
-(AC06)**. Full CM-S04 verification remains **incomplete**: HTTP 402 prevents
-confirming repository cache capacity, blocking the 36 author slots and repository
-cache-authority probes. Infrastructure checks and the 11 compiler-cache canaries
+(AC06)**. Full CM-S04 verification remains **incomplete**: the 36 author slots and
+repository cache-authority probes await the campaign under the owner's confirmed
+10 GB limit. Earlier runs were blocked by a payment-gated capacity API.
+Infrastructure checks and the 11 compiler-cache canaries
 pass. Historical qualifications identify the input bytes; they are not new
 benchmark measurements or a release.
 
 ## Current hosted evidence
 
-The current fixture code is source
+The completed reuse qualification used fixture source
 `eb8e1b41bed40f3c9d61fd7d8fe646235d393c22` and worker
 `29a2315383a526296c6cdd0a7612db6ff6e0fc99`.
 [Source CI](https://github.com/DSLZL/CM/actions/runs/42390695029) passed its
@@ -122,13 +123,17 @@ bounded Cargo seed per role and one compiler seed per Mod. The campaign reserves
 most 256 MiB of new repository cache, including the small trust probe. Tiny isolated
 invalidation/corruption probes use at most 16 MiB of local compiler-cache objects.
 
-Before any new repository cache save, preflight and the save step check actual
-usage and the repository storage limit, free-tier bound and runner disk reserve.
-Unknown or insufficient capacity denies saving and gates the author/cache-write
-campaign. It does not trigger cache deletion, billing changes or a hidden cold
-fallback. On 2026-11-07 the read-only storage-limit request returned HTTP 402, so the
-current capacity is unconfirmed. The runtime consumer and local-disk canary jobs
-remain independent. See the official [storage-limit API](https://docs.github.com/en/rest/actions/cache#get-github-actions-cache-storage-limit-for-a-repository).
+Before any new repository cache save, preflight, the author save plan and trust
+writer check live usage against the owner-confirmed repository limit and the
+free-tier ceiling. On 2026-11-08 (Asia/Taipei), the owner confirmed a 10G total limit
+and no paid expansion. Configuration conservatively uses 10,000,000,000 bytes.
+The shared check reads the usage API and reserves the campaign's 256 MiB budget;
+it does not call the storage-limit API, which returned HTTP 402 requiring a valid
+payment method. The limit's provenance remains explicit as owner confirmation.
+Missing or invalid confirmation, failed usage lookup or insufficient headroom
+denies writes. Author saves also check actual seed size and runner disk reserve.
+No cache deletion, billing change or hidden cold fallback is permitted. The runtime
+consumer and local-disk canary jobs remain independent.
 
 The trust probes use the runner's actual cache authority: a trusted default-branch
 writer creates a tiny seed; a reader checks out an actual open same-repository PR

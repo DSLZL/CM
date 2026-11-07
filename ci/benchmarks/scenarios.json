@@ -67,6 +67,8 @@
     "max_new_bytes": 268435456,
     "canary_reserve_bytes": 16777216,
     "free_limit_bytes": 10000000000,
+    "repository_limit_bytes": 10000000000,
+    "repository_limit_source": "owner-confirmed-free-tier",
     "minimum_disk_reserve_bytes": 2147483648,
     "missing_seed": "fail-before-compile",
     "unknown_capacity": "deny-save",
