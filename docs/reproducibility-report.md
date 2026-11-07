@@ -125,3 +125,5 @@ authorizing a campaign. Publishing this candidate and dispatching Actions need
 separate authorization. The ordinary S03 production workflow and acceptance root
 remain unchanged. A green workflow alone does not establish program completion,
 cross-platform support or release readiness.
+
+<!-- CM-S04 cache read authority probe; this PR supplies no executable worker code. -->
