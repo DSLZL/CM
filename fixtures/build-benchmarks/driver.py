@@ -381,4 +381,5 @@ if __name__ == "__main__":
         verify_frozen_host()
     else:
         assert len(sys.argv) == 3 and sys.argv[1] == "block"
+        Path("/profile/s04").mkdir(parents=True, exist_ok=True)
         run_block(int(sys.argv[2]))
