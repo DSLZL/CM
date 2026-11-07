@@ -246,3 +246,8 @@ ci/worker/benchmark-role/action.yml
 fixtures/build-benchmarks/acceptance.sh
 fixtures/build-benchmarks/driver.py
 docs/reproducibility-report.md
+crates/cm-abi/LICENSE
+crates/cm-sdk/LICENSE
+examples/mods/turn-budget/LICENSE
+examples/mods/review-before-send/LICENSE
+examples/mods/tool-concurrency/LICENSE
