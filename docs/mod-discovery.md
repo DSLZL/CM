@@ -1,10 +1,11 @@
 # Discover and install official precompiled Mods
 
-The S03 index commands are a candidate implementation pending independent Linux
-Actions qualification. They use the fixed official publisher `DSLZL/CM` and
+The S03 index commands use the fixed official publisher `DSLZL/CM` and
 namespace `github:1430833890`. No public catalog endpoint is assumed. Obtain an
 index and its proofs from the reviewed distribution channel after establishing
-[Host trust](distribution.md).
+[Host trust](distribution.md). The bounded GNU Linux x64 qualification for the
+recorded Host and SDK-A fixture is available in
+[R10](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42355208453).
 
 ## Preview an exact selection
 
@@ -91,5 +92,8 @@ The main consumer's six intermediate reports remain `behavior_pass`. A separate
 trusted signing job issues qualifications without running candidate code; a fresh
 unprivileged minimal consumer verifies actual positive and negative support
 display. Final reports and the worker receipt bind both consumers, signed proof
-artifacts and original producer. This sequence must pass on the independent
-worker before S03 acceptance; it does not establish general release readiness.
+artifacts and original producer. This sequence completed in
+[R10](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42355208453) for the
+recorded GNU Linux x64 Host and SDK-A selection. Signed Host, state and environment
+mismatches kept `platform_verified=false`; a tampered qualification was rejected.
+Other combinations and general release readiness remain outside that evidence.

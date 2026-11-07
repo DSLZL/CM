@@ -58,10 +58,13 @@ required_checks 不参与编译，acceptance_script 按实际脚本内容入 key
 共享逻辑变更影响其真实依赖步骤；汇总报告和矩阵每轮重生，旧报告不直接改名为新资格。
 原大工件身份保持不变，只上传本轮轻量证据和新增检查点。
 
-S03 的[二进制索引候选](mod-discovery.md)把来源验证、声明兼容和精确平台验证分开显示。
+S03 的[二进制索引](mod-discovery.md)把来源验证、声明兼容和精确平台验证分开显示。
 首次新增管理 CLI、索引 Rust 和编译依赖属于新的 Host 身份；后续单例 Python 或数据修订
 按 31 个独立场景的真实依赖失效。当前签名、输入和审计仍每轮核验；后签资格及新的最小
-消费步骤也必须真实执行。此处没有新增“已验证”矩阵行，S03 的六条 AC 尚待 hosted 证据。
+消费步骤也必须真实执行。S03 [R10](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42355208453)
+的六份验收报告及独立签名证明消费均通过；精确正例只覆盖 GNU Linux x64 的 SDK-A 选择与
+Host SHA-256 `c45d3d141b50c9cc7cbc80991dd739c09144a3325eaef6b0a26a88dd628b01ec`。
+Host、state、环境不匹配的已签名负例保持未验证，篡改资格被拒绝；ABI 2.3 仍为实验性。
 
 S02 首轮 [R09](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42164580638) 的 362 项、五份验收报告、外层零构建审计及收据均已通过。
 每轮增量复用结果以对应工件和收据为准；不承诺其他平台、native 沙箱、热卸载或 release-ready。
