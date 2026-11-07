@@ -180,6 +180,32 @@ def save_profile(home, target):
     return {"sha256": mod_manifest.sha(target), "files_sha256": digest(files(home)), "archive": target.name}
 
 
+def relocate_profile_identity(home):
+    identity_path = home / "state/cm-files-v1/identity.json"
+    if not identity_path.exists():
+        return None
+    info = identity_path.lstat()
+    assert identity_path.is_file() and not identity_path.is_symlink() and info.st_nlink == 1
+    assert info.st_uid == os.geteuid() and not info.st_mode & 0o7077 and info.st_size <= 4096
+    before = identity_path.read_bytes()
+    identity = json.loads(before)
+    fields = {kind + "_" + field for kind in ("home", "state", "lease") for field in ("device", "inode")}
+    assert set(identity) == {"schema_version", "domain", "home_id", *fields}
+    assert type(identity["schema_version"]) is int and identity["schema_version"] == 1 and identity["domain"] == "cm.state-home.v1"
+    assert re.fullmatch(r"[0-9a-f]{64}", identity["home_id"])
+    assert all(type(identity[key]) is int and 0 <= identity[key] < 2 ** 64 for key in fields)
+    assert before == json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    for kind, path in (("home", home), ("state", identity_path.parent), ("lease", identity_path.parent / ".lease")):
+        info = path.lstat()
+        assert not path.is_symlink() and info.st_uid == os.geteuid() and not info.st_mode & 0o7077
+        assert (path.is_dir() if kind != "lease" else path.is_file() and info.st_nlink == 1)
+        identity[kind + "_device"], identity[kind + "_inode"] = info.st_dev, info.st_ino
+    # Only this digest-verified fixture is relocated; Host ownership checks remain unchanged.
+    identity_path.write_bytes(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode())
+    return {"before": json.loads(before), "after": identity,
+        "before_sha256": hashlib.sha256(before).hexdigest(), "after_sha256": mod_manifest.sha(identity_path)}
+
+
 def restore_profile(home, archive, expected):
     assert re.fullmatch(r"/profile/s04/block-[123]", str(home))
     assert mod_manifest.sha(archive) == expected["sha256"]
@@ -209,10 +235,13 @@ def restore_profile(home, archive, expected):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.symlink_to(member.linkname)
     assert digest(files(temporary / "profile")) == expected["files_sha256"]
+    relocation = relocate_profile_identity(temporary / "profile")
     if home.exists():
         shutil.rmtree(home)
     (temporary / "profile").rename(home)
     temporary.rmdir()
+    return {"archive_sha256": expected["sha256"], "files_sha256_before_relocation": expected["files_sha256"],
+        "files_sha256_after_relocation": digest(files(home)), "state_identity_relocation": relocation}
 
 
 def run_sample(block, state, method, checks):
@@ -231,8 +260,8 @@ def run_sample(block, state, method, checks):
     management = Path("/evidence/s04-management") / str(block) / name
     prior = mod_manifest.read(previous / "sample.json") if (previous / "sample.json").is_file() else None
     if prior and prior["status"] == "pass" and prior["fingerprint"] == method:
-        restore_profile(home, previous / "after.tar.gz", prior["profile_after"])
-        sample = {**prior, "measurement_reused": True, "report_origin": source["origin"]}
+        restored = restore_profile(home, previous / "after.tar.gz", prior["profile_after"])
+        sample = {**prior, "measurement_reused": True, "report_origin": source["origin"], "profile_restore": restored}
         mod_manifest.write(directory / "sample.json", sample)
         for filename in ("before.tar.gz", "after.tar.gz"):
             checkpoint.mkdir(parents=True, exist_ok=True)
@@ -240,7 +269,7 @@ def run_sample(block, state, method, checks):
         mod_manifest.write(checkpoint / "sample.json", sample)
         return sample
     if prior and prior["status"] == "pass" and prior["fingerprint"]["inputs"] == method["inputs"]:
-        restore_profile(home, previous / "before.tar.gz", prior["profile_before"])
+        sample["profile_restore"] = restore_profile(home, previous / "before.tar.gz", prior["profile_before"])
         generation = module("managed-package/driver.py").state(home)[1]
         assert set(generation["enabled"]) == {OWNERS[role] for role in enabled} | (set(HELPERS) if enabled else set())
     else:
