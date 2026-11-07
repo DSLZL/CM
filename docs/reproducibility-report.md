@@ -2,16 +2,54 @@
 
 CM-S04 measures author builds separately from loading already qualified native
 artifacts. Frozen-artifact runtime verification passes **30/30 fresh starts
-(AC06)**. Full CM-S04 verification remains **incomplete**: the 36 author slots and
-repository cache-authority probes await the campaign under the owner's confirmed
-10 GB limit. Earlier runs were blocked by a payment-gated capacity API.
+(AC06)**. Actual trusted cache writes and PR read-only probes now pass **AC05**
+under the owner's confirmed 10 GB limit. Full CM-S04 verification remains
+**incomplete**: nine Mod cold measurements pass, while the complete Host, warm
+and single-Mod matrix is still pending.
+Earlier runs were blocked by a payment-gated capacity API.
 Infrastructure checks and the 11 compiler-cache canaries
 pass. Historical qualifications identify the input bytes; they are not new
 benchmark measurements or a release.
 
 ## Current hosted evidence
 
-The completed reuse qualification used fixture source
+The [free-limit campaign](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42393282434)
+used source `6045612` and worker `16edabd`. Its
+[source CI](https://github.com/DSLZL/CM/actions/runs/42393050278) passed 14 check
+groups. Preflight observed 8,836,306,629 bytes against the confirmed
+10,000,000,000-byte ceiling and reserved the existing 256 MiB new-cache budget.
+The trusted writer saved a 616-byte seed; the actual PR reader restored it exactly,
+was denied a save, and rejected isolated byte, receipt and source pollution. The
+PR's code was never executed. AC05 passes without a paid capacity API or billing
+change.
+
+That campaign also reused all 30 runtime measurements with their original IDs,
+origins, fingerprints, metrics, native hashes, retained data and runtime locks.
+Current isolation and outer audits passed; no new business measurement or native
+build was needed for runtime verification. Checkpoints were uploaded again.
+Three Host attempts failed before measurement because Git queried the workspace
+parent; nine Mod cold samples failed license packaging after actual native checks.
+Warm and single-Mod stages were not run. AC01–AC04 and the whole workflow remain
+failed/incomplete. The shared Git directory fix and existing Apache 2.0 texts for
+the five affected first-party packages were published as `ca781cd`/`f311ced`;
+[source CI](https://github.com/DSLZL/CM/actions/runs/42394484276) passed 15 check
+groups, including a real Git query from outside the source checkout.
+
+The [next author campaign](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42394875517)
+passed all nine cold Mod measurements. Three H samples failed at the unchanged
+publication seal because the five new license paths were missing from the reviewed
+source list. Helper/schema generators ran; full Host fmt/Clippy/test/build did not
+start. Those failed samples and 24 unstarted warm/single-Mod slots remain explicit.
+Source `6cdafac` and worker `9d9b3a0` register the five paths and run the exact tracked
+publication check before native preparation; [source CI](https://github.com/DSLZL/CM/actions/runs/42396671772)
+passed all 16 check groups. The [current campaign](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42397015293)
+uses those revisions and the previous run's successful-sample lineage. Its capacity,
+actual cache-authority probes and 11 canaries pass. All 30 runtime samples retain
+their original IDs and measurements, with current isolation and all outer audits
+passing; the Host author matrix is still running. These partial results do not
+qualify AC01–AC04 or the whole task.
+
+The earlier completed reuse qualification used fixture source
 `eb8e1b41bed40f3c9d61fd7d8fe646235d393c22` and worker
 `29a2315383a526296c6cdd0a7612db6ff6e0fc99`.
 [Source CI](https://github.com/DSLZL/CM/actions/runs/42390695029) passed its
@@ -119,15 +157,17 @@ There are no cross-repository lookups or broad restore prefixes.
 The existing H compiler seed is read-only. It is verified against its exact key,
 API identity, original successful producer job and compatibility fingerprint; the
 8.4 GB archive is not saved again by this experiment. Cold repetition 1 may save one
-bounded Cargo seed per role and one compiler seed per Mod. The campaign reserves at
-most 256 MiB of new repository cache, including the small trust probe. Tiny isolated
-invalidation/corruption probes use at most 16 MiB of local compiler-cache objects.
+bounded Cargo seed per role and one compiler seed per Mod. Preflight uses a 256 MiB
+planning reserve; each author save checks its actual uncompressed seed size plus
+earlier reservations and a 16 MiB safety reserve against current repository usage.
+The planning estimate is not a separate hard limit on a valid Cargo seed. Tiny
+isolated invalidation/corruption probes use at most 16 MiB of local compiler objects.
 
 Before any new repository cache save, preflight, the author save plan and trust
 writer check live usage against the owner-confirmed repository limit and the
 free-tier ceiling. On 2026-11-08 (Asia/Taipei), the owner confirmed a 10G total limit
 and no paid expansion. Configuration conservatively uses 10,000,000,000 bytes.
-The shared check reads the usage API and reserves the campaign's 256 MiB budget;
+The shared check reads the usage API and uses the pending bytes for that check;
 it does not call the storage-limit API, which returned HTTP 402 requiring a valid
 payment method. The limit's provenance remains explicit as owner confirmation.
 Missing or invalid confirmation, failed usage lookup or insufficient headroom
@@ -155,6 +195,13 @@ profile checkpoints. Changed assertions rerun dependent states; other successful
 states retain their original measurement and execution origin. A shared audit change
 invalidates all affected states. Report-only changes recompute reports. Restoring a
 checkpoint is not counted as another measurement or another cold/warm repetition.
+
+If a verified reused H cold pass lacks its exact Cargo seed, cold repetition 1 can
+prepare the same source/native identity and fetch locked downloads only. It checks
+the current worker authority, original sample and fingerprint, requires an empty
+linked target, and saves only after the actual-size capacity check. Existing seeds
+skip this repair. The original build metrics and product artifact stay unchanged;
+repair does not rerun successful H compilation or upload another native package.
 
 Portable fixture checkpoints require one explicit relocation: after validating
 the artifact, archive and original file-tree digests, the fixture updates only

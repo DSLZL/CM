@@ -302,9 +302,19 @@ workflow and role action. The benchmark requires explicit reviewed source, reque
 real PR and optional prior-run/seed identities. Cache saves use the owner's confirmed
 10 GB repository limit and live usage, capped at the free-tier ceiling. The preflight,
 author seed saves and trust writer share this check; none requires the payment-gated
-storage-limit API. Missing confirmation, failed usage lookup or insufficient space
-denies writes without cache deletion, paid expansion or re-uploading the large H seed.
-AC06 has 30 successful fresh native starts and 30 exact measurement reuses; the new
-capacity check and remaining author/cache campaign require hosted validation.
+storage-limit API. Preflight uses a planning reserve; author saves check actual
+pending bytes against the total limit. A verified reused cold H pass can repair a
+missing Cargo-download seed without repeating its build or product upload. Missing
+confirmation, failed usage lookup or insufficient space denies writes without cache
+deletion, paid expansion or re-uploading the large H compiler seed.
+AC06 has 30 successful fresh native starts; the current campaign reuses all 30
+original measurements with current isolation and zero new business measurements.
+The actual trusted cache writer and PR reader pass AC05 under the confirmed
+10 GB limit. R10 retained nine cold Mod passes, completed three cold H builds with
+identical ELF hashes, and passed nine warm Mod measurements. H warm attempts stopped
+before measurement because the old 256 MiB seed budget denied its Cargo cache save;
+the single-Mod matrix did not run. Earlier failures remain recorded. The exact
+tracked publication check runs before native work; hosted source CI passed 16 groups.
+The actual-size save and download-only repair changes still require hosted validation.
 See [measurement boundaries, reports and
 operation](../docs/reproducibility-report.md) before publication or dispatch.
