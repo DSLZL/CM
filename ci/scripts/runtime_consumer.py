@@ -2332,11 +2332,12 @@ def consume():
 
 def consume_index_proof():
     """Always fresh, small, cache-none proof consumption; no matrix replay or build toolchain."""
-    import binary_index
-    import mod_manifest
     hosted()
     inputs = Path(os.environ["CM_CONSUMER_INPUT_DIR"])
     validate_inputs(inputs)
+    sys.path.insert(0, str(inputs / "fixture/ci/scripts"))
+    import binary_index
+    import mod_manifest
     logs, artifact = Path(os.environ["CM_CI_LOG_DIR"]), Path(os.environ["CM_CI_ARTIFACT_DIR"])
     artifact.mkdir(parents=True, exist_ok=True)
     temp = Path(os.environ["RUNNER_TEMP"]) / "cm-index-proof-consumer"
