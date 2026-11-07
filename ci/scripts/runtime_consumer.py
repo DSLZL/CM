@@ -1132,9 +1132,9 @@ def bind_benchmark_tui_pid(record, own, calls):
         identity = re.search(r'\bgetpid\(\)\s+=\s+(\d+)(?: /\* \d+ in strace\x27s PID NS \*/)?$', line)
         if identity:
             identities[pid] = identity[1]
-        execution = re.search(r'execve\("[^"]+", (\[.*?\]), .*\)\s+=\s+0$', line)
+        execution = re.search(r'execve\("([^"]+)", (\[.*?\]), .*\)\s+=\s+0$', line)
         if execution:
-            executions[pid] = json.loads(execution[1])
+            executions.setdefault(pid, []).append((execution[1], json.loads(execution[2])))
 
     def process(pid):
         seen = set()
@@ -1144,7 +1144,10 @@ def bind_benchmark_tui_pid(record, own, calls):
             pid = edges[pid][0]
         return pid
 
-    hosts = [pid for pid, command in executions.items() if command == record["command"]]
+    launch = (record["command"][0], record["command"])
+    reentry = (record["command"][0], [record["command"][0]])
+    # cm launch re-enters the same sealed executable without replacing its PID.
+    hosts = [pid for pid, chain in executions.items() if chain in ([launch], [launch, reentry])]
     owned = {process(line.split()[0]) for line in own}
     assert len(owned) == 1 and owned <= set(hosts), "TUI listener is not owned by the observed Host process"
     host = next(iter(owned))
@@ -1163,11 +1166,15 @@ def benchmark_tui_binding_self_check():
         '20 clone3({flags=CLONE_VM|CLONE_THREAD}, 88) = 8 /* 21 in strace\'s PID NS */', '21 getpid() = 7']
     own = ['21 getsockname(3<TCP:[123]>, {}) = 0']
     assert bind_benchmark_tui_pid(record, own, calls)["inner_host_pid"] == "7"
+    reentry = calls + ['20 execve("' + command[0] + '", ' + json.dumps([command[0]]) + ', 0x1) = 0']
+    assert bind_benchmark_tui_pid(record, own, reentry)["outer_host_pid"] == "20"
     for invalid_record, invalid_own, invalid_calls in (
         ({**record, "identity": {"pid": 9}}, own, calls),
         (record, [own[0].replace("21 ", "22 ")], calls),
         (record, own, [line.replace("block-1", "block-1-lookalike") for line in calls]),
-        (record, own, [line.replace("/inputs/host/bin/codex", "/work/codex") for line in calls])):
+        (record, own, [line.replace("/inputs/host/bin/codex", "/work/codex") for line in calls]),
+        (record, own, [*reentry[:-1], reentry[-1].replace('execve("' + command[0] + '"', 'execve("/work/codex"')]),
+        (record, own, [*reentry[:-1], reentry[-1].replace(json.dumps([command[0]]), json.dumps([command[0], "--unexpected"]))])):
         try:
             bind_benchmark_tui_pid(invalid_record, invalid_own, invalid_calls)
         except AssertionError:

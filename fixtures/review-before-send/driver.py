@@ -93,6 +93,9 @@ def probe(case, *, changed=False):
 
 
 def turns_settled(native):
+    ready = [row["detail"] for row in native if row["event"] == "ready"]
+    if len(ready) == 1 and ready[0]["mod_count"] == 0 and not ready[0]["plan"]["mods"]:
+        return not any(row["event"].startswith(("runtime-scope-", "runtime-request")) for row in native)
     opened = {(row["detail"]["thread"], row["detail"]["turn"]) for row in native
         if row["event"] == "runtime-scope-open" and row["detail"]["turn"]}
     closed = {(row["detail"]["thread"], row["detail"]["turn"]) for row in native
