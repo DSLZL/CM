@@ -143,7 +143,7 @@ def identify(root, logs, cfg):
     compiler_hash = digest({"rustc": rustc, "cargo": cargo})
     # Image release numbers are provenance; compiler bytes, inputs and flags determine reuse.
     fingerprint = digest({key: value for key, value in compatibility.items() if key != "image_version"})
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     platform = "Linux-X64-" + TARGET
     epoch = os.environ.get("CM_CACHE_EPOCH", "v1")
     cargo_prefix = "cm-cargo-" + epoch + "-" + platform + "-" + compiler_hash + "-"
