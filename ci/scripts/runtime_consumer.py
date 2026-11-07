@@ -1145,7 +1145,7 @@ def bind_benchmark_tui_pid(record, own, calls):
         return pid
 
     launch = (record["command"][0], record["command"])
-    reentry = (record["command"][0], [record["command"][0]])
+    reentry = (record["command"][0], [record["command"][0], *record["command"][6:]])
     # cm launch re-enters the same sealed executable without replacing its PID.
     hosts = [pid for pid, chain in executions.items() if chain in ([launch], [launch, reentry])]
     owned = {process(line.split()[0]) for line in own}
@@ -1168,12 +1168,17 @@ def benchmark_tui_binding_self_check():
     assert bind_benchmark_tui_pid(record, own, calls)["inner_host_pid"] == "7"
     reentry = calls + ['20 execve("' + command[0] + '", ' + json.dumps([command[0]]) + ', 0x1) = 0']
     assert bind_benchmark_tui_pid(record, own, reentry)["outer_host_pid"] == "20"
+    forwarded = [*command, "--tool-concurrency", "2"]
+    concurrent = [line.replace(json.dumps(command), json.dumps(forwarded)) for line in reentry]
+    concurrent[-1] = concurrent[-1].replace(json.dumps([command[0]]), json.dumps([command[0], *forwarded[6:]]))
+    assert bind_benchmark_tui_pid({**record, "command": forwarded}, own, concurrent)["outer_host_pid"] == "20"
     for invalid_record, invalid_own, invalid_calls in (
         ({**record, "identity": {"pid": 9}}, own, calls),
         (record, [own[0].replace("21 ", "22 ")], calls),
         (record, own, [line.replace("block-1", "block-1-lookalike") for line in calls]),
         (record, own, [line.replace("/inputs/host/bin/codex", "/work/codex") for line in calls]),
         (record, own, [*reentry[:-1], reentry[-1].replace('execve("' + command[0] + '"', 'execve("/work/codex"')]),
+        ({**record, "command": forwarded}, own, [*concurrent[:-1], concurrent[-1].replace('"2"', '"3"')]),
         (record, own, [*reentry[:-1], reentry[-1].replace(json.dumps([command[0]]), json.dumps([command[0], "--unexpected"]))])):
         try:
             bind_benchmark_tui_pid(invalid_record, invalid_own, invalid_calls)
