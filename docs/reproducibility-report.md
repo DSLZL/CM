@@ -1,9 +1,69 @@
 # Build-cache and zero-build loading measurements
 
 CM-S04 measures author builds separately from loading already qualified native
-artifacts. The candidate has not run. Its six acceptance checks, native tests,
-performance results and quality gate are **NOT_RUN**. Historical qualifications
-identify the input bytes; they are not new benchmark measurements or a release.
+artifacts. Frozen-artifact runtime verification passes **30/30 fresh starts
+(AC06)**. Full CM-S04 verification remains **incomplete**: HTTP 402 prevents
+confirming repository cache capacity, blocking the 36 author slots and repository
+cache-authority probes. Infrastructure checks and the 11 compiler-cache canaries
+pass. Historical qualifications identify the input bytes; they are not new
+benchmark measurements or a release.
+
+## Current hosted evidence
+
+The current fixture code is source
+`eb8e1b41bed40f3c9d61fd7d8fe646235d393c22` and worker
+`29a2315383a526296c6cdd0a7612db6ff6e0fc99`.
+[Source CI](https://github.com/DSLZL/CM/actions/runs/42390695029) passed its
+13 infrastructure and negative checks. The
+[runtime qualification run](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42387064859)
+measured all three ten-state blocks with source `635c4ad` and worker `608e5a2`.
+All 30 samples passed and retain the original Host/Mod bytes; compiler, linker,
+Mod JIT and build service calls are zero. Seven profiles restored from the earlier
+failed campaign also completed actual Host starts after the fixture-only identity
+repair.
+
+The [same-input reuse run](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42390902502)
+passed all 30 slots by restoring their verified checkpoints. It retained every
+original sample ID, execution origin, dependency fingerprint and measurement;
+there were **zero new business-process measurements**. Current isolation, frozen
+verification and all three outer audits passed independently. Checkpoint archives
+were uploaded for subsequent retries; these are not new native builds or product
+packages. Both collectors report AC06 pass and AC01–AC05 incomplete/failed, so
+the workflow conclusions remain failure.
+
+The [first reuse attempt](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42389110477)
+failed before any Host business start because the fresh rootfs lacked the common
+profile parent. Its ten failed restores and twenty unstarted slots remain recorded.
+The current driver creates the parent before entering a block, with a regression
+check that executes the actual entrypoint.
+
+The [retained failed run](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42385569218)
+contains one successful behavior sample and nine startup failures in its first
+block. Its restored profiles retained device/inode identities from a previous
+runner, so the unchanged Host correctly rejected them with `state_ownership`.
+The later blocks were not started. These behavior results do not qualify AC06.
+Its text traces, failed samples and six reports remain attached to that run.
+
+The following medians are from the three fresh observations per state in the
+runtime qualification run. All rows include strace and 5 ms external polling.
+Startup means spawn to observed ready; business includes the finite TUI response
+and turn/callback settlement after ready. RSS is the sampled Host-only VmHWM,
+converted from KiB to MiB; its exact lifetime peak is unavailable. These are instrumented observations, not a
+pure dlopen measurement or a startup SLA. Full raw distributions remain in
+`zero-build-loading-measurements.json`.
+
+| State | Observations | Startup (s) | Business (s) | Host RSS (MiB) |
+| --- | ---: | ---: | ---: | ---: |
+| Empty | 3 | 11.162 | 1.889 | 343.4 |
+| A | 3 | 11.260 | 2.425 | 347.2 |
+| B | 3 | 11.221 | 2.797 | 347.0 |
+| C | 3 | 11.182 | 2.406 | 347.0 |
+| A+B+C | 3 | 11.114 | 2.827 | 348.1 |
+| Disabled | 3 | 10.886 | 1.909 | 343.6 |
+| Reenabled A+B+C | 3 | 11.064 | 2.827 | 347.8 |
+| Remove A | 3 | 11.231 | 2.802 | 346.4 |
+| Remove B | 3 | 10.911 | 2.369 | 347.0 |
+| Remove C | 3 | 11.008 | 1.876 | 327.6 |
 
 ## Execution and sample boundaries
 
@@ -90,6 +150,14 @@ profile checkpoints. Changed assertions rerun dependent states; other successful
 states retain their original measurement and execution origin. A shared audit change
 invalidates all affected states. Report-only changes recompute reports. Restoring a
 checkpoint is not counted as another measurement or another cold/warm repetition.
+
+Portable fixture checkpoints require one explicit relocation: after validating
+the artifact, archive and original file-tree digests, the fixture updates only
+the home/state/lease device and inode fields in its state identity. It preserves
+the logical home ID, state contents and generation. Each restoration records the
+original and restored file-tree hashes and the complete before/after identity;
+the changed profile bytes are not reported as equal. Production Host ownership
+checks and the frozen native artifacts remain unchanged.
 
 Every run still verifies current identities, isolation and audit requirements.
 Raw failed evidence is immutable. Heartbeats, phase logs and job/step timings remain
