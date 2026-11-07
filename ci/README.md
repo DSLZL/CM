@@ -304,9 +304,11 @@ real PR and optional prior-run/seed identities. Cache saves use the owner's conf
 author seed saves and trust writer share this check; none requires the payment-gated
 storage-limit API. Preflight uses a planning reserve; author saves check actual
 pending bytes against the total limit. A verified reused cold H pass can repair a
-missing Cargo-download seed without repeating its build or product upload. Missing
-confirmation, failed usage lookup or insufficient space denies writes without cache
-deletion, paid expansion or re-uploading the large H compiler seed.
+missing Cargo-download seed without repeating its build or product upload. That
+locked fetch disables its compiler wrapper so a traced background sccache server
+cannot keep download-only preparation alive. Missing confirmation, failed usage
+lookup or insufficient space denies writes without cache deletion, paid expansion
+or re-uploading the large H compiler seed.
 AC06 has 30 successful fresh native starts; the current campaign reuses all 30
 original measurements with current isolation and zero new business measurements.
 The actual trusted cache writer and PR reader pass AC05 under the confirmed
