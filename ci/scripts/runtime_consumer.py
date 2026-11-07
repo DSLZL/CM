@@ -1120,7 +1120,63 @@ def bind_host_executables(executions, root):
     return bound
 
 
-def bind_tui_mcp_listener(record, metadata, bound_hosts, observer):
+def bind_benchmark_tui_pid(record, own, calls):
+    edges, identities, executions = {}, {}, {}
+    for line in calls:
+        pid = line.split()[0]
+        child = re.search(r'\b(?:clone3?|fork|vfork)\(.*\)\s+=\s+(\d+)(?: /\* (\d+) in strace\x27s PID NS \*/)?$', line)
+        if child and int(child[1]) > 0:
+            outer = child[2] or child[1]
+            assert outer not in edges, "Ambiguous benchmark process lineage"
+            edges[outer] = (pid, child[1], "CLONE_THREAD" in line)
+        identity = re.search(r'\bgetpid\(\)\s+=\s+(\d+)(?: /\* \d+ in strace\x27s PID NS \*/)?$', line)
+        if identity:
+            identities[pid] = identity[1]
+        execution = re.search(r'execve\("[^"]+", (\[.*?\]), .*\)\s+=\s+0$', line)
+        if execution:
+            executions[pid] = json.loads(execution[1])
+
+    def process(pid):
+        seen = set()
+        while pid in edges and edges[pid][2]:
+            assert pid not in seen, "Cyclic benchmark thread lineage"
+            seen.add(pid)
+            pid = edges[pid][0]
+        return pid
+
+    hosts = [pid for pid, command in executions.items() if command == record["command"]]
+    owned = {process(line.split()[0]) for line in own}
+    assert len(owned) == 1 and owned <= set(hosts), "TUI listener is not owned by the observed Host process"
+    host = next(iter(owned))
+    inner = {value for pid, value in identities.items() if process(pid) == host}
+    if host in edges:
+        inner.add(edges[host][1])
+    assert inner == {str(record["identity"]["pid"])}, "Benchmark TUI PID differs from the outer trace"
+    return {"outer_host_pid": host, "inner_host_pid": next(iter(inner))}
+
+
+def benchmark_tui_binding_self_check():
+    command = ["/inputs/host/bin/codex", "cm", "--home", "/profile/s04/block-1", "launch", "--"]
+    record = {"command": command, "identity": {"pid": 7}}
+    calls = ['10 clone(child_stack=NULL, flags=SIGCHLD) = 7 /* 20 in strace\'s PID NS */',
+        '20 execve("' + command[0] + '", ' + json.dumps(command) + ', 0x1) = 0',
+        '20 clone3({flags=CLONE_VM|CLONE_THREAD}, 88) = 8 /* 21 in strace\'s PID NS */', '21 getpid() = 7']
+    own = ['21 getsockname(3<TCP:[123]>, {}) = 0']
+    assert bind_benchmark_tui_pid(record, own, calls)["inner_host_pid"] == "7"
+    for invalid_record, invalid_own, invalid_calls in (
+        ({**record, "identity": {"pid": 9}}, own, calls),
+        (record, [own[0].replace("21 ", "22 ")], calls),
+        (record, own, [line.replace("block-1", "block-1-lookalike") for line in calls]),
+        (record, own, [line.replace("/inputs/host/bin/codex", "/work/codex") for line in calls])):
+        try:
+            bind_benchmark_tui_pid(invalid_record, invalid_own, invalid_calls)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("Benchmark TUI binding accepted an unrelated process")
+
+
+def bind_tui_mcp_listener(record, metadata, bound_hosts, observer, *, process_calls=()):
     command = record["command"]
     assert len(command) >= 6 and command[0] in bound_hosts and command[1:3] == ["cm", "--home"]
     upgrade = re.fullmatch(r"/profile/g05/reuse-(?:b|ab)-(h[01])/(old|candidate)", command[3])
@@ -1132,15 +1188,17 @@ def bind_tui_mcp_listener(record, metadata, bound_hosts, observer):
         assert command[0] == "/inputs/host/bin/codex"
     initial_image = command[3] == "/profile/review/entry-coverage/cli-image"
     concurrency = command[3] == "/profile/concurrency/value-flow/tui"
+    benchmark = re.fullmatch(r"/profile/s04/block-[123]", command[3])
+    benchmark_concurrency = benchmark and command[4:] == ["launch", "--", "--tool-concurrency", "2"]
     sdk_notice = re.fullmatch(r"/profile/g06/(?:tui-slash|tui-ui-owner|legacy-abc)/tui", command[3])
-    expected = (["launch", "--", "--tool-concurrency", "2"] if concurrency else
+    expected = (["launch", "--", "--tool-concurrency", "2"] if concurrency or benchmark_concurrency else
         ["launch", "--", "--image", "/profile/review/entry-coverage/probe-0/review.png", "--", "CM_M02_cli-image"]
         if initial_image else ["launch", "--"])
     assert command[4:] == expected
-    assert upgrade or concurrency or sdk_notice or command[3] in (
+    assert upgrade or concurrency or sdk_notice or benchmark or command[3] in (
         "/profile/m03/terminal/tui", "/profile/m04/terminal/tui", "/profile/s02/abc") or re.fullmatch(
         r"/profile/review/(?:nondestructive|invalidation|key-events|entry-coverage|queue-lifecycle|plug-and-play)/[a-z0-9-]+", command[3]), "Unregistered TUI MCP profile: " + command[3]
-    assert record["tui"] and record["empty_launch_argv"] is (not (initial_image or concurrency))
+    assert record["tui"] and record["empty_launch_argv"] is (not (initial_image or concurrency or benchmark_concurrency))
     assert record["identity"]["proc_exe"] == command[0]
     assert record["identity"]["executable_sha256"] == bound_hosts[command[0]]
     if sdk_notice:
@@ -1157,7 +1215,8 @@ def bind_tui_mcp_listener(record, metadata, bound_hosts, observer):
         r'\), sin_addr=inet_addr\("127\.0\.0\.1"\)\}, \[\d+(?: => \d+)?\]\) = 0', line) for line in own)
     connections = observer.provider_tcp_connections(own, {port})
     assert connections, "TUI MCP listener has no matching successful loopback accept"
-    return {"port": port, "listener_inode": inode, "accepted_socket_inodes": sorted(connections)}
+    binding = bind_benchmark_tui_pid(record, own, process_calls) if benchmark else {}
+    return {"port": port, "listener_inode": inode, "accepted_socket_inodes": sorted(connections), **binding}
 
 
 @ci_progress.case()
@@ -1390,7 +1449,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
                "fixtures/review-before-send/driver.py", "fixtures/tool-concurrency/driver.py",
                "fixtures/runtime-qualification/driver.py", "fixtures/runtime-hooks/driver.py", "fixtures/compatibility/driver.py",
                "fixtures/sdk-seams/driver.py", "fixtures/distribution-provenance/driver.py",
-               "fixtures/compatibility-policy/driver.py", "fixtures/binary-index/driver.py")
+               "fixtures/compatibility-policy/driver.py", "fixtures/binary-index/driver.py", "fixtures/build-benchmarks/driver.py")
     network = []
     sockets = []
     tcp_metadata = []
@@ -1460,7 +1519,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
             ports.update(re.findall(r'http://127[.]0[.]0[.]1:(\d+)', " ".join(arguments)
                 + " " + record.get("provider_endpoint", "")))
         if record.get("tui_mcp_listener"):
-            listener = bind_tui_mcp_listener(record, tcp_metadata, bound_hosts, observer)
+            listener = bind_tui_mcp_listener(record, tcp_metadata, bound_hosts, observer, process_calls=process_calls)
             tui_listeners.append({"evidence": str(path.relative_to(evidence)), **listener})
             ports.add(listener["port"])
     # The outer observer also sees the provider's responses. Normalize only the
@@ -1724,6 +1783,9 @@ def bind_concurrency_probes(executions, root):
     producer = read(root / "rootfs/inputs/producer.json")
     concurrency = producer.get("concurrency")
     if concurrency is None:
+        return []
+    if producer.get("benchmark_scope") == "CM-S04":
+        assert set(concurrency) == {"code_mode_helper"} and not (root / "rootfs/inputs/probes").exists()
         return []
     result = []
     for key, expected in (("probe", "/inputs/probes/cm-concurrency-core"),

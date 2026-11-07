@@ -44,6 +44,22 @@
       "destination": ".github/scripts/runtime_cases.py"
     },
     {
+      "source": "ci/scripts/build_benchmarks.py",
+      "destination": ".github/scripts/build_benchmarks.py"
+    },
+    {
+      "source": "ci/worker/benchmark.yml",
+      "destination": ".github/workflows/benchmark.yml"
+    },
+    {
+      "source": "ci/worker/benchmark-author.yml",
+      "destination": ".github/workflows/benchmark-author.yml"
+    },
+    {
+      "source": "ci/worker/benchmark-role/action.yml",
+      "destination": ".github/actions/benchmark-role/action.yml"
+    },
+    {
       "source": "ci/worker/cache-authority/action.yml",
       "destination": ".github/actions/cache-authority/action.yml"
     },

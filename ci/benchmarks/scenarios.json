@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "task_id": "CM-S04",
+  "required_checks": [
+    "CM-S04-AC01",
+    "CM-S04-AC02",
+    "CM-S04-AC03",
+    "CM-S04-AC04",
+    "CM-S04-AC05",
+    "CM-S04-AC06"
+  ],
+  "target": "x86_64-unknown-linux-gnu",
+  "rust_toolchain": "1.95.0",
+  "canary_toolchain": "1.94.0",
+  "repetitions": [
+    1,
+    2,
+    3
+  ],
+  "stages": [
+    "cold",
+    "warm",
+    "mod-change"
+  ],
+  "roles": {
+    "H": {
+      "kind": "host",
+      "unit": "host"
+    },
+    "A": {
+      "kind": "mod",
+      "source": "examples/mods/turn-budget",
+      "package": "cm-turn-budget",
+      "payload": "libcm_turn_budget.so",
+      "owner": "org.example.turn-budget"
+    },
+    "B": {
+      "kind": "mod",
+      "source": "examples/mods/review-before-send",
+      "package": "cm-review-before-send",
+      "payload": "libcm_review_before_send.so",
+      "owner": "org.example.review-before-send"
+    },
+    "C": {
+      "kind": "mod",
+      "source": "examples/mods/tool-concurrency",
+      "package": "cm-tool-concurrency",
+      "payload": "libcm_tool_concurrency.so",
+      "owner": "org.example.tool-concurrency"
+    }
+  },
+  "host_seed": {
+    "repository": "DSLZL/CM-build-linux-x64",
+    "key": "cm-sccache-v1-Linux-X64-x86_64-unknown-linux-gnu-0.18.0-c4b315d1a7f852423345bad0b259157d2b091832652ac05b9cba2ef9f91b6d99-5290cdbd5127ae0e06ad5a07449646d7f7fe13e2",
+    "compiler_compatibility": "c4b315d1a7f852423345bad0b259157d2b091832652ac05b9cba2ef9f91b6d99",
+    "source_sha": "5290cdbd5127ae0e06ad5a07449646d7f7fe13e2",
+    "worker_sha": "73a8c26e981241de9620eb66759010512bdb517e",
+    "run_id": 42252448545,
+    "run_attempt": 1,
+    "image_os": "ubuntu24",
+    "image_version": "20261101.360.1",
+    "restore_path": "cm-sccache",
+    "save": false
+  },
+  "cache": {
+    "namespace": "cm-s04-v1",
+    "max_new_bytes": 268435456,
+    "canary_reserve_bytes": 16777216,
+    "free_limit_bytes": 10000000000,
+    "minimum_disk_reserve_bytes": 2147483648,
+    "missing_seed": "fail-before-compile",
+    "unknown_capacity": "deny-save",
+    "cross_repository_restore": false
+  },
+  "mod_change": {
+    "role": "A",
+    "relative": "src/lib.rs",
+    "old": "\"invalid turn-budget config\"",
+    "new": "\"invalid turn-budget config (CM-S04 A1)\"",
+    "assertion": "assert_eq!(policy(br#\"{\"max_main_samples\":\"invalid\"}\"#).unwrap_err(), \"invalid turn-budget config (CM-S04 A1)\");",
+    "baseline": "A0",
+    "variant": "A1",
+    "changes_host": false,
+    "changes_other_mods": false
+  },
+  "reports": [
+    "author-build-benchmark-runs.json",
+    "author-cache-measurements.json",
+    "runtime-reproducibility-levels.json",
+    "repository-cache-coverage.json",
+    "cache-trust-failures.json",
+    "zero-build-loading-measurements.json"
+  ]
+}

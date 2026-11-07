@@ -286,3 +286,21 @@ The private continuation and stream probes reuse the M02 Core test executable. P
 An exact producer hit continues to skip Host compilation and large product/input uploads. Current test overlays, input/isolation/audit checks, receipts and dependency explanations remain current. Build and consumer stage logs use the existing progress stream. Successful checkpoints are reused independently of a failed sibling; failed evidence is retained. The compiler-free consumer runs the packaged CLI and native payloads, never SDK source or a build fallback.
 
 All G06 formatting, Clippy, compiler checks, cold/warm runs, controlled Python/Rust invalidation proofs and runtime acceptance remain NOT_RUN. The original seven AC, earlier qualification evidence, parent integration and release readiness remain separate; see [SDK support](../docs/sdk-support.md).
+
+## S04 candidate
+
+The dedicated `benchmark.yml` worker workflow measures 36 independent author slots
+and 30 starts of the original qualified H/A/B/C in the strict offline consumer.
+Cold/warm builds use empty linked targets; a controlled A-only source change keeps
+H/B/C unchanged. Exact successful samples retain their original execution identity
+on retries. Per-state runtime checkpoints prevent an unrelated Python test fix from
+replaying every successful state. Current shared isolation/audit changes still
+invalidate their consumers. Ordinary S03 build configuration stays unchanged.
+
+Worker deployment now maps 16 canonical files, including the benchmark reusable
+workflow and role action. The benchmark requires explicit reviewed source, request,
+real PR and optional prior-run/seed identities. Cache saves require confirmed live
+capacity; unknown capacity gates new writes without deleting existing caches or
+re-uploading the large H seed. All new self-checks, native execution and six S04
+acceptance checks remain **NOT_RUN**. See [measurement boundaries, reports and
+operation](../docs/reproducibility-report.md) before publication or dispatch.

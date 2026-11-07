@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "task_id": "CM-S04",
+  "blocks": [
+    1,
+    2,
+    3
+  ],
+  "states": [
+    {
+      "id": "empty",
+      "enabled": []
+    },
+    {
+      "id": "A",
+      "enabled": [
+        "A"
+      ]
+    },
+    {
+      "id": "B",
+      "enabled": [
+        "B"
+      ]
+    },
+    {
+      "id": "C",
+      "enabled": [
+        "C"
+      ]
+    },
+    {
+      "id": "ABC",
+      "enabled": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "disabled",
+      "enabled": []
+    },
+    {
+      "id": "reenabled-ABC",
+      "enabled": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "remove-A",
+      "enabled": [
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "remove-B",
+      "enabled": [
+        "C"
+      ]
+    },
+    {
+      "id": "remove-C",
+      "enabled": []
+    }
+  ],
+  "profile": "/profile/s04/block-{block}",
+  "fixture": "fixtures/build-benchmarks/driver.py",
+  "sampling": {
+    "clock": "time.monotonic_ns",
+    "poll_milliseconds": 5,
+    "timestamps": [
+      "spawn",
+      "first_native_observed",
+      "ready_observed",
+      "business_complete",
+      "exit"
+    ],
+    "startup_definition": "spawn to observed ready; includes runtime startup and observer resolution",
+    "dlopen_definition": "first to last observed native dlopen event; no pure-loader latency claim",
+    "rss_method": "exact Host PID /proc/PID/status VmHWM, sampled through process exit",
+    "rss_unit": "KiB",
+    "rss_children": "excluded",
+    "trace_overhead": "strace and external polling are present in all rows"
+  },
+  "helper_mods": [
+    "lifecycle-audit",
+    "example-tool"
+  ],
+  "production": {
+    "run_id": 42252448545,
+    "source_sha": "5290cdbd5127ae0e06ad5a07449646d7f7fe13e2",
+    "worker_sha": "73a8c26e981241de9620eb66759010512bdb517e",
+    "host_sha256": "c45d3d141b50c9cc7cbc80991dd739c09144a3325eaef6b0a26a88dd628b01ec",
+    "host_build_id": "sha256:5d92be8f0179b96d6da99601ff9a4b1b652d41c475a5bba67fba24f949367fbf"
+  },
+  "qualification": {
+    "run_id": 42361277607,
+    "run_attempt": 1,
+    "source_sha": "68772fbb44be8ac615a068d96b5e2a3f3d6ab430",
+    "worker_sha": "318b820eb1066155f5352961886902dd4d13b65c",
+    "origin": {
+      "run_id": 42361277607,
+      "run_attempt": 1,
+      "source_sha": "68772fbb44be8ac615a068d96b5e2a3f3d6ab430",
+      "workflow_sha": "318b820eb1066155f5352961886902dd4d13b65c",
+      "request_id": "cm-s03-quality-r14a-warm-727fecc9f922",
+      "input_artifact_id": 13525312416,
+      "input_artifact_sha256": "f9f7efcef88462c98d2c2ce328f5d47625542ef5ebb196bb57c36d0e704f77e6",
+      "consumer_artifact_id": 13570276352,
+      "consumer_artifact_sha256": "ea8fcfbff0ba4789d104d5bc976751fc3c6597f3dc7cfa8e0a45b54845bb21fc",
+      "receipt_artifact_id": 13569702693,
+      "receipt_artifact_sha256": "5f20ee278966b48878441d86a7c2a27727a485034fdc06906d74e91727e5578e"
+    }
+  },
+  "allow_sources": false,
+  "allow_network_build": false,
+  "allow_sample_as_new": false
+}

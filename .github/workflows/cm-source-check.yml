@@ -66,7 +66,7 @@ jobs:
           missing = [p for p in paths if p not in tracked or not Path(p).is_file() or Path(p).is_symlink()]
           assert not missing, f"Required CI files missing from this commit: {missing}"
           worker = json.loads(Path("ci/worker-files.json").read_text(encoding="utf-8"))
-          assert len(worker["files"]) == 12
+          assert len(worker["files"]) == 16
           assert len({row["destination"] for row in worker["files"]}) == len(worker["files"])
           assert all(row["source"] in paths for row in worker["files"]), "Worker inputs must be published"
           cfg = json.loads(Path(".github/cm-ci.json").read_text())
@@ -108,10 +108,11 @@ jobs:
               for path in ("crates/cm/src/provenance.rs", "crates/cm/src/distribution-policy.json", "crates/cm/src/distribution-root.jsonl"):
                   assert path in cfg["native_identity_files"]
           scripts = [Path("ci/scripts") / (name + ".py") for name in
-                     ("record_run", "worker_policy", "dispatch_build", "acceptance_cache", "retry", "runtime_cases", "sdk_seams", "distribution_provenance", "support_policy", "binary_index")]
+                     ("record_run", "worker_policy", "dispatch_build", "acceptance_cache", "retry", "runtime_cases", "sdk_seams", "distribution_provenance", "support_policy", "binary_index", "build_benchmarks", "runtime_consumer")]
           scripts.append(Path("fixtures/distribution-provenance/driver.py"))
           scripts.append(Path("fixtures/compatibility-policy/driver.py"))
           scripts.append(Path("fixtures/binary-index/driver.py"))
+          scripts.append(Path("fixtures/build-benchmarks/driver.py"))
           if cfg["task_id"] == "CM-S02":
               support = json.loads(Path("fixtures/compatibility-policy/policy.json").read_text())
               matrix = json.loads(Path("schemas/support-matrix.schema.json").read_text())
@@ -121,6 +122,8 @@ jobs:
           for script in scripts:
               py_compile.compile(str(script), cfile=str(Path(os.environ["RUNNER_TEMP"]) / (script.stem + ".pyc")),
                                  doraise=True)
+          import build_benchmarks
+          build_benchmarks.self_check()
           import tomllib
           template = Path("templates/native-mod")
           cargo = tomllib.loads((template / "Cargo.toml").read_text())
