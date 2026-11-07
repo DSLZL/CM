@@ -1,53 +1,73 @@
 # Build-cache and zero-build loading measurements
 
 CM-S04 measures author builds separately from loading already qualified native
-artifacts. Frozen-artifact runtime verification passes **30/30 fresh starts
-(AC06)**. Actual trusted cache writes and PR read-only probes now pass **AC05**
-under the owner's confirmed 10 GB limit. Full CM-S04 verification remains
-**incomplete**: nine Mod cold measurements pass, while the complete Host, warm
-and single-Mod matrix is still pending.
-Earlier runs were blocked by a payment-gated capacity API.
-Infrastructure checks and the 11 compiler-cache canaries
-pass. Historical qualifications identify the input bytes; they are not new
-benchmark measurements or a release.
+artifacts. The completed measurement campaign has **36/36 author slots** and
+**30/30 runtime slots**, with all six automated acceptance checks passing. The
+runtime measurements retain their original 30 actual Host starts. Exact retries
+reuse measurements; they do not count another independent repetition.
+These GNU Linux x64 observations do not establish a release or cross-platform support.
 
-## Current hosted evidence
+## Hosted measurement evidence
 
-The [free-limit campaign](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42393282434)
-used source `6045612` and worker `16edabd`. Its
-[source CI](https://github.com/DSLZL/CM/actions/runs/42393050278) passed 14 check
-groups. Preflight observed 8,836,306,629 bytes against the confirmed
-10,000,000,000-byte ceiling and reserved the existing 256 MiB new-cache budget.
-The trusted writer saved a 616-byte seed; the actual PR reader restored it exactly,
-was denied a save, and rejected isolated byte, receipt and source pollution. The
-PR's code was never executed. AC05 passes without a paid capacity API or billing
-change.
+The [completed campaign](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42406989617)
+used source `7076650` and worker `459985f`. Its
+[source CI](https://github.com/DSLZL/CM/actions/runs/42406649722) passed 19 check
+groups. All 15 jobs succeeded and the six reports contain 66 unique original
+sample identities. Twenty-one successful author samples were retained unchanged
+from earlier campaigns. The 15 new author observations comprise three warm H
+builds, three A-only change builds and nine unchanged H/B/C package observations.
+No new native product artifact was uploaded by this campaign.
 
-That campaign also reused all 30 runtime measurements with their original IDs,
-origins, fingerprints, metrics, native hashes, retained data and runtime locks.
-Current isolation and outer audits passed; no new business measurement or native
-build was needed for runtime verification. Checkpoints were uploaded again.
-Three Host attempts failed before measurement because Git queried the workspace
-parent; nine Mod cold samples failed license packaging after actual native checks.
-Warm and single-Mod stages were not run. AC01–AC04 and the whole workflow remain
-failed/incomplete. The shared Git directory fix and existing Apache 2.0 texts for
-the five affected first-party packages were published as `ca781cd`/`f311ced`;
-[source CI](https://github.com/DSLZL/CM/actions/runs/42394484276) passed 15 check
-groups, including a real Git query from outside the source checkout.
+| Role | Cold median (s) | Warm median (s) | A-only change |
+| --- | ---: | ---: | --- |
+| H | 2881.503 | 2335.112 | Original ELF/package observed; no build |
+| A | 8.833 | 6.738 | 5.305 s median |
+| B | 8.800 | 6.336 | Original ELF/package observed; no build |
+| C | 8.624 | 6.300 | Original ELF/package observed; no build |
 
-The [next author campaign](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42394875517)
-passed all nine cold Mod measurements. Three H samples failed at the unchanged
-publication seal because the five new license paths were missing from the reviewed
-source list. Helper/schema generators ran; full Host fmt/Clippy/test/build did not
-start. Those failed samples and 24 unstarted warm/single-Mod slots remain explicit.
-Source `6cdafac` and worker `9d9b3a0` register the five paths and run the exact tracked
-publication check before native preparation; [source CI](https://github.com/DSLZL/CM/actions/runs/42396671772)
-passed all 16 check groups. The [current campaign](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42397015293)
-uses those revisions and the previous run's successful-sample lineage. Its capacity,
-actual cache-authority probes and 11 canaries pass. All 30 runtime samples retain
-their original IDs and measurements, with current isolation and all outer audits
-passing; the Host author matrix is still running. These partial results do not
-qualify AC01–AC04 or the whole task.
+Each cold/warm cell has three independent original measurements with empty linked
+targets. Phase times include actual generation, fmt, Clippy, tests, builds and
+packaging; setup, archive restore/save and uploads retain separate Actions timings.
+The image/compiler/native cohort matches, but physical-runner equivalence is not
+assumed. All three warm H measurements restored both exact archives and recorded
+1,947 compiler-object hits, 2,056 misses and zero cache errors each. Rust contributed
+968 hits; C/C++ and assembler contributed 699 and 280. This is partial cache reuse,
+not a claim that unchanged source eliminates every compiler, test or link step.
+
+Cold and warm builds have one source-input hash and one identical ELF hash per
+role. Their six archive hashes per role remain unequal: actual tar/gzip timestamps
+are retained. The changed A source and all nine unchanged H/B/C ELF/package
+observations are recorded separately. No normalization manufactures byte equality.
+
+The missing H Cargo seed was repaired with a locked download lasting 110.676 s.
+Its trace contains only Cargo and rustc metadata queries, with no sccache daemon or
+native output. The linked target remained absent; the original cold H sample and
+product were retained. The save checked 386,604,096 uncompressed bytes plus
+16,777,216 bytes of safety against live usage and the owner's confirmed
+10,000,000,000-byte ceiling. Actual cache `10171734918` stores 321,957,922 bytes;
+repository usage afterwards was 9,193,468,682 bytes. The existing 8.4 GB H compiler
+seed remains read-only. No paid capacity API, billing expansion or cache deletion
+is required. The former 256 MiB value is a planning reserve, not another size cap.
+
+The trusted writer and actual PR reader passed with an exact 614-byte seed, a
+denied PR save, a real missing key, a real service failure and three isolated
+pollution rejections. PR code was never executed. All 11 compiler-cache canaries
+passed. Current runtime isolation and four outer audits also passed while reusing
+all 30 original measurements: zero new business measurements and no compiler,
+linker, Mod JIT or build-service calls. Checkpoint archives were uploaded again;
+they remain distinct from native product uploads.
+
+Earlier failures remain attached to their original runs. The
+[first free-limit run](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42393282434)
+failed at Git-directory binding and first-party license packaging. The
+[next run](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42394875517)
+passed nine Mod cold samples but failed the unchanged Host publication seal because
+five license paths were unregistered. The
+[following run](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42397015293)
+retained 21 author passes but lacked the exact H Cargo seed after the old extra
+256 MiB save gate. A [cancelled repair attempt](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42403381140)
+started a never-idle sccache daemon under `strace -f`; download-only repair now clears
+its compiler wrapper. None of those incomplete campaigns is relabelled as passing.
 
 The earlier completed reuse qualification used fixture source
 `eb8e1b41bed40f3c9d61fd7d8fe646235d393c22` and worker
@@ -229,6 +249,10 @@ checks to them and fails incomplete campaigns.
 | AC04 | `repository-cache-coverage.json` | Worker ownership, partitions, capacity and actual invalidation probes |
 | AC05 | `cache-trust-failures.json` | Actual read/write/miss/service/corruption probes and current self-check evidence |
 | AC06 | `zero-build-loading-measurements.json` | 30 runtime slots, current isolation audit and unchanged native bytes |
+
+Cache report deltas contain cumulative hits, misses and errors, counted once.
+Sizes and capacity limits remain raw before/after gauges; a null gauge stays
+unknown and is never treated as zero. Original measurement snapshots remain intact.
 
 The five reproducibility levels are independent. Actual unequal ELF/archive hashes
 remain unequal. Tar/gzip timestamps are retained; no normalization manufactures byte

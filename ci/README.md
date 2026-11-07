@@ -309,14 +309,17 @@ locked fetch disables its compiler wrapper so a traced background sccache server
 cannot keep download-only preparation alive. Missing confirmation, failed usage
 lookup or insufficient space denies writes without cache deletion, paid expansion
 or re-uploading the large H compiler seed.
-AC06 has 30 successful fresh native starts; the current campaign reuses all 30
-original measurements with current isolation and zero new business measurements.
-The actual trusted cache writer and PR reader pass AC05 under the confirmed
-10 GB limit. R10 retained nine cold Mod passes, completed three cold H builds with
-identical ELF hashes, and passed nine warm Mod measurements. H warm attempts stopped
-before measurement because the old 256 MiB seed budget denied its Cargo cache save;
-the single-Mod matrix did not run. Earlier failures remain recorded. The exact
-tracked publication check runs before native work; hosted source CI passed 16 groups.
-The actual-size save and download-only repair changes still require hosted validation.
+R12 completed all 36 author and 30 runtime slots, with all six automated checks
+passing. It retained 21 author passes, added three warm H builds, three changed-A
+builds and nine unchanged H/B/C observations, and uploaded no native product.
+All 30 original runtime measurements were reused with current isolation and four
+outer audits; new business measurements and forbidden build calls were zero.
+The missing H Cargo seed was saved after a 110.676 s download-only repair with no
+linked target or repeated cold H build. Actual repository usage was 9,193,468,682
+bytes, inside the confirmed 10 GB ceiling. Real cache authority and 11 canaries pass.
+Warm H reuse is partial: each sample has 1,947 hits and 2,056 misses. Raw snapshots
+remain authoritative; reports derive only cumulative hit/miss/error deltas and
+preserve null size gauges. Report-only changes do not invalidate native, runtime
+or unchanged-package measurements. Earlier failed and cancelled evidence remains.
 See [measurement boundaries, reports and
 operation](../docs/reproducibility-report.md) before publication or dispatch.
