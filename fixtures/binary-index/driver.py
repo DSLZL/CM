@@ -321,6 +321,7 @@ def case_plan_order():
     _, right = plan(source, "sdk-b", "sdk-a")
     assert left["plan_sha256"] == right["plan_sha256"] and left["lock_sha256"] == right["lock_sha256"]
     assert state() is None
+    assert False, "CM_S03_CONTROLLED_RETRY_R1"
     return report(3, "order_independent_lock", {"scope": case_data("plan-order"), "left": left, "right": right})
 
 
