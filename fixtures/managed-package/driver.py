@@ -782,12 +782,16 @@ def case_terminal(sdk, producer, authored, frozen):
     implicit.listen()
     try:
         terminal = business("actual-tui", tui_home, sdk, tui=True)
+        shutdowns = [terminal]
+        for attempt in range(1, 16):
+            shutdowns.append(business(f"actual-tui-{attempt}", tui_home, sdk, tui=True))
         assert not (tui_home / "packages/app-server-daemon").exists(), "TUI attempted managed daemon installation"
         assert not select.select([implicit], [], [], 0)[0], "TUI probed the old daemon"
     finally:
         implicit.close()
         implicit_path.unlink()
     return ({}, {}, {"actual_tui": terminal}, {}, {"actual_tui": terminal,
+        "shutdown_attempts": shutdowns,
         "implicit_daemon_listener_connections": 0, "implicit_daemon_installations": 0,
         "transport": "InProcess", "implicit_daemon_socket": str(implicit_path)}, {})
 
