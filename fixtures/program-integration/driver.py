@@ -40,8 +40,6 @@ def setup(selected, limit=16):
         budget.cm(PROFILE, EVIDENCE / "management", "install", INPUTS / "mods" / relative)
     for owner in selected:
         budget.cm(PROFILE, EVIDENCE / "management", "install", INPUTS / "mods" / PACKAGES[owner])
-    if not selected:
-        budget.cm(PROFILE, EVIDENCE / "management", "scan")
     if "a" in selected:
         mod_manifest.write_toml(PROFILE / "cm-runtime.toml", {"format_version": 2, "enabled": [],
             "mods": {OWNERS["a"]: {"policy": budget.policy(limit)}}})
@@ -56,10 +54,9 @@ def payloads():
 def terminal(name, selected, provider=None, *, leaves=False, code_mode=False):
     review = module("review-before-send/driver.py")
     directory = EVIDENCE / name
-    leaf_dir = EVIDENCE / (name + "-leaves")
+    leaf_dir = directory / "leaves"
     settings = {"tool_concurrency": 1} if "c" in selected else {}
     if leaves:
-        leaf_dir.mkdir(parents=True)
         settings.update(model_catalog_json="/fixture/concurrency-models.json", features={"code_mode": code_mode},
             mcp_servers={"g03": {"command": "/usr/bin/python3",
                 "args": ["-B", "/fixture/fixtures/tool-concurrency/driver.py", "mcp", str(leaf_dir)],
@@ -67,6 +64,8 @@ def terminal(name, selected, provider=None, *, leaves=False, code_mode=False):
     instance = review.Terminal("program", name, PROFILE, reviewed="b" in selected, provider=provider,
         settings=settings, directory=directory)
     try:
+        if leaves:
+            leaf_dir.mkdir()
         yield instance
     except BaseException:
         instance.close(False)
@@ -175,11 +174,11 @@ def leaf_audit(rows, *, cancelled=False):
 def leaves(name, selected, *, code_mode=False, cancel=None, exec_tools=False):
     concurrency = module("tool-concurrency/driver.py")
     provider = concurrency.Provider(cells=2 if code_mode else 3, code_mode=code_mode,
-        exec_barriers=EVIDENCE / (name + "-leaves") if exec_tools else None)
+        exec_barriers=EVIDENCE / name / "leaves" if exec_tools else None)
     with terminal(name, selected, provider, leaves=True, code_mode=code_mode) as instance:
         token = "program-" + name
         submit(instance, token, selected)
-        entered = EVIDENCE / (name + "-leaves")
+        entered = EVIDENCE / name / "leaves"
         instance.wait(lambda: len(list(entered.glob("*.entered"))) == 1 and
             sum(row["event"] == "tool-concurrency-wait" for row in instance.native()) > 1,
             "one running leaf and a separately queued leaf")
@@ -197,9 +196,8 @@ def leaves(name, selected, *, code_mode=False, cancel=None, exec_tools=False):
             assert queued, "Cancellation did not exercise an actual queued leaf"
             assert len(list(entered.glob("*.entered"))) == 1
             instance.send(b"\x1b")
-            instance.wait_turns()
-            closed = [row for row in instance.native() if row["event"] == "runtime-scope-closed" and row["detail"]["turn"]]
-            assert any(row["detail"]["turn"] == cancelled_turn for row in closed), "Cancelled turn did not close"
+            instance.wait(lambda: any(row["event"] == "runtime-scope-closed" and
+                row["detail"]["turn"] == cancelled_turn for row in instance.native()), "UI interrupt closed the cancelled turn")
             # Release only after turn cancellation is observed; queued work must never enter.
             (entered / "release").touch()
             for label in ("A", "B"):
