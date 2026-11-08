@@ -4,6 +4,10 @@
   "repository": "DSLZL/CM-build-linux-x64",
   "files": [
     {
+      "source": "ci/scripts/program_integration.py",
+      "destination": ".github/scripts/program_integration.py"
+    },
+    {
       "source": "ci/scripts/binary_index.py",
       "destination": ".github/scripts/binary_index.py"
     },

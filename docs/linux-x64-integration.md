@@ -1,0 +1,17 @@
+# Linux x64 final integration validation
+
+The `program` build kind in the independent worker's existing `build.yml` validates a frozen product. It uses the CM-S03 Host and original independent turn-budget (A), review-before-send (B), and tool-concurrency (C) packages. It creates no native producer, installs no compiler, uploads no replacement product archive, and writes no Actions cache. The ordinary qualification and Mod-only build kinds keep their existing behavior.
+
+The requested source SHA identifies the current Python fixtures and report definitions. It does not replace the original production source SHA. The successful S03 post-consumer qualification, original producer job, artifact ZIP digests, internal Host and payload digests, and current validation run are verified and recorded separately. The original producer run's later failure remains in the evidence.
+
+`ci/program/acceptance.json` pins the ordinary 393-case checkpoint artifact, current qualification validation artifact, and retained S04 reports. The S04 benchmark checkpoint format is not accepted as an ordinary runtime checkpoint. Missing, expired, damaged or mismatched frozen inputs stop validation. There is no build fallback.
+
+The consumer uses its existing rootfs, namespace probes, offline signature bootstrap, syscall observer, network canary and per-case checkpoints. The new module runs through the already controlled concurrency fixture entry; its launcher and exact reachable functions enter each new case's dependency key. Successful matching old cases retain their original execution identities. New cases and actual changes to shared helpers run independently. An unchanged old case with an unexpected cache miss fails explicitly instead of replaying the full suite. Each case publishes progress and saves its own successful result even when another case fails.
+
+The 18 cases cover empty and individual sets, a real ABC TUI input and Y confirmation, budget exhaustion and retry/next-turn boundaries, real exec leaves and nested Code Mode, queued/running cancellation and recovery, a provider failure, backend rejection, exclusive conflicts, and managed disable/remove/re-enable transitions. Barriers and native call/turn identities establish concurrency; elapsed time alone does not. Running processes keep their selected generation, while management changes affect the next process. A/B/C declare no persistent file-state schema; M04's owned-state qualification remains a separate evidence group. Retained user data and the official installation are checked independently.
+
+A successful program consumer emits four reports and a machine acceptance file. The separate program receipt binds actual preparation and consumption jobs without inventing a new native producer. These reports remain a candidate until the four original parent criteria and actual hosted evidence have been reviewed.
+
+The support line remains GNU Linux x64. Stable ABI entries, experimental ABI 2.3, exact Host Hook qualification, unsupported unrestricted source L4/detours, and untested OS/CPU/libc versions remain distinct. No future maintenance duration or release readiness is implied. S04's original 36 author and 30 runtime measurements are referenced with their original counters and unavailable gauges; this validation does not repeat them.
+
+All program jobs enforce actual cache mode `none`. The repository cache cap is 10,000,000,000 bytes and the additional cache-write budget is zero. Capacity lookup failures stop the run; no billing, eviction or cache deletion is performed.

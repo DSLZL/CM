@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -128,8 +129,9 @@ def session(case, name, *, limit=None, code_mode=False, cells=0, held=False, bud
 
 
 class Provider:
-    def __init__(self, *, cells=0, code_mode=False, held=False):
+    def __init__(self, *, cells=0, code_mode=False, held=False, exec_barriers=None):
         self.requests, self.errors = [], []
+        self.exec_barriers = exec_barriers
         self.release = threading.Event()
         if not held:
             self.release.set()
@@ -166,7 +168,12 @@ class Provider:
                     identity = "g03-" + token + "-" + str(len(parent.requests))
                     send({"type": "response.created", "response": {"id": identity}})
                     items = []
-                    if not title and cells and not outputs:
+                    if not title and parent.exec_barriers and not outputs:
+                        items = [{"type": "function_call", "name": "exec_command", "call_id": "program-exec-" + label,
+                            "arguments": json.dumps({"cmd": "/usr/bin/python3 -B /fixture/fixtures/native-loader/tool_barrier.py " +
+                                shlex.quote(str(parent.exec_barriers)) + " " + label, "login": False, "yield_time_ms": 30000})}
+                            for label in ("A", "B")]
+                    elif not title and cells and not outputs:
                         if code_mode:
                             for cell in range(cells):
                                 code = '// @exec: {"yield_time_ms":1}\n' + \
@@ -545,6 +552,11 @@ def plug_and_play():
         "parent_abc_acceptance": "not_run"})
 
 
+def program_matrix():
+    module("program-integration/driver.py").matrix(sys.argv[2])
+
+
 if __name__ == "__main__":
     {"value-flow": value_flow, "steer": steer, "leaf-bound": leaf_bound, "lock-domains": lock_domains,
-     "cancellation": cancellation, "backend-scope": backend_scope, "plug-and-play": plug_and_play, "mcp": mcp}[sys.argv[1]]()
+     "cancellation": cancellation, "backend-scope": backend_scope, "plug-and-play": plug_and_play,
+     "mcp": mcp, "program-matrix": program_matrix}[sys.argv[1]]()

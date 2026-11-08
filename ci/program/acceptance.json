@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "task_id": "CM-PROGRAM",
+  "implementation_task_id": "CM-PROGRAM-INTEGRATION",
+  "product_task_id": "CM-S03",
+  "target": "x86_64-unknown-linux-gnu",
+  "required_checks": [
+    "CM-PROGRAM-AC01",
+    "CM-PROGRAM-AC02",
+    "CM-PROGRAM-AC03",
+    "CM-PROGRAM-AC04"
+  ],
+  "reports": [
+    "final-coverage.md",
+    "milestone-mvp.md",
+    "milestone-runtime-integration.md",
+    "linux-x64-completion.md"
+  ],
+  "frozen_reference": "ci/benchmarks/runtime-loading.json",
+  "repository_cache_limit_bytes": 10000000000,
+  "new_cache_write_budget_bytes": 0,
+  "checkpoints": {
+    "id": 13569592547,
+    "sha256": "6c140f89dc1b822dcba3995688cb9c6b646e06e539b7267902e37b7fca50f75a",
+    "case_count": 393
+  },
+  "validation": {
+    "id": 13569676710,
+    "sha256": "a6e037dce5c08075c3a40005ab1f38efd25958c10784a3f981759caaf3d50a35"
+  },
+  "benchmarks": {
+    "run_id": 42412959994,
+    "run_attempt": 1,
+    "source_sha": "eb239c14b0297663290bace3505abec95580fe3b",
+    "workflow_sha": "e5675c0c3c6e5627736d64dc488d3a367153a95f",
+    "id": 13590353807,
+    "sha256": "6512b43778fcbba0cb1a3784884033c5899d0a1a310d2e64e4ae10833d2c97b6"
+  },
+  "release_ready": false
+}

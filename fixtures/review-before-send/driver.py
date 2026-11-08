@@ -114,7 +114,7 @@ def turns_settled(native):
 
 
 class Terminal:
-    def __init__(self, case, name, home, *, reviewed=True, launch_args=(), binary=None, directory=None, extra_env=None):
+    def __init__(self, case, name, home, *, reviewed=True, launch_args=(), binary=None, directory=None, extra_env=None, provider=None, settings=None):
         self.sdk = module("runtime-sdk/driver.py")
         self.managed = module("managed-package/driver.py")
         self.directory = directory or Path("/evidence/review") / case / name
@@ -122,9 +122,13 @@ class Terminal:
         self.directory.mkdir(parents=True)
         self.home, self.reviewed = home, reviewed
         self.empty_launch_argv = not launch_args
-        self.provider = self.sdk.Provider(tool=False)
+        self.provider = provider if provider is not None else self.sdk.Provider(tool=False)
         arguments = self.sdk.command(self.directory, self.provider.endpoint, "embedded", token=name)[1:]
         (home / "config.toml").write_text(self.managed.tui_configuration(arguments, self.directory))
+        if settings is not None:
+            configuration = tomllib.loads((home / "config.toml").read_text())
+            configuration.update(settings)
+            mod_manifest.write_toml(home / "config.toml", configuration)
         # Handle fault probes need the SDK matrix's controlled thread lifetimes.
         self.env = self.sdk.environment(home, self.directory, mode="normal")
         self.env.update(extra_env or {})

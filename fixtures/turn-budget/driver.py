@@ -64,9 +64,10 @@ def install(home, limit, *, sources=None, budget=True):
 
 
 class Provider:
-    def __init__(self, *, desired=2, retry=False, held=False):
+    def __init__(self, *, desired=2, retry=False, held=False, failure_status=None):
         self.requests, self.errors = [], []
         self.desired, self.retry = desired, retry
+        self.failure_status = failure_status
         self.condition = threading.Condition()
         self.release = threading.Event()
         if not held:
@@ -89,16 +90,17 @@ class Provider:
                     title = sdk.title_request(request)
                     with parent.condition:
                         previous = [row for row in parent.requests if row["token"] == token and row["purpose"] == "business"]
-                        failed = parent.retry and not previous and not title
+                        failed = not title and (parent.failure_status is not None or parent.retry and not previous)
+                        status = (parent.failure_status or 503) if failed else 200
                         logical = sum(row["status"] == 200 for row in previous) + 1
-                        parent.requests.append({"token": token, "purpose": "title" if title else "business",
-                            "status": 503 if failed else 200, "logical": logical, "input": request.get("input", []),
+                        parent.requests.append({"token": token, "purpose": "title" if title else "business", "tools": request.get("tools", []),
+                            "status": status, "logical": logical, "input": request.get("input", []),
                             "outputs": [item for item in request.get("input", []) if item.get("type") == "function_call_output"]})
                         parent.condition.notify_all()
                     assert parent.release.wait(45), "Provider barrier was not released"
                     if failed:
                         body = b'{"error":{"message":"controlled transport retry","type":"server_error"}}'
-                        self.send_response(503)
+                        self.send_response(status)
                         self.send_header("Content-Length", str(len(body)))
                         self.send_header("Connection", "close")
                         self.end_headers()

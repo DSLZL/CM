@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "task_id": "CM-PROGRAM",
+  "cases": {
+    "empty": {
+      "selected": "",
+      "samples": 1
+    },
+    "a": {
+      "selected": "a",
+      "budget": 2,
+      "retry": true
+    },
+    "b": {
+      "selected": "b",
+      "confirm": "Y"
+    },
+    "c": {
+      "selected": "c",
+      "leaf_limit": 1,
+      "nested": true
+    },
+    "abc-input": {
+      "selected": "abc",
+      "confirm": "Y",
+      "edit": true,
+      "logical_samples": 2
+    },
+    "abc-budget": {
+      "selected": "abc",
+      "budget": 2,
+      "retry": true
+    },
+    "abc-tool-leaves": {
+      "selected": "abc",
+      "leaf_limit": 1,
+      "direct": true,
+      "nested": true
+    },
+    "abc-cancel-queued": {
+      "selected": "abc",
+      "leaf_limit": 1,
+      "cancel": "queued"
+    },
+    "abc-cancel-running": {
+      "selected": "abc",
+      "leaf_limit": 1,
+      "cancel": "running"
+    },
+    "abc-provider-error": {
+      "selected": "abc",
+      "failure": "provider",
+      "recovery": "new-process"
+    },
+    "wrong-backend": {
+      "selected": "abc",
+      "backend": "remote",
+      "expected": "reject"
+    },
+    "exclusive-conflict": {
+      "selected": "abc",
+      "negative": "separate-duplicate-budget",
+      "expected": "exclusive_conflict"
+    },
+    "disable-b": {
+      "selected": "abc",
+      "action": "disable",
+      "owners": "b",
+      "restart": "ac"
+    },
+    "disable-all": {
+      "selected": "abc",
+      "action": "disable",
+      "owners": "abc",
+      "restart": ""
+    },
+    "remove-a": {
+      "selected": "abc",
+      "action": "remove",
+      "owners": "a",
+      "restart": "bc"
+    },
+    "remove-b": {
+      "selected": "abc",
+      "action": "remove",
+      "owners": "b",
+      "restart": "ac"
+    },
+    "remove-c": {
+      "selected": "abc",
+      "action": "remove",
+      "owners": "c",
+      "restart": "ab"
+    },
+    "reenable-abc": {
+      "selected": "abc",
+      "action": "disable-enable",
+      "restart": "abc"
+    }
+  }
+}

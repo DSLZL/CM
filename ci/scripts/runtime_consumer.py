@@ -1986,7 +1986,15 @@ def consume():
         index_acceptance = {"schema_version": 1, "task_id": "CM-S03", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-S03-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(binary_index.REPORTS, 1)]}
-    acceptance = index_acceptance or support_acceptance or distribution_acceptance or seams_acceptance or upgrade_acceptance or hooks_acceptance or g04_acceptance or concurrency_acceptance or review_acceptance or g02a_acceptance or m05_acceptance or m04_acceptance or m03_acceptance or m02_acceptance or m01_acceptance or p04_acceptance
+    program_acceptance = None
+    if validation.get("program"):
+        import program_integration
+        assert producer["task_id"] == "CM-S03" and index_acceptance is not None
+        assert validation["build_request"] == {"kind": "program", "host_origin": None}
+        program_acceptance = {"schema_version": 1, "task_id": "CM-PROGRAM", "target": TARGET,
+            "status": "not_run", "implementation_commit": os.environ["CM_SOURCE_SHA"], "release_ready": False,
+            "checks": [{"id": "CM-PROGRAM-AC0" + str(index), "status": "not_run"} for index in range(1, 5)]}
+    acceptance = program_acceptance or index_acceptance or support_acceptance or distribution_acceptance or seams_acceptance or upgrade_acceptance or hooks_acceptance or g04_acceptance or concurrency_acceptance or review_acceptance or g02a_acceptance or m05_acceptance or m04_acceptance or m03_acceptance or m02_acceptance or m01_acceptance or p04_acceptance
     write(artifact / "acceptance.json", acceptance)
     stage = "rootfs"
     try:
@@ -2104,6 +2112,8 @@ def consume():
                 phase_reports["s02"] = list(support_policy.REPORTS)
             if index_acceptance is not None:
                 phase_reports["s03"] = list(binary_index.REPORTS)
+            if program_acceptance is not None:
+                phase_reports["program"] = list(program_integration.REPORTS)
             for phase in phase_reports:
                 for case in runtime_cases.GROUPS[phase]:
                     report_names[phase + "-" + case] = [phase + "/" + case + "/reports.json"]
@@ -2113,7 +2123,7 @@ def consume():
             write(logs / "consumer-command.json", {"command": command("consumer-matrix", [*driver, "matrix"]),
                 "cache_mode": "none", "producer_input_manifest_sha256": manifest["sha256"], "provenance": provenance()})
             commands = []
-            for phase in ("p04", "m01", "m02", "m05", "g04", "g01", "g05", "g06", "s01", "s02", "s03"):
+            for phase in ("p04", "m01", "m02", "m05", "g04", "g01", "g05", "g06", "s01", "s02", "s03", "program"):
                 if phase not in phase_reports or m05_only and phase == "p04":
                     continue
                 wrapper = {"p04": "fixtures/runtime-consumer/driver.py", "m01": "ci/scripts/mod_manifest.py",
@@ -2121,13 +2131,13 @@ def consume():
                     "g04": "fixtures/runtime-qualification/driver.py", "g01": "fixtures/runtime-hooks/driver.py",
                     "g05": "fixtures/compatibility/driver.py", "g06": "fixtures/sdk-seams/driver.py",
                     "s01": "fixtures/distribution-provenance/driver.py", "s02": "fixtures/compatibility-policy/driver.py",
-                    "s03": "fixtures/binary-index/driver.py"}[phase]
+                    "s03": "fixtures/binary-index/driver.py", "program": "fixtures/tool-concurrency/driver.py"}[phase]
                 for case in runtime_cases.GROUPS[phase]:
                     if phase == "g04" and case == "missing-library":
                         continue
                     label = phase + "-" + case
                     commands.append((label, command(label, [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B",
-                        "/fixture/" + wrapper, "matrix", case]), 1200))
+                        "/fixture/" + wrapper, "program-matrix" if phase == "program" else "matrix", case]), 1200))
             if g02a_acceptance is not None:
                 for case in cases:
                     label = "g02a-" + case
@@ -2321,7 +2331,7 @@ def consume():
                         "origin_runs": sorted({row["origin"]["GITHUB_RUN_ID"] for row in executions.values()})},
                         sort_keys=True), flush=True)
                 report_set["status"] = "behavior_pass" if report_set is index_acceptance else "pass"
-            if index_acceptance is not None:
+            if index_acceptance is not None and program_acceptance is None:
                 binary_index.qualification_inputs(artifact, evidence, acceptance, common)
             print("CM runtime summary:", json.dumps({"steps": len(checkpoints.results),
                 "executed": sum(row["kind"] == "executed" for row in checkpoints.results.values()),
@@ -2373,6 +2383,10 @@ def consume():
             if index_acceptance is not None:
                 write(artifact / "s02-baseline-acceptance.json", support_acceptance)
                 write(logs / "s02-baseline-acceptance.json", support_acceptance)
+            if program_acceptance is not None:
+                write(artifact / "s03-behavior-baseline.json", index_acceptance)
+                program_integration.reports(inputs, artifact, evidence, validation, checkpoints.results,
+                    audit, common, program_acceptance)
         finally:
             stopped.set()
             thread.join(timeout=1)

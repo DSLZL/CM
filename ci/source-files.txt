@@ -251,3 +251,9 @@ crates/cm-sdk/LICENSE
 examples/mods/turn-budget/LICENSE
 examples/mods/review-before-send/LICENSE
 examples/mods/tool-concurrency/LICENSE
+ci/program/acceptance.json
+ci/program/coverage.json
+ci/program/cases.json
+ci/scripts/program_integration.py
+fixtures/program-integration/driver.py
+docs/linux-x64-integration.md

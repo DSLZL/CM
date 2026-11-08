@@ -1,0 +1,295 @@
+{
+  "schema_version": 1,
+  "task_id": "CM-PROGRAM",
+  "nodes": [
+    {
+      "id": "CM-000",
+      "groups": [],
+      "scope": "registration documentation; not a product execution"
+    },
+    {
+      "id": "CM-P01",
+      "groups": [
+        "p04",
+        "s01"
+      ],
+      "scope": "frozen Host and upstream source identity"
+    },
+    {
+      "id": "CM-P02",
+      "groups": [
+        "p04"
+      ],
+      "scope": "loader and C ABI"
+    },
+    {
+      "id": "CM-P03",
+      "groups": [
+        "p04",
+        "m01"
+      ],
+      "scope": "composition and preflight"
+    },
+    {
+      "id": "CM-P04",
+      "groups": [
+        "p04"
+      ],
+      "scope": "original serial-eligibility/output-limit six states"
+    },
+    {
+      "id": "CM-M01",
+      "groups": [
+        "m01"
+      ],
+      "scope": "retained runtime qualification"
+    },
+    {
+      "id": "CM-M02",
+      "groups": [
+        "m02"
+      ],
+      "scope": "retained runtime qualification"
+    },
+    {
+      "id": "CM-M03",
+      "groups": [
+        "m03"
+      ],
+      "scope": "retained runtime qualification"
+    },
+    {
+      "id": "CM-M04",
+      "groups": [
+        "m04"
+      ],
+      "scope": "retained runtime qualification"
+    },
+    {
+      "id": "CM-M05",
+      "groups": [
+        "m05"
+      ],
+      "scope": "retained runtime qualification"
+    },
+    {
+      "id": "CM-G01",
+      "groups": [
+        "g01"
+      ],
+      "scope": "qualified named slots only"
+    },
+    {
+      "id": "CM-G02A",
+      "groups": [
+        "g02a",
+        "program"
+      ],
+      "scope": "turn budget A"
+    },
+    {
+      "id": "CM-G02B",
+      "groups": [
+        "review",
+        "program"
+      ],
+      "scope": "submit review B"
+    },
+    {
+      "id": "CM-G03",
+      "groups": [
+        "concurrency",
+        "program"
+      ],
+      "scope": "tool leaf concurrency C"
+    },
+    {
+      "id": "CM-G04",
+      "groups": [
+        "g04"
+      ],
+      "scope": "GNU Linux x64 runtime package"
+    },
+    {
+      "id": "CM-G05",
+      "groups": [
+        "g05"
+      ],
+      "scope": "candidate upgrade and state"
+    },
+    {
+      "id": "CM-G06",
+      "groups": [
+        "g06"
+      ],
+      "scope": "experimental ABI 2.3"
+    },
+    {
+      "id": "CM-S01",
+      "groups": [
+        "s01"
+      ],
+      "scope": "source, SBOM, licenses, signature"
+    },
+    {
+      "id": "CM-S02",
+      "groups": [
+        "s02"
+      ],
+      "scope": "stable and experimental support policy"
+    },
+    {
+      "id": "CM-S03",
+      "groups": [
+        "s03"
+      ],
+      "scope": "first-party binary index and signed qualification"
+    },
+    {
+      "id": "CM-S04",
+      "groups": [],
+      "scope": "retained author and runtime measurements"
+    }
+  ],
+  "experiments": [
+    {
+      "id": "R01",
+      "groups": [
+        "p04",
+        "program"
+      ],
+      "scope": "same frozen Host; no combination compilation"
+    },
+    {
+      "id": "R02",
+      "groups": [
+        "p04"
+      ],
+      "scope": "native loader rejection and lifecycle"
+    },
+    {
+      "id": "R03",
+      "groups": [
+        "m01",
+        "s03"
+      ],
+      "scope": "dependencies and content-addressed selection"
+    },
+    {
+      "id": "R04",
+      "groups": [
+        "m01",
+        "p04"
+      ],
+      "scope": "ordering and exclusive conflicts"
+    },
+    {
+      "id": "R05",
+      "groups": [
+        "m04",
+        "program"
+      ],
+      "scope": "restart, disable, remove and preserved data"
+    },
+    {
+      "id": "R06",
+      "groups": [
+        "g04",
+        "m03"
+      ],
+      "scope": "runtime resources without toolchain"
+    },
+    {
+      "id": "R07",
+      "groups": [
+        "m02",
+        "g06"
+      ],
+      "scope": "versioned SDK and real callbacks"
+    },
+    {
+      "id": "R08",
+      "groups": [
+        "m04"
+      ],
+      "scope": "owned state and rollback"
+    },
+    {
+      "id": "R09",
+      "groups": [
+        "g01",
+        "s02"
+      ],
+      "scope": "exact Host Hook qualification; unrestricted L4 gap retained"
+    },
+    {
+      "id": "R10",
+      "groups": [
+        "g02a",
+        "program"
+      ],
+      "scope": "main logical sampling budget and transport retry"
+    },
+    {
+      "id": "R11",
+      "groups": [
+        "review",
+        "program"
+      ],
+      "scope": "Y-only TUI draft review"
+    },
+    {
+      "id": "R12",
+      "groups": [
+        "concurrency",
+        "program"
+      ],
+      "scope": "actual turn leaf admissions and Code Mode"
+    },
+    {
+      "id": "R13",
+      "groups": [
+        "g05",
+        "s02"
+      ],
+      "scope": "upgrade compatibility and state contracts"
+    },
+    {
+      "id": "R14",
+      "groups": [
+        "g06",
+        "program"
+      ],
+      "scope": "tool, stream, CLI/TUI section boundaries"
+    },
+    {
+      "id": "R15",
+      "groups": [],
+      "scope": "retained S04 author cold/warm and runtime samples"
+    },
+    {
+      "id": "R16",
+      "groups": [
+        "s01",
+        "s03",
+        "g04"
+      ],
+      "scope": "provenance and zero-build installation"
+    }
+  ],
+  "boundaries": {
+    "supported": "current GNU Linux x64 line; stable ABI 1.0/2.0/2.1/2.2 compatible entries",
+    "qualified": "exact Host named Hook slots and exact binary/index evidence",
+    "experimental": "ABI 2.3",
+    "unsupported": [
+      "unreserved native detour",
+      "unrestricted source L4",
+      "hot unload"
+    ],
+    "not_run": [
+      "other OS, CPU and libc",
+      "unmeasured future Host versions"
+    ],
+    "maintenance_years": null
+  }
+}

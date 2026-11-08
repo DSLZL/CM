@@ -323,3 +323,7 @@ preserve null size gauges. Report-only changes do not invalidate native, runtime
 or unchanged-package measurements. Earlier failed and cancelled evidence remains.
 See [measurement boundaries, reports and
 operation](../docs/reproducibility-report.md) before publication or dispatch.
+
+## Final program validation
+
+The existing independent `build.yml` accepts `build_kind=program` with the exact source SHA and unique request ID. It skips both native build jobs and both signing branches, prepares a current validation overlay, consumes the fixed qualified S03 runtime input, and emits a separate program receipt. The original `.github/cm-ci.json` product mapping remains CM-S03. See [Linux x64 integration](../docs/linux-x64-integration.md) for fixed inputs, 18 new cases, strict checkpoint reuse, the four final reports, and support boundaries. This branch writes no cache and has no fallback build or native product upload.
