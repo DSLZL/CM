@@ -103,6 +103,13 @@ fn text(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
 }
 
+fn ci_request_id(value: &str) -> bool {
+    text(value, 128)
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+}
+
 fn timestamp(value: &str) -> bool {
     let bytes = value.as_bytes();
     if bytes.len() != 20
@@ -988,8 +995,7 @@ impl ProductionOrigin {
         }) && self.run_id > 0
             && self.run_attempt > 0
             && self.job_id > 0
-            && loader::identifier(&self.request_id)
-            && self.request_id.len() <= 128
+            && ci_request_id(&self.request_id)
             && matches!(
                 self.job.as_str(),
                 "build-read / linux-x64" | "build-write / linux-x64"
@@ -1362,6 +1368,32 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn production_request_ids_match_worker_ascii_contract() {
+        for value in [
+            "cm-mp01-lx01-20261108T170615Z-1739473d",
+            "A_1.z-2",
+            "._-",
+        ] {
+            assert!(ci_request_id(value), "{value:?}");
+        }
+        assert!(ci_request_id(&"x".repeat(128)));
+        for value in [
+            "",
+            "a/b",
+            "a\\b",
+            "a:b",
+            "a+b",
+            "white space",
+            "é",
+            "line\nbreak",
+        ] {
+            assert!(!ci_request_id(value), "{value:?}");
+        }
+        assert!(!ci_request_id(&"x".repeat(129)));
+        assert!(!loader::identifier("A_1.z-2"));
+    }
 
     #[test]
     fn qualification_host_claims_reject_unbounded_or_repeated_identities() {
