@@ -7,6 +7,7 @@ from pathlib import Path
 import select
 import shutil
 import socket
+import subprocess
 import sys
 import time
 import tomllib
@@ -230,7 +231,12 @@ def leaves(name, selected, *, code_mode=False, cancel=None, exec_tools=False):
 
 
 def case_empty():
-    setup("")
+    command = [str(BINARY), "cm", "--home", str(PROFILE), "launch", "--", "--version"]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=90)
+    mod_manifest.write(EVIDENCE / "empty-initialize.json", {"command": command,
+        "return_code": result.returncode, "stdout": result.stdout, "stderr": result.stderr})
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert module("managed-package/driver.py").state(PROFILE)[1]["installed"] == {}
     return business("empty", "")
 
 

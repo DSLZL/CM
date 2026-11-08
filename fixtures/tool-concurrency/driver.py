@@ -147,11 +147,15 @@ class Provider:
             def do_POST(self):
                 try:
                     body = sdk.core.decode_request(self)
-                    tokens = re.findall(r"CM_M02_([a-z0-9_-]+)", sdk.text_values(body.get("input", [])))
+                    inputs = body.get("input", [])
+                    tokens = re.findall(r"CM_M02_([a-z0-9_-]+)", sdk.text_values(inputs))
                     assert tokens, "Missing actual user input"
                     token = tokens[-1]
                     title = sdk.title_request(body)
-                    outputs = [item for item in body.get("input", []) if item.get("type") in
+                    last_prompt = max((index for index, item in enumerate(inputs) if item.get("role") == "user"
+                        and "CM_M02_" + token in sdk.text_values(item.get("content"))), default=-1)
+                    assert last_prompt >= 0, "Missing current user prompt"
+                    outputs = [item for item in inputs[last_prompt + 1:] if item.get("type") in
                         ("function_call_output", "custom_tool_call_output")]
                     parent.requests.append({"token": token, "purpose": "title" if title else "business",
                         "input": body.get("input"), "tools": body.get("tools"), "outputs": outputs})
