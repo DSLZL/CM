@@ -141,6 +141,8 @@ jobs:
           record_run.self_check()
           worker_policy.cache_budget_self_check()
           dispatch_build.self_check()
+          import retry
+          retry.validation_self_check()
           for name, count in (("linux-recipe.yml", 17), ("benchmark-role/action.yml", 2)):
               recipe = Path("ci/worker", name).read_text()
               assert recipe.count("uses: ./.cm-worker/.github/actions/cache-save") == count
