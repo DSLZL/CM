@@ -262,7 +262,7 @@ def case_abc_input():
         submit(instance, "program-abc-input", "abc", paste=True)
         settled(instance, "program-abc-inpux")
         value = invariants(instance, "abc")
-        assert len(value["review_ids"]) == 2
+        assert len(value["review_ids"]) == 3
         requests = [row for row in instance.provider.requests if row["purpose"] == "business"]
         assert len(requests) == 2 and all("CM_M02_program-abc-inpux" in sdk.text_values(row["input"]) for row in requests)
         assert list(value["budget_charges"].values()) == [[1, 2]]
