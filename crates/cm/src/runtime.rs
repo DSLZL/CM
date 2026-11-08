@@ -911,7 +911,7 @@ impl Scope {
             tables
                 .requests()
                 .into_iter()
-                .filter(|request| self.contains(request))
+                .filter(|request| self.contains(request) && !request.cleanup)
                 .collect::<Vec<_>>()
         };
         for request in requests {
@@ -1848,6 +1848,66 @@ mod tests {
         assert!(state.releasable());
         state.release_queued = true;
         assert!(!state.releasable());
+    }
+
+    #[test]
+    fn parent_close_cancels_work_but_preserves_cleanup() {
+        let instance = new_instance("cleanup-close-unit").unwrap();
+        let contribution = Contribution {
+            owner: "cleanup-close-unit".into(),
+            id: "lifecycle".into(),
+            name: "cleanup-close-unit__lifecycle".into(),
+            kind: Kind::Lifecycle,
+            route: 1,
+            instance,
+        };
+        // Keep both dispatches queued so the close order is deterministic.
+        let (sender, receiver) = mpsc::channel();
+        let hub = hub().unwrap();
+        {
+            let mut tables = hub.tables.lock().unwrap();
+            tables.modules.insert(
+                instance,
+                Arc::new(Module {
+                    owner: contribution.owner.clone(),
+                    instance,
+                    sender,
+                }),
+            );
+            tables.contributions.push(contribution.clone());
+        }
+        let registry = Registry::new().unwrap();
+        let thread = registry.thread("cleanup-close-thread").unwrap();
+        let turn = thread.turn("cleanup-close-turn").unwrap();
+        let ordinary = dispatch(&turn, &contribution, v22::TURN_START, b"{}", "").unwrap();
+        let cleanup = dispatch(&turn, &contribution, v22::TURN_STOP, b"{}", "").unwrap();
+        thread.begin_close().unwrap();
+        let ordinary_cancelled = ordinary.request.state.lock().unwrap().cancelled;
+        let cleanup_cancelled = cleanup.request.state.lock().unwrap().cancelled;
+        let late_work_rejected =
+            dispatch(&turn, &contribution, v22::TURN_START, b"{}", "").is_err();
+        cleanup.request.cancel(false);
+        let explicit_cleanup_cancelled = cleanup.request.state.lock().unwrap().cancelled;
+        {
+            let mut tables = hub.tables.lock().unwrap();
+            for request in [&ordinary.request, &cleanup.request] {
+                tables.remove(hub.epoch, request.handle()).unwrap();
+                tables.requests -= 1;
+            }
+            tables.modules.remove(&instance);
+            tables.contributions.retain(|item| item.instance != instance);
+            tables.remove(hub.epoch, instance).unwrap();
+            tables.scopes -= 1;
+        }
+        drop(ordinary);
+        drop(cleanup);
+        drop(receiver);
+        turn.close().unwrap();
+        thread.close().unwrap();
+        assert!(ordinary_cancelled);
+        assert!(!cleanup_cancelled, "parent close cancelled turn cleanup");
+        assert!(late_work_rejected);
+        assert!(explicit_cleanup_cancelled);
     }
 
     #[test]

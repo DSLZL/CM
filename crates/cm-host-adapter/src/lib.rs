@@ -204,14 +204,32 @@ impl Adapter {
     async fn end_turn(&self, store: &ExtensionData, event: u32) {
         let result = async {
             let holder = turn(store)?;
+            // Turn cleanup and thread stop must not close each other's native scope.
+            let thread = holder.thread.upgrade();
+            let _event = if let Some(thread) = &thread {
+                Some(
+                    thread
+                        .events
+                        .acquire()
+                        .await
+                        .map_err(|_| error("thread lifecycle gate closed"))?,
+                )
+            } else {
+                None
+            };
             if holder.ended.swap(true, Ordering::AcqRel) {
                 return Ok(());
             }
             let scope = holder.scope.as_ref().map_err(Clone::clone)?;
             scope.begin_close()?;
-            self.lifecycle(scope, event, json!({})).await;
+            if thread
+                .as_ref()
+                .is_some_and(|thread| !thread.ended.load(Ordering::Acquire))
+            {
+                self.lifecycle(scope, event, json!({})).await;
+            }
             let closed = scope.close();
-            if let Some(thread) = holder.thread.upgrade() {
+            if let Some(thread) = &thread {
                 thread
                     .turns
                     .lock()

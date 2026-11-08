@@ -155,6 +155,7 @@ def native_probe(root, logs, inputs, package, frozen):
                 shutil.copyfile(artifact, logs / artifact.name)
     evidence = read(report)
     assert evidence["status"] == "pass"
+    assert evidence["concurrent_turn_cleanup_stop"] and evidence["late_turn_cleanup"]
     rows = [json.loads(line) for line in events.read_text().splitlines()]
     starts = [row for row in rows if row["event"] == "dispatch" and row["kind"] == 1]
     assert len(starts) == 3, starts

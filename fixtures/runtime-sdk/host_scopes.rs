@@ -77,19 +77,68 @@ async fn cm_runtime_native_scopes() {
         crate::cm_runtime_check(thread.thread.session.services.thread_extension_data.level_id()).expect("scope gate");
     }
     let session = &parent.thread.session;
-    for contributor in registry.thread_lifecycle_contributors() {
-        tokio::join!(
-            contributor.on_thread_idle(codex_extension_api::ThreadIdleInput {
-                cause: codex_extension_api::ThreadIdleCause::Completed,
-                session_store: &session.services.session_extension_data,
-                thread_store: &session.services.thread_extension_data,
-            }),
-            contributor.on_thread_stop(codex_extension_api::ThreadStopInput {
-                session_store: &session.services.session_extension_data,
-                thread_store: &session.services.thread_extension_data,
-            }),
-        );
+    let turn = session.new_default_turn().await;
+    let mode = turn.collaboration_mode();
+    for contributor in registry.turn_lifecycle_contributors() {
+        contributor.on_turn_start(codex_extension_api::TurnStartInput {
+            turn_id: &turn.sub_id, collaboration_mode: &mode, token_usage_at_turn_start: None,
+            session_store: &session.services.session_extension_data,
+            thread_store: &session.services.thread_extension_data, turn_store: &turn.extension_data,
+        }).await;
     }
+    tokio::join!(biased;
+        async {
+            for contributor in registry.turn_lifecycle_contributors() {
+                contributor.on_turn_stop(codex_extension_api::TurnStopInput {
+                    session_store: &session.services.session_extension_data,
+                    thread_store: &session.services.thread_extension_data, turn_store: &turn.extension_data,
+                }).await;
+            }
+        },
+        async {
+            for contributor in registry.thread_lifecycle_contributors() {
+                tokio::join!(
+                    contributor.on_thread_idle(codex_extension_api::ThreadIdleInput {
+                        cause: codex_extension_api::ThreadIdleCause::Completed,
+                        session_store: &session.services.session_extension_data,
+                        thread_store: &session.services.thread_extension_data,
+                    }),
+                    contributor.on_thread_stop(codex_extension_api::ThreadStopInput {
+                        session_store: &session.services.session_extension_data,
+                        thread_store: &session.services.thread_extension_data,
+                    }),
+                );
+            }
+        },
+    );
+    crate::cm_runtime_check(turn.extension_data.level_id()).expect("turn cleanup and thread stop");
+    let child_session = &child.thread.session;
+    let late_turn = child_session.new_default_turn().await;
+    let mode = late_turn.collaboration_mode();
+    for contributor in registry.turn_lifecycle_contributors() {
+        contributor.on_turn_start(codex_extension_api::TurnStartInput {
+            turn_id: &late_turn.sub_id, collaboration_mode: &mode, token_usage_at_turn_start: None,
+            session_store: &child_session.services.session_extension_data,
+            thread_store: &child_session.services.thread_extension_data, turn_store: &late_turn.extension_data,
+        }).await;
+    }
+    for contributor in registry.thread_lifecycle_contributors() {
+        contributor.on_thread_stop(codex_extension_api::ThreadStopInput {
+            session_store: &child_session.services.session_extension_data,
+            thread_store: &child_session.services.thread_extension_data,
+        }).await;
+    }
+    for _ in 0..2 {
+        for contributor in registry.turn_lifecycle_contributors() {
+            contributor.on_turn_stop(codex_extension_api::TurnStopInput {
+                session_store: &child_session.services.session_extension_data,
+                thread_store: &child_session.services.thread_extension_data, turn_store: &late_turn.extension_data,
+            }).await;
+        }
+    }
+    crate::cm_runtime_check(late_turn.extension_data.level_id()).expect("late and duplicate turn cleanup");
+    crate::cm_runtime_check(child_session.services.thread_extension_data.level_id())
+        .expect("thread gate after late turn cleanup");
     let shutdown = manager.shutdown_all_threads_bounded(Duration::from_secs(10)).await;
     assert!(shutdown.submit_failed.is_empty() && shutdown.timed_out.is_empty());
     for contributor in registry.thread_lifecycle_contributors() {
@@ -132,6 +181,7 @@ async fn cm_runtime_native_scopes() {
         "isolated_empty":empty.thread_id.to_string(),"isolated_explicit":explicit.thread_id.to_string(),
         "shared_inherited_registry":true,"independent_explicit_registry":true,
         "isolated_default_empty":true,"shutdown":true,"concurrent_idle_stop":true,"late_idle_and_duplicate_stop":true,
+        "concurrent_turn_cleanup_stop":true,"late_turn_cleanup":true,
         "actual_tool_registry_collision_rejected":true,"actual_world_state_collision_rejected":true,
         "tool_collision_diagnostic":tool_collision,
         "boundary":"separate native Core integration executable; not the packaged CLI H"});
