@@ -124,10 +124,10 @@ jobs:
           for script in scripts:
               py_compile.compile(str(script), cfile=str(Path(os.environ["RUNNER_TEMP"]) / (script.stem + ".pyc")),
                                  doraise=True)
-          import build_benchmarks
-          build_benchmarks.self_check()
           import program_integration
           program_integration.self_check()
+          import build_benchmarks
+          build_benchmarks.self_check()
           import tomllib
           template = Path("templates/native-mod")
           cargo = tomllib.loads((template / "Cargo.toml").read_text())
