@@ -1371,11 +1371,7 @@ mod tests {
 
     #[test]
     fn production_request_ids_match_worker_ascii_contract() {
-        for value in [
-            "cm-mp01-lx01-20261108T170615Z-1739473d",
-            "A_1.z-2",
-            "._-",
-        ] {
+        for value in ["cm-mp01-lx01-20261108T170615Z-1739473d", "A_1.z-2", "._-"] {
             assert!(ci_request_id(value), "{value:?}");
         }
         assert!(ci_request_id(&"x".repeat(128)));
