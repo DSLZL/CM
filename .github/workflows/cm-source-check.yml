@@ -67,9 +67,14 @@ jobs:
           missing = [p for p in paths if p not in tracked or not Path(p).is_file() or Path(p).is_symlink()]
           assert not missing, f"Required CI files missing from this commit: {missing}"
           worker = json.loads(Path("ci/worker-files.json").read_text(encoding="utf-8"))
-          assert len(worker["files"]) == 17
+          assert len(worker["files"]) == 20
           assert len({row["destination"] for row in worker["files"]}) == len(worker["files"])
           assert all(row["source"] in paths for row in worker["files"]), "Worker inputs must be published"
+          deployments = {row["source"]: row["destination"] for row in worker["files"]}
+          assert all(deployments.get(source) == destination for source, destination in {
+              ".github/cm-platforms.json": ".github/cm-platforms.json",
+              "ci/scripts/cm_platforms.py": ".github/scripts/cm_platforms.py",
+              "ci/worker/cache-save/action.yml": ".github/actions/cache-save/action.yml"}.items())
           cfg = json.loads(Path(".github/cm-ci.json").read_text())
           if cfg["task_id"] == "CM-G05":
               baseline = json.loads(Path("ci/g05-baseline.json").read_text())
@@ -109,7 +114,7 @@ jobs:
               for path in ("crates/cm/src/provenance.rs", "crates/cm/src/distribution-policy.json", "crates/cm/src/distribution-root.jsonl"):
                   assert path in cfg["native_identity_files"]
           scripts = [Path("ci/scripts") / (name + ".py") for name in
-                     ("record_run", "worker_policy", "dispatch_build", "acceptance_cache", "retry", "runtime_cases", "sdk_seams", "distribution_provenance", "support_policy", "binary_index", "build_benchmarks", "program_integration", "runtime_consumer")]
+                     ("cm_platforms", "record_run", "worker_policy", "dispatch_build", "acceptance_cache", "retry", "runtime_cases", "sdk_seams", "distribution_provenance", "support_policy", "binary_index", "build_benchmarks", "program_integration", "runtime_consumer")]
           scripts.append(Path("fixtures/distribution-provenance/driver.py"))
           scripts.append(Path("fixtures/compatibility-policy/driver.py"))
           scripts.append(Path("fixtures/binary-index/driver.py"))
@@ -124,6 +129,37 @@ jobs:
           for script in scripts:
               py_compile.compile(str(script), cfile=str(Path(os.environ["RUNNER_TEMP"]) / (script.stem + ".pyc")),
                                  doraise=True)
+          import cm_platforms
+          import record_run
+          import worker_policy
+          import dispatch_build
+          default_platform = cm_platforms.select()
+          assert worker["repository"] == default_platform["repository"]
+          assert cfg["target"] == cm_platforms.native_inputs()["target"]
+          assert "runs-on: " + default_platform["runner"] in Path("ci/worker/linux-recipe.yml").read_text()
+          cm_platforms.self_check()
+          record_run.self_check()
+          worker_policy.cache_budget_self_check()
+          dispatch_build.self_check()
+          for name, count in (("linux-recipe.yml", 17), ("benchmark-role/action.yml", 2)):
+              recipe = Path("ci/worker", name).read_text()
+              assert recipe.count("uses: ./.cm-worker/.github/actions/cache-save") == count
+              assert "uses: actions/cache/save@" not in recipe
+          wrapper = Path("ci/worker/cache-save/action.yml").read_text()
+          assert "cache-save-plan" in wrapper and "steps.capacity.outputs.save_allowed == 'true'" in wrapper
+          assert "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9" in wrapper
+          for name in ("linux-recipe.yml", "benchmark-author.yml"):
+              workflow = Path("ci/worker", name).read_text()
+              assert "cm-repository-cache-writer" in workflow and "queue: max" in workflow
+          benchmark = Path("ci/worker/benchmark.yml").read_text()
+          trust_write = benchmark.split("  trust-write:\n", 1)[1].split("  trust-read:\n", 1)[0]
+          trust_read = benchmark.split("  trust-read:\n", 1)[1].split("  runtime:\n", 1)[0]
+          assert trust_write.count("uses: ./.cm-worker/.github/actions/cache-save") == 1
+          assert "cm-repository-cache-writer" in trust_write and "queue: max" in trust_write
+          # Keep the real denied-write probe under runner-enforced read authority.
+          assert benchmark.count("uses: actions/cache/save@") == trust_read.count("uses: actions/cache/save@") == 1
+          assert "    cache-mode: read\n" in trust_read and "      CM_CACHE_MODE: read\n" in trust_read
+          assert "uses: ./.cm-worker/.github/actions/cache-authority" in trust_read
           import program_integration
           program_integration.self_check()
           import build_benchmarks

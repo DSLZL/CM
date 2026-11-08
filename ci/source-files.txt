@@ -1,5 +1,6 @@
 .github/cm-build-routing.json
 .github/cm-ci.json
+.github/cm-platforms.json
 .github/workflows/cm-linux-x64.yml
 .github/workflows/cm-mod-author.yml
 .github/workflows/cm-source-check.yml
@@ -14,6 +15,7 @@ adapters/codex-e4568a3/source.json
 ci/README.md
 ci/scripts/acceptance_cache.py
 ci/scripts/ci_progress.py
+ci/scripts/cm_platforms.py
 ci/scripts/dispatch_build.py
 ci/scripts/host.py
 ci/scripts/linux_ci.py
@@ -35,6 +37,7 @@ ci/worker-files.json
 ci/worker/build.yml
 ci/worker/cache-authority/action.yml
 ci/worker/cache-authority/index.js
+ci/worker/cache-save/action.yml
 ci/worker/linux-recipe.yml
 crates/cm-abi/Cargo.toml
 crates/cm-abi/include/cm_mod_v1.h

@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from record_run import require_hosted_linux
+import cm_platforms
 
 API_VERSION = "2026-03-10"
 TARGET = "x86_64-unknown-linux-gnu"
@@ -53,11 +54,15 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     source = os.environ["GITHUB_REPOSITORY"]
     default_branch = os.environ["CM_SOURCE_DEFAULT_BRANCH"]
+    entry = cm_platforms.select(os.environ.get("CM_REQUESTED_PLATFORM"), root=root)
+    worker, target = entry["repository"], entry["target"]
+    artifact_prefix = "cm-" + entry["key"] + "-"
     write(out, "dispatch-context.json", {"schema_version": 1, "source_repository": source,
         "control_workflow_sha": os.environ.get("GITHUB_WORKFLOW_SHA"),
         "run_id": os.environ.get("GITHUB_RUN_ID"), "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
-        "job": os.environ.get("GITHUB_JOB"), "target": TARGET,
-        "worker_repository": "DSLZL/CM-build-linux-x64"})
+        "job": os.environ.get("GITHUB_JOB"), "platform": entry["key"], "target": target,
+        "worker_repository": worker})
+    cm_platforms.select(entry["key"], root=root, enabled=True)
     if os.environ.get("GITHUB_EVENT_NAME") not in {"push", "workflow_dispatch"} or os.environ.get("GITHUB_REF") != "refs/heads/" + default_branch:
         raise RuntimeError("Cross-repository dispatch is limited to the trusted CM default-branch workflow")
     control_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
@@ -66,9 +71,10 @@ def main():
     cfg = json.loads((root / ".github/cm-build-routing.json").read_text(encoding="utf-8"))
     if cfg.get("schema_version") != 1 or cfg.get("configured") is not True:
         raise RuntimeError("Author CI blocked: reviewed fixed-repository routing is not enabled; no local build fallback")
-    worker = cfg.get("builder_repository", "")
-    if cfg.get("source_repository") != source or cfg.get("target") != TARGET or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", worker) or "REPLACE" in worker or worker == source:
-        raise RuntimeError("Invalid fixed Linux x64 builder routing")
+    default = cm_platforms.select(root=root)
+    if (source != "DSLZL/CM" or cfg.get("source_repository") != source
+            or cfg.get("target") != default["target"] or cfg.get("builder_repository") != default["repository"]):
+        raise RuntimeError("Legacy default routing differs from the reviewed platform table")
     if cfg.get("builder_workflow") != "build.yml":
         raise RuntimeError("The reviewed worker entry point must be build.yml")
     worker_info = api("repos/" + worker)
@@ -91,7 +97,7 @@ def main():
         "build_kind": kind, "host_origin": origin}}
     write(out, "dispatch-request.json", {"source_repository": source, "source_sha": source_sha,
           "control_sha": control_sha, "worker_repository": worker, "observed_worker_sha": worker_sha,
-          "request_id": request_id, "target": TARGET, "request": request})
+          "request_id": request_id, "platform": entry["key"], "target": target, "request": request})
     response = api("repos/" + worker + "/actions/workflows/build.yml/dispatches", request)
     run_id = response.get("workflow_run_id")
     run_url = "https://github.com/" + worker + "/actions/runs/" + str(run_id)
@@ -107,7 +113,7 @@ def main():
             raise RuntimeError("Child run identity differs from the fixed worker workflow")
         if run.get("head_sha") != worker_sha or run.get("head_branch") != worker_branch:
             raise RuntimeError("Worker revision changed during dispatch; this run is not accepted")
-        if run.get("display_title") != "CM Linux x64 / " + request_id:
+        if run.get("display_title") != "CM " + cm_platforms.title(entry) + " / " + request_id:
             raise RuntimeError("Child run request ID binding does not match")
         write(out, "child-run.json", run)
         if run.get("status") == "completed":
@@ -126,7 +132,7 @@ def main():
             break
         page += 1
     receipt_name = "cm-build-receipt-" + request_id + "-" + str(run["run_attempt"])
-    artifact_name = "cm-linux-x64-task-artifacts-" + request_id + "-" + str(run["run_attempt"])
+    artifact_name = artifact_prefix + "task-artifacts-" + request_id + "-" + str(run["run_attempt"])
     def exact(name):
         found = [a for a in records if a.get("name") == name and a.get("expired") is False]
         if len(found) != 1:
@@ -136,9 +142,9 @@ def main():
     source_config = api("repos/" + source + "/contents/.github/cm-ci.json?ref=" + source_sha)
     task_id = json.loads(base64.b64decode(source_config["content"]))["task_id"]
     consumer_required = task_id in ("CM-P04", "CM-M01", "CM-M02", "CM-M03", "CM-M04", "CM-M05", "CM-G02A", "CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01", "CM-S02", "CM-S03")
-    consumer_artifact = exact("cm-linux-x64-consumer-artifacts-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
+    consumer_artifact = exact(artifact_prefix + "consumer-artifacts-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
     jobs = get_run(run_path + "/attempts/" + str(run["run_attempt"]) + "/jobs?per_page=100")["jobs"]
-    producer_jobs = [job for job in jobs if job["name"] in ("build-read / linux-x64", "build-write / linux-x64") and job["conclusion"] == "success"]
+    producer_jobs = [job for job in jobs if job["name"] in ("build-read / " + entry["key"], "build-write / " + entry["key"]) and job["conclusion"] == "success"]
     if len(producer_jobs) != 1:
         raise RuntimeError("An exact successful producer job is required")
     if consumer_required:
@@ -165,10 +171,10 @@ def main():
         input_artifact = original["input_artifact"]
     else:
         artifact = exact(artifact_name)
-        input_artifact = exact("cm-linux-x64-runtime-inputs-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
+        input_artifact = exact(artifact_prefix + "runtime-inputs-" + request_id + "-" + str(run["run_attempt"])) if consumer_required else None
     expected = {"repository": worker, "source_repository": source, "source_sha": source_sha, "head_sha": source_sha,
                 "workflow_sha": worker_sha, "execution_role": "platform_builder", "cache_repository": worker,
-                "request_id": request_id, "target": TARGET, "run_id": run_id, "run_url": run_url,
+                "request_id": request_id, "target": target, "run_id": run_id, "run_url": run_url,
                 "run_attempt": run["run_attempt"], "artifact_id": artifact["id"], "artifact_name": artifact_name,
                 "job": producer_jobs[0]["name"], "job_id": producer_jobs[0]["id"], "job_conclusion": "success", "build_kind": kind}
     if any(ci.get(key) != value for key, value in expected.items()):
@@ -194,8 +200,8 @@ def main():
             if consumer.get("production_origin") != production:
                 raise RuntimeError("Consumer receipt has a different original producer")
             validation = consumer.get("validation_artifact") or {}
-            artifact_binding(exact("cm-linux-x64-validation-inputs-" + request_id + "-" + str(run["run_attempt"])),
-                validation["artifact_id"], "cm-linux-x64-validation-inputs-" + request_id + "-" + str(run["run_attempt"]),
+            artifact_binding(exact(artifact_prefix + "validation-inputs-" + request_id + "-" + str(run["run_attempt"])),
+                validation["artifact_id"], artifact_prefix + "validation-inputs-" + request_id + "-" + str(run["run_attempt"]),
                 validation["artifact_sha256"], run_id)
         from retry import verify_test_build
         for label, test_build in consumer["test_builds"].items():
@@ -212,7 +218,7 @@ def main():
         signing_jobs = [job for job in jobs if job["name"] == "attest-distribution"]
         if len(signing_jobs) != 1 or signing_jobs[0]["conclusion"] != "success":
             raise RuntimeError("Distribution attestation job was missing, skipped or failed")
-        expected_proof = exact("cm-linux-x64-distribution-proofs-" + request_id + "-" + str(run["run_attempt"]))
+        expected_proof = exact(artifact_prefix + "distribution-proofs-" + request_id + "-" + str(run["run_attempt"]))
         proof = signed.get("artifact") or {}
         artifact_binding(expected_proof, proof["artifact_id"], expected_proof["name"], proof["artifact_sha256"], run_id)
         if (signed.get("job") != "attest-distribution" or signed.get("job_id") != signing_jobs[0]["id"]
@@ -237,7 +243,7 @@ def main():
           "parent_run_url": "https://github.com/" + source + "/actions/runs/" + os.environ["GITHUB_RUN_ID"],
           "note": "CI provenance only. Review actual acceptance evidence before treating a task as complete."})
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
-        stream.write("### Verified Linux x64 worker result\n\n- Source: `" + source + "@" + source_sha + "`\n- Worker: [" + worker + "](" + run_url + ")\n- Artifact SHA-256: `" + digest + "`\n")
+        stream.write("### Verified " + cm_platforms.title(entry) + " worker result\n\n- Source: `" + source + "@" + source_sha + "`\n- Worker: [" + worker + "](" + run_url + ")\n- Artifact SHA-256: `" + digest + "`\n")
 
 
 def self_check():
@@ -248,10 +254,11 @@ def self_check():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         (root / ".github").mkdir()
+        (root / cm_platforms.CONFIG).write_text(json.dumps(cm_platforms.load()), encoding="utf-8")
         base = {"schema_version": 1, "configured": True, "source_repository": "DSLZL/CM",
             "builder_repository": "DSLZL/CM-build-linux-x64", "builder_ref": "main",
             "builder_workflow": "build.yml", "target": TARGET}
-        for name in ("routing-disabled", "missing-token", "wrong-source", "ci-unavailable"):
+        for name in ("routing-disabled", "missing-token", "wrong-source", "platform-disabled", "ci-unavailable"):
             cfg = {**base}
             if name == "routing-disabled":
                 cfg["configured"] = False
@@ -264,6 +271,8 @@ def self_check():
                 "GITHUB_WORKFLOW_SHA": "a" * 40}
             if name != "missing-token":
                 env["CM_BUILD_FANOUT_TOKEN"] = "controlled-fixture-unused"
+            if name == "platform-disabled":
+                env["CM_REQUESTED_PLATFORM"] = "windows-arm64"
             with patch.dict(os.environ, env, clear=True), patch(__name__ + ".require_hosted_linux"), \
                 patch("subprocess.check_output", return_value="a" * 40), \
                 patch("urllib.request.urlopen", side_effect=urllib.error.URLError("controlled unavailable")) as transport:
@@ -277,7 +286,8 @@ def self_check():
                 assert transport.call_count == int(name == "ci-unavailable")
                 context = json.loads((root / "out/dispatch-context.json").read_text())
                 assert context["control_workflow_sha"] == "a" * 40 and context["source_repository"] == "DSLZL/CM"
-                assert context["target"] == TARGET and "controlled-fixture-unused" not in json.dumps(context)
+                assert context["target"] == ("aarch64-pc-windows-msvc" if name == "platform-disabled" else TARGET)
+                assert "controlled-fixture-unused" not in json.dumps(context)
                 results.append({"case": name, "status": "pass", "simulated_transport": True,
                     "actual_network_requests": 0, "mutation_requests": 0, "local_build_calls": 0})
     return results

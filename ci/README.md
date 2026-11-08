@@ -1,6 +1,23 @@
-# CM Linux x64 CI
+# CM native build CI
 
-CM source is DSLZL/CM; the independent GitHub-hosted ubuntu-24.04 X64 producer and cache owner is DSLZL/CM-build-linux-x64. The only CM target is x86_64-unknown-linux-gnu. All compilation, checks, tests, smoke runs and experiments execute there. Local work edits and reviews source/configuration and lightweight evidence. The current candidate selects CM-S01 distribution provenance; its five acceptance checks remain not_run. The first-party policy, independent bootstrap, external receipts and offline installation boundaries are described in [distribution.md](../docs/distribution.md). Only attest-distribution requests OIDC/attestation write permissions; signing a candidate does not accept it. Python case or report fixes retain compatible production artifacts and successful case checkpoints; every run still verifies the current proof inputs and API authority. M05's accepted exact product source `dd4890a` / worker `d353841` and its earlier execution origins remain recorded below; they do not qualify the new S01 Host.
+CM source is DSLZL/CM. Each native target owns a separate builder repository and its caches. All compilation, checks, tests, smoke runs and experiments execute on the matching GitHub-hosted worker. Local work edits and reviews source/configuration and lightweight evidence. The established product mapping remains CM-S03 on GNU Linux x64; additional targets require their own native implementation and qualification. Historical acceptance retains its exact original source, worker and run identities. The first-party provenance boundaries are described in [distribution.md](../docs/distribution.md). Signing a candidate does not accept it. Python case or report fixes retain compatible production artifacts and successful case checkpoints; every run still verifies current proof inputs and API authority.
+
+## Native platform routing
+
+[cm-platforms.json](../.github/cm-platforms.json) is the closed six-target registry. `enabled` controls infrastructure dispatch, independently of product qualification. New targets remain disabled until their native recipes and runtime boundaries have been reviewed and validated.
+
+| Platform | Independent repository | Native runner | Rust target | Routing |
+| --- | --- | --- | --- | --- |
+| Linux x64 | DSLZL/CM-build-linux-x64 | ubuntu-24.04 | x86_64-unknown-linux-gnu | Existing entry |
+| Linux arm64 | DSLZL/CM-build-linux-arm64 | ubuntu-24.04-arm | aarch64-unknown-linux-gnu | Disabled |
+| macOS arm64 | DSLZL/CM-build-macos-arm64 | macos-26 | aarch64-apple-darwin | Disabled |
+| macOS x64 | DSLZL/CM-build-macos-x64 | macos-26-intel | x86_64-apple-darwin | Disabled |
+| Windows x64 | DSLZL/CM-build-windows-x64 | windows-2025 | x86_64-pc-windows-msvc | Disabled |
+| Windows arm64 | DSLZL/CM-build-windows-arm64 | windows-11-arm | aarch64-pc-windows-msvc | Disabled |
+
+The existing `cm-linux-x64.yml` dispatcher filename is retained for callers and exposes a platform choice. Unknown or disabled entries fail before any remote mutation. Its master `cm-build-routing.json` switch remains disabled until fanout and credentials are explicitly configured. A worker must match its exact repository, runner OS/architecture, native process architecture and Rust target. Source checks remain on hosted Linux x64; selecting another platform never moves product work into the source repository. Declaring a repository here does not create it or claim a successful native build.
+
+Repository/runner-label/enablement metadata is administrative. The current compiler target remains an explicit product input; changing another platform's routing does not discard a compatible Linux Host or case checkpoint. Native/compiler/runtime identities continue to govern reuse.
 
 ## Publication inputs
 
@@ -114,11 +131,19 @@ Only a successful actual runtime-consumer job can produce P04 acceptance. Its si
 
 ## Independent dispatch and cache authority
 
-ci/worker-files.json maps eight infrastructure inputs to the builder. Both workflows, policy/record/retry scripts, the shared runtime-case registry and the cache-authority action deploy together at an exact reviewed builder commit. The action reads the runner-injected effective cache mode, checks it against the expected none/read/write authority, and exposes only that validated enum to later shell steps. The producer additionally verifies its exact source checkout; preflight and consumer require actual none before proceeding. The worker fixes its source/builder identities in reviewed YAML and temporarily checks out the requested exact public CM SHA. No repository variables or copied gh credentials are needed for an operator dispatch.
+ci/worker-files.json maps the 20 current infrastructure inputs to the existing Linux x64 builder. Workflows, policy/record/retry scripts, platform configuration/module, the runtime-case registry and both cache actions deploy together at an exact reviewed builder commit. Additional targets obtain their own reviewed deployment mapping when their recipes are implemented. The action reads the runner-injected effective cache mode, checks it against the expected none/read/write authority, and exposes only that validated enum to later shell steps. The producer additionally verifies its exact source checkout; preflight and consumer require actual none before proceeding. The worker fixes its source/builder identities in reviewed YAML and temporarily checks out the requested exact public CM SHA. No repository variables or copied gh credentials are needed for an operator dispatch.
 
 .github/cm-ci.json maps fixtures/runtime-consumer/acceptance.sh through the existing acceptance entry. P04 changes five of the six mapped worker files: both workflow templates, worker_policy.py/record_run.py and the cache-authority JavaScript. Its action.yml metadata remains unchanged. .github/cm-build-routing.json remains configured=false: automatic/source fanout is still disabled and CM_BUILD_FANOUT_TOKEN is not configured. Direct operator dispatch is distinct from validating fanout.
 
 Only the verified source default-branch HEAD and trusted worker revision may write builder-owned producer caches. Other reviewed source SHAs get platform-enforced cache-mode read. Preflight, source checks, receipts and the independent runtime consumer use none. Cargo downloads, sccache snapshots and verified Host binaries remain separate; keys never cross platforms or repositories. RUSTC_WRAPPER=sccache, CARGO_INCREMENTAL=0 and SCCACHE_GHA_ENABLED=false remain required in the producer; target/ is not cached.
+
+### Repository cache budget
+
+The owner-approved cap is **10,000,000,000 bytes per repository**, shared by Cargo downloads, sccache, Host/linked targets, benchmark seeds and every other Actions cache namespace. Six repositories do not share one 10 GB pool. Existing caches can be restored when a new save is skipped. Artifact storage/retention is separate and does not gain a paid allowance from this policy.
+
+Every authorized ordinary and benchmark save uses the worker-owned `cache-save` action after the original eligibility checks. Immediately before an upload it revalidates exact source/write authority, inventories only explicit runner-temporary candidate paths, and reserves a conservative tar/PAX plus gzip/zstd size allowance. It checks both live aggregate usage and the full paginated cache inventory, including unrelated cache keys. Same-job reservations remain charged after an upload failure, preventing stale usage from authorizing several individually affordable saves whose combined size exceeds the cap. Unknown capacity, an invalid inventory or insufficient headroom skips that save and retains `cache-save-plan-*.json`; it never deletes caches or expands billing.
+
+Normal cache writers, the cold benchmark seed writer and the trust-write probe share one repository concurrency group, while read/none work uses independent groups. The trust-read negative probe intentionally calls the real save action under runner-enforced read authority to verify denial; it never receives write authority. `queue: max` retains up to 100 pending writers under the [Actions concurrency policy](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency). Every cache-writing workflow must use this group and the same save action. This is an admission policy for the reviewed workflows; no repository billing setting is changed. A budget denial can mean an unchanged future build must restore an older compatible snapshot or rebuild after a genuine miss.
 
 ### Compiler cache and unchanged Host reuse
 

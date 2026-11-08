@@ -4,6 +4,18 @@
   "repository": "DSLZL/CM-build-linux-x64",
   "files": [
     {
+      "source": ".github/cm-platforms.json",
+      "destination": ".github/cm-platforms.json"
+    },
+    {
+      "source": "ci/scripts/cm_platforms.py",
+      "destination": ".github/scripts/cm_platforms.py"
+    },
+    {
+      "source": "ci/worker/cache-save/action.yml",
+      "destination": ".github/actions/cache-save/action.yml"
+    },
+    {
       "source": "ci/scripts/program_integration.py",
       "destination": ".github/scripts/program_integration.py"
     },
