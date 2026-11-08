@@ -41,7 +41,7 @@ def setup(selected, limit=16):
     for owner in selected:
         budget.cm(PROFILE, EVIDENCE / "management", "install", INPUTS / "mods" / PACKAGES[owner])
     if not selected:
-        mod_manifest.selection(PROFILE, [])
+        budget.cm(PROFILE, EVIDENCE / "management", "scan")
     if "a" in selected:
         mod_manifest.write_toml(PROFILE / "cm-runtime.toml", {"format_version": 2, "enabled": [],
             "mods": {OWNERS["a"]: {"policy": budget.policy(limit)}}})
@@ -56,7 +56,7 @@ def payloads():
 def terminal(name, selected, provider=None, *, leaves=False, code_mode=False):
     review = module("review-before-send/driver.py")
     directory = EVIDENCE / name
-    leaf_dir = directory / "leaves"
+    leaf_dir = EVIDENCE / (name + "-leaves")
     settings = {"tool_concurrency": 1} if "c" in selected else {}
     if leaves:
         leaf_dir.mkdir(parents=True)
@@ -87,9 +87,8 @@ def submit(instance, token, selected, *, paste=False):
             instance.send(b"\r\t\r")
             instance.quiet()
             instance.send(b"\x1b")
-            instance.send(b"\x7f")
-            instance.send("x")
-            instance.review()
+            instance.send(b"\x03")
+            instance.review(text[:-1] + "x")
         else:
             instance.review(text)
         assert len(instance.provider.requests) == before_requests
@@ -118,15 +117,18 @@ def invariants(instance, selected):
         assert not loaded and ready[0]["mod_count"] == 0
     budget = module("turn-budget/driver.py")
     admissions = budget.admissions(instance.directory)
-    turns = {row["turn"] for row in admissions}
+    thread = next((row["detail"]["thread"] for row in rows if row["event"] == "runtime-scope-open"
+        and row["detail"]["thread"] and not row["detail"]["turn"]), None)
+    # Auxiliary title requests have their own thread and retain their raw admissions below.
+    turns = {row["turn"] for row in admissions if row["thread"] == thread}
     charges = {turn: budget.charged(budget.admissions(instance.directory, turn)) for turn in turns}
     charges = {turn: values for turn, values in charges.items() if values}
     assert bool(admissions) == ("a" in selected)
     if "a" in selected:
-        assert charges and all(values == list(range(1, len(values) + 1)) for values in charges.values())
+        assert thread and charges and all(values == list(range(1, len(values) + 1)) for values in charges.values())
     assert bool(instance.reviews()) == ("b" in selected)
     return {"loaded": sorted(loaded), "ready": ready[0], "budget_charges": charges,
-        "budget_admissions": admissions,
+        "business_thread": thread, "budget_admissions": admissions,
         "review_ids": [row["detail"] for row in instance.reviews()], "identity": instance.identity}
 
 
@@ -173,11 +175,11 @@ def leaf_audit(rows, *, cancelled=False):
 def leaves(name, selected, *, code_mode=False, cancel=None, exec_tools=False):
     concurrency = module("tool-concurrency/driver.py")
     provider = concurrency.Provider(cells=2 if code_mode else 3, code_mode=code_mode,
-        exec_barriers=EVIDENCE / name / "leaves" if exec_tools else None)
+        exec_barriers=EVIDENCE / (name + "-leaves") if exec_tools else None)
     with terminal(name, selected, provider, leaves=True, code_mode=code_mode) as instance:
         token = "program-" + name
         submit(instance, token, selected)
-        entered = instance.directory / "leaves"
+        entered = EVIDENCE / (name + "-leaves")
         instance.wait(lambda: len(list(entered.glob("*.entered"))) == 1 and
             sum(row["event"] == "tool-concurrency-wait" for row in instance.native()) > 1,
             "one running leaf and a separately queued leaf")
@@ -341,7 +343,9 @@ def case_wrong_backend():
         assert not select.select([listener], [], [], 0)[0], "Unsupported backend contacted before rejection"
     finally:
         listener.close()
-    assert "concurrency" in value["stderr"].lower() or "embedded" in value["stderr"].lower(), value
+    assert "remote backends are unsupported" in value["stderr"].lower(), value
+    failures = [row["detail"] for row in value["native"] if row["event"] == "startup-failed"]
+    assert len(failures) == 1 and failures[0]["code"] == "backend" and failures[0]["already_native_executed"] is False
     assert not any(row["event"] == "ready" for row in value["native"])
     value["backend_contacted"] = False
     value["already_native_executed"] = any(row["event"] == "init-start" for row in value["native"])
