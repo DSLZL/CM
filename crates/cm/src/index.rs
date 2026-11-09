@@ -208,8 +208,7 @@ impl Declaration {
             && binary.entry.len() <= 128
             && matches!(
                 (binary.target.as_str(), binary.cpu.as_str()),
-                ("x86_64-unknown-linux-gnu", "x86-64")
-                    | ("aarch64-unknown-linux-gnu", "armv8-a")
+                ("x86_64-unknown-linux-gnu", "x86-64") | ("aarch64-unknown-linux-gnu", "armv8-a")
             )
             && text(&binary.glibc_min, 16)
             && binary
@@ -1002,8 +1001,13 @@ impl ProductionOrigin {
             && ci_request_id(&self.request_id)
             && matches!(
                 (loader::CPU, self.job.as_str()),
-                ("x86-64", "build-read / linux-x64" | "build-write / linux-x64")
-                    | ("armv8-a", "build-read / linux-arm64" | "build-write / linux-arm64")
+                (
+                    "x86-64",
+                    "build-read / linux-x64" | "build-write / linux-x64"
+                ) | (
+                    "armv8-a",
+                    "build-read / linux-arm64" | "build-write / linux-arm64"
+                )
             )
             && self.product_artifact.valid()
             && self.input_artifact.valid()

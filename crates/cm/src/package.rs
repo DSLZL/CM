@@ -131,7 +131,9 @@ fn validate_at(executable: &Path, allow_development: bool) -> Result<(), LoadErr
             .ok_or("missing package root")?;
         // Upstream integration tests install copies of the 0.0.0 development CLI.
         if let Some(target) = option_env!("CARGO_TARGET_DIR").filter(|_| allow_development) {
-            let original = Path::new(target).join(loader::TARGET).join("dev-small/codex");
+            let original = Path::new(target)
+                .join(loader::TARGET)
+                .join("dev-small/codex");
             if same_build_inode(executable, &original)
                 || same_development_copy(executable, root, &original)
             {
