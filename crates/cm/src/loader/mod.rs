@@ -33,7 +33,10 @@ pub(crate) const MAX_MANIFEST: u64 = 64 * 1024;
 pub(crate) const MAX_PAYLOAD: u64 = 64 * 1024 * 1024;
 pub(crate) const MAX_RESOURCE: u64 = 8 * 1024 * 1024;
 pub(crate) const MAX_CONTRIBUTIONS: usize = 128;
+#[cfg(target_arch = "x86_64")]
 pub const TARGET: &str = "x86_64-unknown-linux-gnu";
+#[cfg(target_arch = "aarch64")]
+pub const TARGET: &str = "aarch64-unknown-linux-gnu";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]

@@ -19,6 +19,7 @@ ci/scripts/cm_platforms.py
 ci/scripts/dispatch_build.py
 ci/scripts/host.py
 ci/scripts/linux_ci.py
+ci/scripts/linux_arm64_preflight.py
 ci/scripts/managed_package.py
 ci/scripts/mod_manifest.py
 ci/scripts/mod_author.py
@@ -260,3 +261,6 @@ ci/program/cases.json
 ci/scripts/program_integration.py
 fixtures/program-integration/driver.py
 docs/linux-x64-integration.md
+ci/worker-files-linux-arm64.json
+ci/worker/linux-arm64-preflight.yml
+fixtures/native-loader/isolation.c

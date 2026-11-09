@@ -6,8 +6,16 @@ const SYSTEM_LIBRARIES: &[&str] = &[
     "libpthread.so.0",
     "libdl.so.2",
     "librt.so.1",
+    #[cfg(target_arch = "x86_64")]
     "ld-linux-x86-64.so.2",
+    #[cfg(target_arch = "aarch64")]
+    "ld-linux-aarch64.so.1",
 ];
+const MACHINE: u64 = if cfg!(target_arch = "aarch64") {
+    183
+} else {
+    62
+};
 
 fn bytes(data: &[u8], offset: u64, size: u64) -> Result<&[u8], String> {
     let end = offset.checked_add(size).ok_or("ELF range overflow")?;
@@ -82,7 +90,18 @@ fn cpu_notes(data: &[u8]) -> Result<(), String> {
                 let kind = number(descriptor, property, 4)?;
                 let length = number(descriptor, property + 4, 4)?;
                 let value = bytes(descriptor, property + 8, length)?;
-                if kind == 0xc000_8002 {
+                if cfg!(target_arch = "aarch64") {
+                    if kind == 0xc000_0000 {
+                        // AArch64 BTI/PAC/GCS bits declare compatibility, not required ISA.
+                        if length != 4 || number(value, 0, 4)? & !7 != 0 {
+                            return Err(
+                                "invalid or unqualified AArch64 ELF feature declaration".into(),
+                            );
+                        }
+                    } else if (0xc000_0000..=0xdfff_ffff).contains(&kind) {
+                        return Err("unqualified AArch64 ELF CPU property".into());
+                    }
+                } else if kind == 0xc000_8002 {
                     if length != 4 || number(value, 0, 4)? & !1 != 0 {
                         return Err("ELF requires an ISA above the declared x86-64 baseline".into());
                     }
@@ -109,12 +128,16 @@ fn inspect(data: &[u8], declared: Option<&str>) -> Result<Vec<String>, String> {
     if bytes(data, 0, 7)? != b"\x7fELF\x02\x01\x01"
         || ![0, 3].contains(&number(data, 7, 1)?)
         || number(data, 16, 2)? != 3
-        || number(data, 18, 2)? != 62
+        || number(data, 18, 2)? != MACHINE
         || number(data, 20, 4)? != 1
         || number(data, 52, 2)? != 64
         || number(data, 54, 2)? != 56
     {
-        return Err("expected ELF64 little-endian x86_64 shared object".into());
+        return Err(if MACHINE == 62 {
+            "expected ELF64 little-endian x86_64 shared object".into()
+        } else {
+            "expected ELF64 little-endian aarch64 shared object".into()
+        });
     }
     let start = number(data, 32, 8)?;
     let count = number(data, 56, 2)?;
@@ -319,13 +342,30 @@ mod tests {
             note.extend_from_slice(&value.to_le_bytes());
         }
         note.extend_from_slice(b"GNU\0");
-        for value in [0xc000_8002_u32, 4, 1, 0] {
+        let kind: u32 = if MACHINE == 183 {
+            0xc000_0000
+        } else {
+            0xc000_8002
+        };
+        for value in [kind, 4, 1, 0] {
             note.extend_from_slice(&value.to_le_bytes());
         }
         cpu_notes(&note).unwrap();
-        note[24] = 2;
+        if MACHINE == 183 {
+            for features in [0, 1, 2, 4, 7] {
+                note[24] = features;
+                cpu_notes(&note).unwrap();
+            }
+            note[16..20].copy_from_slice(&0xc000_8002_u32.to_le_bytes());
+            assert!(cpu_notes(&note).is_err());
+            note[16..20].copy_from_slice(&kind.to_le_bytes());
+        }
+        note[24] = if MACHINE == 183 { 8 } else { 2 };
         assert!(cpu_notes(&note).is_err());
         note[24] = 1;
+        note[20] = 8;
+        assert!(cpu_notes(&note).is_err());
+        note[20] = 4;
         for end in 1..note.len() {
             assert!(cpu_notes(&note[..end]).is_err());
         }
@@ -339,7 +379,15 @@ mod tests {
         let mut header = vec![0; 64];
         header[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
         header[16] = 3;
-        header[18] = 183;
-        assert!(check(&header).is_err());
+        header[18] = MACHINE as u8;
+        header[20] = 1;
+        header[52] = 64;
+        header[54] = 56;
+        assert_eq!(
+            check(&header).unwrap_err(),
+            "unsupported ELF program-header count"
+        );
+        header[18] = if MACHINE == 183 { 62 } else { 183 };
+        assert!(check(&header).unwrap_err().contains("shared object"));
     }
 }

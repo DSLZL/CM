@@ -352,3 +352,33 @@ operation](../docs/reproducibility-report.md) before publication or dispatch.
 ## Final program validation
 
 The existing independent `build.yml` accepts `build_kind=program` with the exact source SHA and unique request ID. It skips both native build jobs and both signing branches, prepares a current validation overlay, consumes the fixed qualified S03 runtime input, and emits a separate program receipt. The original `.github/cm-ci.json` product mapping remains CM-S03. See [Linux x64 integration](../docs/linux-x64-integration.md) for fixed inputs, 18 new cases, strict checkpoint reuse, the four final reports, and support boundaries. This branch writes no cache and has no fallback build or native product upload.
+
+## Linux ARM64 initial mechanism candidate
+
+`worker-files-linux-arm64.json` maps seven infrastructure files to the proposed
+public `DSLZL/CM-build-linux-arm64` repository. Its sole workflow runs on native
+`ubuntu-24.04-arm`, binds the current public source and worker `main` revisions,
+and requires actual runner-enforced `cache-mode: none`. The disabled platform
+exception is restricted to the `platform_preflight` role and `native-preflight`
+job; normal product entry points continue to reject disabled platforms.
+
+The small driver prepares the pinned upstream source and existing overlay without
+building Codex CLI or schemas. It builds only ABI/runtime loader tests and two
+independent fixture libraries, reuses the real sealed-snapshot replacement test,
+and runs existing C layout and SDK boundary probes. Its test identity and ELF
+hashes are explicitly private probe evidence. ARM ELF machine and GNU property
+checks retain the x64 branch and reject unknown processor requirements.
+
+A minimal C-only rootfs tests namespaces, capability removal, read-only inputs,
+hidden source/Cargo paths, denied compiler executions and separated loopback
+networks. The trusted observer uses the existing consumer syscall list and audit
+functions. Two intentional failed compiler executions are recorded separately;
+they are not presented as zero attempted builds. This initial probe uses the
+system bubblewrap binary, so packaged-helper and full product isolation remain
+unverified. Logs retain stages, return codes, elapsed times and 30-second
+heartbeats; only text evidence is uploaded. No cache is restored or saved.
+
+The ARM repository, native mechanisms, complete V01, production H, cache reuse and
+runtime qualification are all NOT_RUN for this candidate. The platform stays
+disabled until the remaining native gates are complete. The shared loader changes
+also require affected Linux x64 regression evidence before final integration.

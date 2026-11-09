@@ -21,6 +21,9 @@ import types
 import ci_progress
 
 TARGET = "x86_64-unknown-linux-gnu"
+TRACE_SYSCALLS = ("trace=execve,execveat,socket,getsockname,accept,accept4,connect,sendto,recvfrom,socketpair,"
+                  "symlink,symlinkat,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl,readlink,"
+                  "mmap,mprotect,memfd_create,clone,clone3,fork,vfork,getpid,gettid")
 CAPABILITY = "core.exec_output_limit.v1"
 CONSUMER_ENV_PREFIX = ("/usr/bin/env", "-u", "PWD")
 ENTRY_INVALID = ("short-prefix", "short-tail", "future-minor", "stride", "count", "null-array",
@@ -2051,7 +2054,7 @@ def consume():
             trusted = temp / "trusted-observer"
             trusted.mkdir()
             trace = ["strace", "-ff", "-qq", "-yy", "--pidns-translation", "-s", "1024", "-e",
-                "trace=execve,execveat,socket,getsockname,accept,accept4,connect,sendto,recvfrom,socketpair,symlink,symlinkat,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl,readlink,mmap,mprotect,memfd_create,clone,clone3,fork,vfork,getpid,gettid",
+                TRACE_SYSCALLS,
                 "-o", "CM_PHASE_TRACE", "--"]
 
             def command(label, arguments, sandbox=base):
@@ -2475,7 +2478,7 @@ def consume_index_proof():
             trace = temp / "trusted-observer" / label
             trace.mkdir()
             argv = ["strace", "-ff", "-qq", "-yy", "--pidns-translation", "-s", "1024", "-e",
-                "trace=execve,execveat,socket,getsockname,accept,accept4,connect,sendto,recvfrom,socketpair,symlink,symlinkat,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl,readlink,mmap,mprotect,memfd_create,clone,clone3,fork,vfork,getpid,gettid",
+                TRACE_SYSCALLS,
                 "-o", str(trace / "syscalls"), "--", *base, "--", *CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B",
                 "/fixture/fixtures/" + script + "/driver.py", action]
             if label == "s03-proof":
