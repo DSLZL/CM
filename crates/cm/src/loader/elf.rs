@@ -95,7 +95,7 @@ fn cpu_notes(data: &[u8]) -> Result<(), String> {
                         // AArch64 BTI/PAC/GCS bits declare compatibility, not required ISA.
                         if length != 4 || number(value, 0, 4)? & !7 != 0 {
                             return Err(
-                                "invalid or unqualified AArch64 ELF feature declaration".into(),
+                                "invalid or unqualified AArch64 ELF feature declaration".into()
                             );
                         }
                     } else if (0xc000_0000..=0xdfff_ffff).contains(&kind) {
