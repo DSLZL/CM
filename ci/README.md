@@ -353,16 +353,16 @@ operation](../docs/reproducibility-report.md) before publication or dispatch.
 
 The existing independent `build.yml` accepts `build_kind=program` with the exact source SHA and unique request ID. It skips both native build jobs and both signing branches, prepares a current validation overlay, consumes the fixed qualified S03 runtime input, and emits a separate program receipt. The original `.github/cm-ci.json` product mapping remains CM-S03. See [Linux x64 integration](../docs/linux-x64-integration.md) for fixed inputs, 18 new cases, strict checkpoint reuse, the four final reports, and support boundaries. This branch writes no cache and has no fallback build or native product upload.
 
-## Linux ARM64 initial mechanism candidate
+## Linux ARM64 native mechanism preflight
 
-`worker-files-linux-arm64.json` maps seven infrastructure files to the proposed
+`worker-files-linux-arm64.json` maps seven infrastructure files to the existing
 public `DSLZL/CM-build-linux-arm64` repository. Its sole workflow runs on native
 `ubuntu-24.04-arm`, binds the current public source and worker `main` revisions,
 and requires actual runner-enforced `cache-mode: none`. The disabled platform
 exception is restricted to the `platform_preflight` role and `native-preflight`
 job; normal product entry points continue to reject disabled platforms.
 
-The small driver prepares the pinned upstream source and existing overlay without
+The default `initial-mechanisms` stage prepares the pinned upstream source and existing overlay without
 building Codex CLI or schemas. It builds only ABI/runtime loader tests and two
 independent fixture libraries, reuses the real sealed-snapshot replacement test,
 and runs existing C layout and SDK boundary probes. Its test identity and ELF
@@ -373,12 +373,26 @@ A minimal C-only rootfs tests namespaces, capability removal, read-only inputs,
 hidden source/Cargo paths, denied compiler executions and separated loopback
 networks. The trusted observer uses the existing consumer syscall list and audit
 functions. Two intentional failed compiler executions are recorded separately;
-they are not presented as zero attempted builds. This initial probe uses the
-system bubblewrap binary, so packaged-helper and full product isolation remain
-unverified. Logs retain stages, return codes, elapsed times and 30-second
+they are not presented as zero attempted builds. This initial stage uses the
+system bubblewrap binary. Logs retain stages, return codes, elapsed times and 30-second
 heartbeats; only text evidence is uploaded. No cache is restored or saved.
 
-The ARM repository, native mechanisms, complete V01, production H, cache reuse and
-runtime qualification are all NOT_RUN for this candidate. The platform stays
-disabled until the remaining native gates are complete. The shared loader changes
-also require affected Linux x64 regression evidence before final integration.
+The initial mechanism run passed at source `07bde6992075a238bebeccb40058ac149c7d4c6b`
+and worker `37e71a70f427ac36bd888d756b159c7ca38d0919`
+([run 42580220275](https://github.com/DSLZL/CM-build-linux-arm64/actions/runs/42580220275)).
+That evidence covers the original source revision and system bubblewrap only.
+
+The separate `stage=packaged-helper` candidate prepares the same pinned upstream
+source, reuses the production helper's fmt/clippy/test/build commands for native
+`codex-bwrap`, and runs the same minimal-rootfs observer with that exact ARM64
+binary. It records its version, ELF hash, libcap inputs, successful executable
+path and unchanged bytes after the probe. Empty native override variables are
+rejected too: upstream treats an empty `CODEX_SKIP_BWRAP_BUILD` as a skip request.
+This stage skips the ABI/loader Rust tests and fixtures; it builds no Codex CLI
+and uploads no product. The default `initial-mechanisms` stage retains those
+original probes. Both stages write no cache.
+
+The packaged-helper candidate, complete V01, production H, cache reuse and runtime
+qualification remain NOT_RUN until their own hosted evidence is reviewed. The
+platform stays disabled. The shared helper recipe and loader changes also require
+affected Linux x64 regression evidence before final integration.

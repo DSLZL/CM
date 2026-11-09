@@ -216,6 +216,16 @@ def schemas(root, logs):
     verify_sources(root, logs)
 
 
+def reject_native_overrides(env=None):
+    env = os.environ if env is None else env
+    if any(key in env for key in (
+        "V8_FROM_SOURCE", "RUSTY_V8_ARCHIVE", "RUSTY_V8_SRC_BINDING_PATH",
+        "CODEX_SKIP_BWRAP_BUILD", "CODEX_BWRAP_SOURCE_DIR", "CODEX_BWRAP_SHA256",
+        "PKG_CONFIG_PATH", "PKG_CONFIG_SYSROOT_DIR",
+    )):
+        raise RuntimeError("Unregistered native input override")
+
+
 def native(root, logs):
     import distribution_provenance
     host = root / HOST
@@ -224,12 +234,7 @@ def native(root, logs):
     from codex_package.targets import TARGET_SPECS
     from codex_package.v8 import resolve_codex_v8_cargo_env
 
-    if any(os.environ.get(key) for key in (
-        "V8_FROM_SOURCE", "RUSTY_V8_ARCHIVE", "RUSTY_V8_SRC_BINDING_PATH",
-        "CODEX_SKIP_BWRAP_BUILD", "CODEX_BWRAP_SOURCE_DIR", "CODEX_BWRAP_SHA256",
-        "PKG_CONFIG_PATH", "PKG_CONFIG_SYSROOT_DIR",
-    )):
-        raise RuntimeError("Unregistered native input override")
+    reject_native_overrides()
     v8_env = resolve_codex_v8_cargo_env(TARGET_SPECS[TARGET])
     if set(v8_env) != {"RUSTY_V8_ARCHIVE", "RUSTY_V8_SRC_BINDING_PATH"}:
         raise RuntimeError("Verified V8 archive and binding are required")
@@ -260,6 +265,18 @@ def native(root, logs):
     append_environment({**v8_env, "CM_DISTRIBUTION_GH_SHA256": inputs["distribution_verifier"]["sha256"]})
 
 
+def helper_commands(manifest_path, target, profile):
+    manifest_path = str(manifest_path)
+    commands = {"fmt": ["cargo", "fmt", "--manifest-path", manifest_path, "-p", "codex-bwrap", "--", "--check"]}
+    for phase in ("clippy", "test", "build"):
+        args = ["cargo", phase, "--locked", "--manifest-path", manifest_path, "--target", target,
+                "--profile", profile, "-p", "codex-bwrap"]
+        if phase == "clippy":
+            args += ["--all-targets", "--", "-D", "warnings"]
+        commands[phase] = args
+    return commands
+
+
 def helper(root, logs):
     cfg = load_config(root)
     import runtime_composition
@@ -273,13 +290,7 @@ def helper(root, logs):
         raise RuntimeError("Refusing old helper target artifacts")
     env = {**os.environ, "CARGO_TARGET_DIR": str(target)}
     manifest_path = cfg["units"][0]["manifest"]
-    execute(root, logs, "helper-fmt",
-            ["cargo", "fmt", "--manifest-path", manifest_path, "-p", "codex-bwrap", "--", "--check"], env)
-    for phase in ("clippy", "test", "build"):
-        args = ["cargo", phase, "--locked", "--manifest-path", manifest_path, "--target", TARGET,
-                "--profile", cfg["build_profile"], "-p", "codex-bwrap"]
-        if phase == "clippy":
-            args += ["--all-targets", "--", "-D", "warnings"]
+    for phase, args in helper_commands(manifest_path, TARGET, cfg["build_profile"]).items():
         execute(root, logs, "helper-" + phase, args, env)
     binary = target / TARGET / cfg["build_profile"] / "bwrap"
     execute(root, logs, "helper-version", [str(binary), "--version"], env)

@@ -19,6 +19,7 @@ import record_run
 
 TARGET = "aarch64-unknown-linux-gnu"
 NAMESPACES = ("user", "mnt", "pid", "ipc", "uts", "net")
+STAGES = ("initial-mechanisms", "packaged-helper")
 
 
 def elf(path):
@@ -67,14 +68,22 @@ def authority(policy, entry, env):
         raise RuntimeError("Mechanism gate differs from its trusted cache-none ARM64 preflight")
 
 
-def isolation(root, logs, temp, run):
+def helper_execution(executions, path):
+    expected = r'\d+\s+execve\(' + re.escape(json.dumps(str(path))) + r', \[.*\], [^\n]*\) = 0'
+    matches = [line for line in executions if re.match(r'\d+\s+execve\("[^"\n]*/bwrap", ', line)]
+    if len(matches) != 1 or not re.fullmatch(expected, matches[0]):
+        raise RuntimeError("Expected exactly one successful execution of the selected helper")
+    return matches[0]
+
+
+def isolation(root, logs, temp, run, helper, label="isolation"):
     import runtime_composition as observer
     from runtime_consumer import TRACE_SYSCALLS
     observer.check_network_audit()
     probe = temp / "native_probe"
-    run("isolation-compile", ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O2",
+    run(label + "-compile", ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O2",
         "-Wl,-z,relro,-z,now", str(root / "fixtures/native-loader/isolation.c"), "-o", str(probe)])
-    dependencies = run("isolation-dependencies", ["ldd", str(probe)])
+    dependencies = run(label + "-dependencies", ["ldd", str(probe)])
     filesystem = temp / "rootfs"
     filesystem.mkdir()
     files = {"/native_probe": probe}
@@ -105,10 +114,11 @@ def isolation(root, logs, temp, run):
     cargo_marker.write_bytes(b"cargo-private")
     work = temp / "work"
     work.mkdir()
-    traces = logs / "isolation-traces"
+    traces = logs / (label + "-traces")
     traces.mkdir()
-    helper = elf(Path("/usr/bin/bwrap"))
-    (logs / "isolation-inputs.json").write_text(json.dumps({"rootfs": inventory, "system_bwrap": helper,
+    helper = helper.resolve(strict=True)
+    helper_input = {"path": str(helper), **elf(helper)}
+    (logs / (label + "-inputs.json")).write_text(json.dumps({"rootfs": inventory, "helper": helper_input,
         "trace_syscalls": TRACE_SYSCALLS}, indent=2) + "\n", encoding="utf-8")
     with socket.socket() as canary:
         canary.bind(("127.0.0.1", 0))
@@ -116,14 +126,14 @@ def isolation(root, logs, temp, run):
         canary.settimeout(0.2)
         port = canary.getsockname()[1]
         args = ["strace", "-ff", "-qq", "-yy", "--pidns-translation", "-s", "1024", "-e", TRACE_SYSCALLS,
-            "-o", str(traces / "syscalls"), "--", "/usr/bin/bwrap", "--unshare-user", "--unshare-pid",
+            "-o", str(traces / "syscalls"), "--", str(helper), "--unshare-user", "--unshare-pid",
             "--unshare-ipc", "--unshare-uts", "--unshare-net", "--uid", "1000", "--gid", "1000",
             "--cap-drop", "ALL", "--new-session", "--die-with-parent", "--ro-bind", str(filesystem), "/",
             "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--bind", str(work), "/work",
             "--chdir", "/work", "--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--", "/native_probe", str(port),
             *(os.readlink("/proc/self/ns/" + name) for name in NAMESPACES), str(outside),
             str(root / ".github/cm-ci.json"), str(cargo_marker)]
-        result = json.loads(run("isolation-native", args, 60))
+        result = json.loads(run(label + "-native", args, 60))
         try:
             connection, _ = canary.accept()
         except socket.timeout:
@@ -140,6 +150,8 @@ def isolation(root, logs, temp, run):
         path.write_text(safe, encoding="utf-8")
         calls.extend(observer.complete_syscalls(safe.splitlines()))
     executions = [line for line in calls if re.match(r"\d+\s+execve(?:at)?\(", line)]
+    selected_execution = helper_execution(executions, helper)
+    assert elf(helper) == {key: value for key, value in helper_input.items() if key != "path"}
     denied = [line for line in executions if re.fullmatch(
         r'\d+\s+execve\("(/usr/bin/(?:cc|cargo))", \["\1", "--version"\], [^\n]*\) = -1 ENOENT \(No such file or directory\)', line)]
     assert len(denied) == 2 and all(sum('"/usr/bin/' + name + '"' in line for line in denied) == 1 for name in ("cc", "cargo"))
@@ -148,13 +160,15 @@ def isolation(root, logs, temp, run):
     network = [line for line in calls if re.match(r"\d+\s+(?:connect|sendto|socketpair)\(", line)]
     observer.audit_network(network, Path("/work"), ports, observer.kernel_route_sockets(calls),
         observer.provider_tcp_connections(calls, ports))
-    return {**result, "system_bwrap_sha256": helper["sha256"], "packaged_helper": "not_run",
+    return {**result, "helper": helper_input, "helper_execution": selected_execution,
         "rootfs": inventory, "inputs_unchanged": True, "outer_canary_hits": 0,
         "trace_syscalls": TRACE_SYSCALLS, "trace_files": len(list(traces.glob("syscalls.*"))),
         "expected_denied_compiler_executions": denied, "execution_audit": "pass", "network_audit": "pass"}
 
 
-def main():
+def main(stage="initial-mechanisms"):
+    if stage not in STAGES:
+        raise RuntimeError("Unknown ARM64 preflight stage: " + stage)
     entry = record_run.require_hosted_worker(enabled=False)
     logs = Path(os.environ["CM_CI_LOG_DIR"])
     policy = json.loads(Path(os.environ["RUNNER_TEMP"], "cm-worker-preflight.json").read_text())
@@ -163,10 +177,13 @@ def main():
     assert root == Path(__file__).resolve().parents[2]
     record_run.record(logs)
     shutil.copyfile(Path(os.environ["RUNNER_TEMP"], "cm-worker-preflight.json"), logs / "worker-preflight.json")
-    report = {"schema_version": 1, "scope": "linux-arm64-initial-native-mechanisms", "status": "running",
+    scope = "initial-native-mechanisms" if stage == "initial-mechanisms" else "packaged-helper-mechanisms"
+    report = {"schema_version": 1, "scope": "linux-arm64-" + scope, "stage": stage, "status": "running",
         "provenance": policy, "platform_enabled": entry["enabled"], "cache_mode": "none", "cache_writes": 0,
         "production_host": "not_built", "v01": "partial", "qualification": "not_run", "release_ready": False,
         "not_run": ["packaged-helper", "complete-V01", "V02-V08", "production-Host", "full-runtime-qualification"], "gates": {}}
+    if stage == "packaged-helper":
+        report["not_run"][0] = "ABI-and-loader-probes-in-this-run"
     report_path = logs / "linux-arm64-preflight.json"
 
     def write():
@@ -206,12 +223,41 @@ def main():
                     "python_elf": elf(Path(sys.executable).resolve(strict=True)),
                     "cc_elf": elf(Path(shutil.which("cc")).resolve(strict=True)),
                     "strace": run("strace-version", ["strace", "--version"])}
-                report["gates"]["isolation"] = isolation(root, logs, temp, run)
+                system_isolation = isolation(root, logs, temp, run, Path("/usr/bin/bwrap"))
+                report["gates"]["isolation"] = {**system_isolation,
+                    "system_bwrap_sha256": system_isolation["helper"]["sha256"], "packaged_helper": "not_run"}
                 write()
                 import host
                 with ci_progress.stage("prepare-pinned-source-only"):
                     host.prepare(root, logs)
                 workspace = root / host.HOST / "codex-rs/Cargo.toml"
+                if stage == "packaged-helper":
+                    host.reject_native_overrides()
+                    helper_target = temp / "helper-target"
+                    runtime_target = os.environ["CARGO_TARGET_DIR"]
+                    os.environ["CARGO_TARGET_DIR"] = str(helper_target)
+                    try:
+                        for phase, command in host.helper_commands(workspace, TARGET, "dev-small").items():
+                            run("packaged-helper-" + phase, command, 900)
+                    finally:
+                        os.environ["CARGO_TARGET_DIR"] = runtime_target
+                    binary = helper_target / TARGET / "dev-small/bwrap"
+                    helper_gate = {"status": "running", "package": "codex-bwrap", "target": TARGET,
+                        "profile": "dev-small", "elf": elf(binary),
+                        "libcap_version": run("libcap-version", ["pkg-config", "--modversion", "libcap"]).strip(),
+                        "libcap_flags": run("libcap-flags", ["pkg-config", "--cflags", "--libs", "libcap"]).strip(),
+                        "dependencies": run("packaged-helper-dependencies", ["ldd", binary])}
+                    report["gates"]["packaged-helper"] = helper_gate
+                    write()
+                    version = run("packaged-helper-version", [binary, "--version"]).strip()
+                    assert version == "bubblewrap built for Codex", version
+                    helper_gate["version"] = version
+                    helper_temp = temp / "packaged-helper-isolation"
+                    helper_temp.mkdir()
+                    helper_gate["isolation"] = isolation(root, logs, helper_temp, run, binary, "packaged-helper-isolation")
+                    assert helper_gate["elf"]["sha256"] == helper_gate["isolation"]["helper"]["sha256"]
+                    helper_gate["status"] = report["status"] = "pass"
+                    return
                 identity = temp / "private-probe-identity.json"
                 identity.write_text(json.dumps({"domain": "cm.native-mechanism-probe.v1", "target": TARGET,
                     "host_build_id": "sha256:" + hashlib.sha256((policy["source_sha"] + TARGET).encode()).hexdigest(),
@@ -279,6 +325,48 @@ def main():
 
 
 def self_check():
+    import host
+    host.reject_native_overrides({})
+    for key in ("V8_FROM_SOURCE", "RUSTY_V8_ARCHIVE", "RUSTY_V8_SRC_BINDING_PATH", "CODEX_SKIP_BWRAP_BUILD",
+            "CODEX_BWRAP_SOURCE_DIR", "CODEX_BWRAP_SHA256", "PKG_CONFIG_PATH", "PKG_CONFIG_SYSROOT_DIR"):
+        for value in ("", "override"):
+            try:
+                host.reject_native_overrides({key: value})
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Native override accepted: " + key)
+    manifest, profile, legacy_target = "/source/Cargo.toml", "dev-small", "x86_64-unknown-linux-gnu"
+    legacy = {
+        "fmt": ["cargo", "fmt", "--manifest-path", manifest, "-p", "codex-bwrap", "--", "--check"],
+        "clippy": ["cargo", "clippy", "--locked", "--manifest-path", manifest, "--target", legacy_target,
+            "--profile", profile, "-p", "codex-bwrap", "--all-targets", "--", "-D", "warnings"],
+        "test": ["cargo", "test", "--locked", "--manifest-path", manifest, "--target", legacy_target,
+            "--profile", profile, "-p", "codex-bwrap"],
+        "build": ["cargo", "build", "--locked", "--manifest-path", manifest, "--target", legacy_target,
+            "--profile", profile, "-p", "codex-bwrap"],
+    }
+    commands = host.helper_commands(manifest, legacy_target, profile)
+    assert commands == legacy and list(commands) == list(legacy)
+    assert host.helper_commands(Path(manifest), TARGET, profile) == {
+        phase: [TARGET if part == legacy_target else part for part in command] for phase, command in legacy.items()}
+    selected = '123 execve("/private/helper/bwrap", ["/private/helper/bwrap", "--unshare-user"], 0x0 /* 0 vars */) = 0'
+    assert helper_execution([selected], Path("/private/helper/bwrap")) == selected
+    for lines in ([], [selected, selected], [selected.replace("/private/helper", "/usr/bin")],
+            [selected, selected.replace("/private/helper", "/usr/bin")],
+            [selected.replace(" = 0", " = -1 ENOENT (No such file or directory)")]):
+        try:
+            helper_execution(lines, Path("/private/helper/bwrap"))
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Unbound helper execution accepted")
+    try:
+        main("unknown-stage")
+    except RuntimeError as error:
+        assert "Unknown ARM64 preflight stage" in str(error)
+    else:
+        raise AssertionError("Unknown preflight stage accepted")
     entry = cm_platforms.select("linux-arm64")
     env = {"CM_SOURCE_SHA": "a" * 40, "GITHUB_WORKFLOW_SHA": "b" * 40, "CM_REQUEST_ID": "mechanism-check",
         "CM_EXECUTION_ROLE": "platform_preflight", "GITHUB_JOB": "native-preflight", "GITHUB_REF": "refs/heads/main",
@@ -342,5 +430,7 @@ if __name__ == "__main__":
         self_check()
     elif not sys.argv[1:]:
         main()
+    elif len(sys.argv) == 2:
+        main(sys.argv[1])
     else:
-        raise SystemExit("Expected no arguments or self-check")
+        raise SystemExit("Expected initial-mechanisms, packaged-helper or self-check")
