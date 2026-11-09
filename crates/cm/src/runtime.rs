@@ -1895,7 +1895,9 @@ mod tests {
                 tables.requests -= 1;
             }
             tables.modules.remove(&instance);
-            tables.contributions.retain(|item| item.instance != instance);
+            tables
+                .contributions
+                .retain(|item| item.instance != instance);
             tables.remove(hub.epoch, instance).unwrap();
             tables.scopes -= 1;
         }
