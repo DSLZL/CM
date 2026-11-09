@@ -52,7 +52,8 @@ class IdentityTests(unittest.TestCase):
         baseline = host.build_identity(self.pin, inputs, protocol)["host_build_id"]
         changes = {
             "source": "0" * 64, "cm_inputs": "1" * 64, "lock": "2" * 64,
-            "target": "aarch64-unknown-linux-gnu",
+            "target": ("aarch64-unknown-linux-gnu" if linux_ci.TARGET == "x86_64-unknown-linux-gnu"
+                       else "x86_64-unknown-linux-gnu"),
             "toolchain": {**inputs["toolchain"], "rustc": "different compiler"},
             "profiles": {**inputs["profiles"], "build_profile": "release"},
             "flags": {**inputs["flags"], "RUSTFLAGS": "-C target-cpu=native"},
@@ -119,6 +120,38 @@ class IdentityTests(unittest.TestCase):
                 self.assertNotEqual(baseline, host.manifest_digest(host.product_manifest(root)))
             with patch.object(host, "cm_manifest", return_value=[]), self.assertRaises(RuntimeError):
                 host.product_manifest(root)
+
+    def test_only_selected_policy_and_slot_target_enter_product_identity(self):
+        targets = ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pin = {"patches": [], "overlay": {}, "runtime_slots": "runtime-slots.json",
+                   "target_overlay": {target: {target + ".json": "cm/policy.json"} for target in targets},
+                   "official_asset": {"sha256": "readonly-fixture"}, "official_assets": {}}
+            slot = {"targets": list(targets), "backend": "prepared_slots"}
+            pin_path, slot_path = (root / host.ADAPTER / name for name in ("source.json", "runtime-slots.json"))
+            host.write(pin_path, pin)
+            host.write(slot_path, slot)
+            for target in targets:
+                (root / (target + ".json")).write_text("original policy")
+            with patch.object(host, "cm_manifest", side_effect=lambda _: host.manifest(root)):
+                for target in targets:
+                    other = next(value for value in targets if value != target)
+                    with self.subTest(target=target), patch.object(host, "TARGET", target):
+                        before = host.manifest_digest(host.product_manifest(root))
+                        (root / (other + ".json")).write_text("unselected policy changed")
+                        host.write(slot_path, {**slot, "targets": [target]})
+                        host.write(pin_path, {**pin, "official_asset": {"sha256": "fixture changed"}})
+                        self.assertEqual(before, host.manifest_digest(host.product_manifest(root)))
+                        (root / (target + ".json")).write_text("selected policy changed")
+                        self.assertNotEqual(before, host.manifest_digest(host.product_manifest(root)))
+                        host.write(slot_path, {**slot, "targets": [other]})
+                        with self.assertRaises(RuntimeError):
+                            host.product_manifest(root)
+                    host.write(pin_path, pin)
+                    host.write(slot_path, slot)
+                    for value in targets:
+                        (root / (value + ".json")).write_text("original policy")
 
     def test_cache_requires_exact_bytes_identity_origin_and_successful_checks(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -333,9 +366,11 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(dict(line.split("=", 1) for line in output.read_text().splitlines()), value["cache_keys"])
                 return value
 
-            env = {"GITHUB_OUTPUT": str(output), "GITHUB_REPOSITORY": "DSLZL/CM-build-linux-x64",
-                   "RUNNER_OS": "Linux", "RUNNER_ARCH": "X64", "ImageOS": "ubuntu24",
-                   "ImageVersion": "before", "RUSTFLAGS": "-C target-cpu=x86-64"}
+            native = host.linux_native()
+            env = {"GITHUB_OUTPUT": str(output), "GITHUB_REPOSITORY": "DSLZL/CM-build-" + native["key"],
+                   "CM_TARGET": native["target"], "CM_PLATFORM": native["key"],
+                   "RUNNER_OS": "Linux", "RUNNER_ARCH": native["runner_arch"], "ImageOS": "ubuntu24",
+                   "ImageVersion": "before", "RUSTFLAGS": native["rustflags"]}
             with patch.dict(os.environ, env, clear=True), patch.object(linux_ci.shutil, "which", return_value=str(compiler)), \
                     patch.object(linux_ci.subprocess, "check_output", side_effect=checked):
                 before = identify()
@@ -345,7 +380,9 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(before["cache_keys"]["sccache_prefix"], after["cache_keys"]["sccache_prefix"])
                 self.assertNotEqual(before["cache_keys"]["sccache_legacy_prefix"], after["cache_keys"]["sccache_legacy_prefix"])
                 self.assertEqual(after["compatibility"]["image_version"], "after")
-                for key, value in (("RUSTFLAGS", "-C target-cpu=x86-64-v3"), ("RUNNER_ARCH", "ARM64"), ("ImageOS", "ubuntu26")):
+                foreign_arch = "ARM64" if native["runner_arch"] == "X64" else "X64"
+                for key, value in (("RUSTFLAGS", native["rustflags"] + " -C opt-level=1"),
+                                   ("RUNNER_ARCH", foreign_arch), ("ImageOS", "ubuntu26")):
                     with self.subTest(changed=key), patch.dict(os.environ, {key: value}):
                         self.assertNotEqual(after["compatibility_fingerprint"], identify()["compatibility_fingerprint"])
                 compiler.write_bytes(b"compiler-v2")
@@ -377,7 +414,7 @@ class IdentityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     host.require_hosted_linux()
-    if os.environ["GITHUB_REPOSITORY"] != "DSLZL/CM-build-linux-x64":
+    if os.environ["GITHUB_REPOSITORY"] != "DSLZL/CM-build-" + host.linux_native()["key"]:
         raise SystemExit("Independent builder required")
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(IdentityTests))
     if not result.wasSuccessful():

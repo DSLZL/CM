@@ -15,14 +15,15 @@ import time
 import tomllib
 
 import ci_progress
+from cm_platforms import linux_native
 from mod_manifest import read, sha, write
 
 SDK_REVISION = "d3abb2bea2dda5964ba2725b1abd095c3f46678b"
 TEMPLATE = "templates/native-mod"
-TARGET = "x86_64-unknown-linux-gnu"
+TARGET = linux_native()["target"]
 REPORTS = ("author-to-user-workflow.json", "source-only-authoring.json", "runtime-author-diagnostics.json",
            "independent-mod-update.json", "metadata-diagnostics-boundary.json", "zero-build-cli-contract.json")
-RUNTIME_FILES = ("ci/scripts/mod_author.py", "ci/scripts/mod_manifest.py", "ci/scripts/runtime_sdk.py",
+RUNTIME_FILES = ("ci/scripts/cm_platforms.py", "ci/scripts/mod_author.py", "ci/scripts/mod_manifest.py", "ci/scripts/runtime_sdk.py",
     "ci/scripts/managed_package.py", "ci/scripts/runtime_state.py", "ci/scripts/ci_progress.py",
     "fixtures/mod-author/driver.py", "fixtures/runtime-consumer/driver.py",
     "fixtures/native-loader/core_acceptance.py", "fixtures/native-loader/tool_barrier.py",
@@ -41,7 +42,8 @@ def configure():
     from record_run import require_hosted_linux
     require_hosted_linux()
     from linux_ci import append_environment
-    cfg = read(Path(os.environ["CM_SOURCE_DIR"]) / ".github/cm-ci.json")
+    from linux_ci import load_config
+    cfg = load_config(Path(os.environ["CM_SOURCE_DIR"]))
     assert cfg["task_id"] == "CM-M05" and cfg["target"] == TARGET and cfg["rust_toolchain"] == "1.95.0"
     assert os.environ["CM_BUILD_KIND"] == "mod-only"
     append_environment({"RUSTUP_TOOLCHAIN": cfg["rust_toolchain"], "CM_RUST_TOOLCHAIN": cfg["rust_toolchain"],
@@ -88,7 +90,7 @@ def author_command(source, logs, label, command, *, success=True):
 
     worker = threading.Thread(target=heartbeat, daemon=True)
     env = {**os.environ, "CARGO_TARGET_DIR": str(source / "target"), "RUSTC_WRAPPER": "",
-        "CARGO_INCREMENTAL": "0", "RUSTFLAGS": "-C target-cpu=x86-64"}
+        "CARGO_INCREMENTAL": "0", "RUSTFLAGS": linux_native()["rustflags"]}
     with ci_progress.stage(label):
         worker.start()
         try:
@@ -97,7 +99,7 @@ def author_command(source, logs, label, command, *, success=True):
             report = {"phase": label, "command": command, "return_code": result.returncode,
                 "elapsed_seconds": round(time.monotonic() - started, 3),
                 "diagnostics": compile_diagnostics(result.stdout, source), "raw_output_exported": False,
-                "ci_url": "https://github.com/DSLZL/CM-build-linux-x64/actions/runs/" + os.environ["GITHUB_RUN_ID"]}
+                "ci_url": "https://github.com/" + os.environ["GITHUB_REPOSITORY"] + "/actions/runs/" + os.environ["GITHUB_RUN_ID"]}
             write(logs / (label + ".json"), report)
             print(json.dumps(report), flush=True)
             assert (result.returncode == 0) is success, "Author phase failed: " + label
@@ -197,7 +199,7 @@ def build(root, inputs, frozen, logs, variant, *, controlled=False):
     fields = tomllib.loads((source / "mod.toml").read_text())
     assert fields["version"] == cargo["package"]["version"]
     fields["binary"].update(size=payload.stat().st_size, sha256=sha(payload),
-        glibc_min=mod_manifest.native_glibc_min(payload))
+        glibc_min=mod_manifest.native_glibc_min(payload), target=TARGET, cpu=linux_native()["cpu"])
     fields["provenance"]["revision"] = os.environ["CM_SOURCE_SHA"]
     mod_manifest.manifest(destination, fields)
     archive = destination.with_suffix(".cmod")
@@ -206,7 +208,7 @@ def build(root, inputs, frozen, logs, variant, *, controlled=False):
         "source_sha": os.environ["CM_SOURCE_SHA"], "source_manifest": sources,
         "lock_sha256": before, "sdk_revision": SDK_REVISION,
         "dependencies": sorted(package["name"] for package in metadata["packages"]),
-        "toolchain": "1.95.0", "target": TARGET, "profile": "author", "rustflags": "-C target-cpu=x86-64",
+        "toolchain": "1.95.0", "target": TARGET, "profile": "author", "rustflags": linux_native()["rustflags"],
         "commands": commands, "initial_target_empty": True,
         "host_frozen_before_author_build": frozen["executable_sha256"],
         "host_build_id": frozen["host_identity"]["host_build_id"],
@@ -370,7 +372,7 @@ def audit_mod_only():
 def produce():
     from record_run import require_hosted_linux
     require_hosted_linux()
-    assert os.environ["GITHUB_REPOSITORY"] == "DSLZL/CM-build-linux-x64"
+    assert os.environ["GITHUB_REPOSITORY"] == "DSLZL/CM-build-" + linux_native()["key"]
     if os.environ.get("CM_BUILD_KIND", "qualification") == "mod-only":
         produce_from_origin()
     else:

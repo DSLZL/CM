@@ -43,6 +43,14 @@
     "size": 112589966,
     "role": "Read-only official installation fixture; not a CM musl build or support claim"
   },
+  "official_assets": {
+    "aarch64-unknown-linux-gnu": {
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.163.0/codex-aarch64-unknown-linux-musl.tar.gz",
+      "sha256": "a7261e65f4a96d8f4ca65a069c6cf2dc2c33defc341e48078acefda9461fffe4",
+      "size": 104950609,
+      "role": "Read-only official installation fixture; not a CM musl build or support claim"
+    }
+  },
   "overlay": {
     "crates/cm/src/host_identity.rs": "codex-rs/cli/src/cm_host_identity.rs",
     "crates/cm-abi/Cargo.toml": "codex-rs/cm-abi/Cargo.toml",
@@ -96,10 +104,17 @@
     "adapters/codex-e4568a3/core-tool-continuation.rs": "codex-rs/core/src/tools/cm_tool_continuation.rs",
     "adapters/codex-e4568a3/cli-commands.rs": "codex-rs/cli/src/cm_commands.rs",
     "crates/cm/src/provenance.rs": "codex-rs/cm/src/provenance.rs",
-    "crates/cm/src/distribution-policy.json": "codex-rs/cm/src/distribution-policy.json",
     "crates/cm/src/distribution-root.jsonl": "codex-rs/cm/src/distribution-root.jsonl",
     "crates/cm/src/index.rs": "codex-rs/cm/src/index.rs",
     "adapters/codex-e4568a3/cli-index.rs": "codex-rs/cli/src/cm_index.rs"
+  },
+  "target_overlay": {
+    "x86_64-unknown-linux-gnu": {
+      "crates/cm/src/distribution-policy.json": "codex-rs/cm/src/distribution-policy.json"
+    },
+    "aarch64-unknown-linux-gnu": {
+      "crates/cm/src/distribution-policy-arm64.json": "codex-rs/cm/src/distribution-policy-arm64.json"
+    }
   },
   "patches": [
     "cli.patch",

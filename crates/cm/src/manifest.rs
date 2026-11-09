@@ -189,7 +189,7 @@ impl BinaryManifest {
         if self.binary.target != loader::TARGET {
             return Err("binary.target: unsupported target".into());
         }
-        if self.binary.cpu != "x86-64" {
+        if self.binary.cpu != loader::CPU {
             return Err("binary.cpu: unsupported CPU baseline".into());
         }
         if system_version(&self.binary.glibc_min).is_none() {
@@ -396,7 +396,7 @@ mod tests {
         let mut manifest: BinaryManifest = serde_json::from_value(serde_json::json!({
             "format_version": 3, "id": "hook-fixture", "version": "1.0.0", "kind": "advanced_hook",
             "binary": {"path": "payload.so", "size": 1, "sha256": "d".repeat(64),
-                "target": loader::TARGET, "entry": "cm_mod_entry_v2", "glibc_min": "2.17", "cpu": "x86-64"},
+                "target": loader::TARGET, "entry": "cm_mod_entry_v2", "glibc_min": "2.17", "cpu": loader::CPU},
             "compat": {"abi_major": 2, "abi_minor_min": 0, "abi_minor_max": 2, "host_api_min": "0.10.0",
                 "required_capabilities": [crate::hooks::CAPABILITY], "exact_host": {
                     "build_id": host.build_id, "executable_sha256": host.executable_sha256,
@@ -409,6 +409,16 @@ mod tests {
         .unwrap();
         manifest.validate().unwrap();
         manifest.compatible(&host).unwrap();
+        let foreign_cpu = if cfg!(target_arch = "x86_64") {
+            "armv8-a"
+        } else {
+            "x86-64"
+        };
+        for cpu in ["unsupported", foreign_cpu] {
+            manifest.binary.cpu = cpu.into();
+            assert!(manifest.validate().is_err(), "{cpu}");
+        }
+        manifest.binary.cpu = loader::CPU.into();
         for field in ["build", "executable", "map", "missing-map", "slot"] {
             let mut other = host.clone();
             match field {

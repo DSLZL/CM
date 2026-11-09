@@ -3,6 +3,7 @@
 import copy
 import json
 import os
+from cm_platforms import linux_native
 from pathlib import Path
 import re
 import resource
@@ -1255,7 +1256,7 @@ def collect_lightweight(artifact, logs):
 
 def main():
     require_hosted_linux()
-    if os.environ.get("GITHUB_REPOSITORY") != "DSLZL/CM-build-linux-x64":
+    if os.environ.get("GITHUB_REPOSITORY") != "DSLZL/CM-build-" + linux_native()["key"]:
         raise RuntimeError("P03 runs only in the independent Linux x64 builder")
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     root = Path(os.environ["CM_SOURCE_DIR"]).resolve()

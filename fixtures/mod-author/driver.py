@@ -152,7 +152,8 @@ def failures(m, sdk, receipt):
             fields["conflicts"] = ["lifecycle-audit"]
             packages.selection(home, ["native-mod", "lifecycle-audit"])
         elif name == "target":
-            fields["binary"]["target"] = "aarch64-unknown-linux-gnu"
+            from cm_platforms import foreign_linux_target
+            fields["binary"]["target"] = foreign_linux_target()
         else:
             (package / "payload.so").write_bytes(b"corrupt controlled package")
         fields["provenance"]["release_notes"] = SECRET

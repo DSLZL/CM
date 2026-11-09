@@ -1132,6 +1132,8 @@ mod tests {
     fn policy_manifest(id: &str, capability: &str, kind: &str, api: &str) -> Manifest {
         let hash = "a".repeat(64);
         let revision = "b".repeat(40);
+        let target = loader::TARGET;
+        let cpu = loader::CPU;
         let text = format!(
             r#"format_version = 3
 id = "{id}"
@@ -1141,10 +1143,10 @@ kind = "sdk"
 path = "payload.so"
 size = 1
 sha256 = "{hash}"
-target = "x86_64-unknown-linux-gnu"
+target = "{target}"
 entry = "cm_mod_entry_v2"
 glibc_min = "2.17"
-cpu = "x86-64"
+cpu = "{cpu}"
 [compat]
 abi_major = 2
 abi_minor_min = 2

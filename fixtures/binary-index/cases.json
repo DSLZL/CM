@@ -7,7 +7,7 @@
       "catalogs": [
         "catalog"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -17,7 +17,7 @@
         "catalog",
         "identity-conflict"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -26,7 +26,7 @@
       "catalogs": [
         "namespace"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -35,7 +35,7 @@
       "catalogs": [
         "catalog"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -44,7 +44,7 @@
       "catalogs": [
         "catalog"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -53,35 +53,35 @@
       "catalogs": [
         "missing-target"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
     "http-size": {
       "acceptance_id": "CM-S03-AC02",
       "catalogs": [],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
     "http-redirect": {
       "acceptance_id": "CM-S03-AC02",
       "catalogs": [],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
     "http-timeout": {
       "acceptance_id": "CM-S03-AC02",
       "catalogs": [],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
     "http-tls": {
       "acceptance_id": "CM-S03-AC02",
       "catalogs": [],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -90,7 +90,7 @@
       "catalogs": [
         "traversal"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -99,7 +99,7 @@
       "catalogs": [
         "absolute"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -108,7 +108,7 @@
       "catalogs": [
         "symlink"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -117,7 +117,7 @@
       "catalogs": [
         "duplicate"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -126,7 +126,7 @@
       "catalogs": [
         "case-collision"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -135,7 +135,7 @@
       "catalogs": [
         "entry-limit"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -144,7 +144,7 @@
       "catalogs": [
         "byte-limit"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -153,7 +153,7 @@
       "catalogs": [
         "catalog"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -162,7 +162,7 @@
       "catalogs": [
         "catalog"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": true
     },
@@ -171,7 +171,7 @@
       "catalogs": [
         "catalog"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -180,7 +180,7 @@
       "catalogs": [
         "dependency"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -189,7 +189,7 @@
       "catalogs": [
         "exclusive"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -198,7 +198,7 @@
       "catalogs": [
         "catalog"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -207,7 +207,7 @@
       "catalogs": [
         "catalog"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -216,7 +216,7 @@
       "catalogs": [
         "catalog"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -225,7 +225,7 @@
       "catalogs": [
         "catalog"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -235,7 +235,7 @@
         "catalog",
         "update"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": true
     },
@@ -244,7 +244,7 @@
       "catalogs": [
         "catalog"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": true
     },
@@ -253,7 +253,7 @@
       "catalogs": [
         "catalog"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     },
@@ -263,7 +263,7 @@
         "catalog",
         "revoked"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": true,
       "committed": true
     },
@@ -273,7 +273,7 @@
         "catalog",
         "revoked"
       ],
-      "target": "x86_64-unknown-linux-gnu",
+      "target": "native",
       "native_execution": false,
       "committed": false
     }

@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from cm_platforms import linux_native
 
 REPORTS = ("sdk-abi-contract.json", "sdk-original-continuation.json", "sdk-async-lifetime.json",
     "sdk-slot-order.json", "sdk-stream-boundary.json", "sdk-command-ui-bridge.json", "sdk-independent-binaries.json")
@@ -84,7 +85,7 @@ def manifest(owner, variant, payload):
         {"id": "tui", "kind": "tui_command", "capability": CAPABILITIES[3], "resource": name + "__notice"}]
     return {"format_version": 3, "id": name, "version": "0.2.0" if variant == "v2" else "0.1.0", "kind": "sdk",
         "binary": {"path": "payload.so", "size": payload.stat().st_size, "sha256": host.sha(payload),
-            "target": "x86_64-unknown-linux-gnu", "entry": "cm_mod_entry_v2", "glibc_min": mod_manifest.native_glibc_min(payload), "cpu": "x86-64"},
+            "target": linux_native()["target"], "entry": "cm_mod_entry_v2", "glibc_min": mod_manifest.native_glibc_min(payload), "cpu": linux_native()["cpu"]},
         "compat": {"abi_major": 2, "abi_minor_min": 3, "abi_minor_max": 3,
             "host_api_min": "0.11.0", "required_capabilities": list(CAPABILITIES)},
         "dependencies": [], "conflicts": [], "contributions": contributions, "resources": [],
@@ -139,10 +140,10 @@ def prepare(root, inputs, package, frozen, logs, authors):
 
 
 def reports(evidence, steps, audit):
-    from runtime_cases import GROUPS
+    from runtime_cases import cases
     import mod_manifest
     assert audit["status"] == "pass" and audit["compiler_linker_jit_build_service_calls"] == 0
-    assert all(steps["g06-" + case]["status"] == "pass" for case in GROUPS["g06"])
+    assert all(steps["g06-" + case]["status"] == "pass" for case in cases("g06"))
     for name in REPORTS:
         value = mod_manifest.read(evidence / name)
         value.update(supported_scope="finite ABI 2.3 experimental seams", arbitrary_provider_rewrite=False,

@@ -206,7 +206,11 @@ impl Declaration {
             && loader::digest(&binary.sha256)
             && loader::identifier(&binary.entry)
             && binary.entry.len() <= 128
-            && binary.cpu == "x86-64"
+            && matches!(
+                (binary.target.as_str(), binary.cpu.as_str()),
+                ("x86_64-unknown-linux-gnu", "x86-64")
+                    | ("aarch64-unknown-linux-gnu", "armv8-a")
+            )
             && text(&binary.glibc_min, 16)
             && binary
                 .glibc_min
@@ -997,8 +1001,9 @@ impl ProductionOrigin {
             && self.job_id > 0
             && ci_request_id(&self.request_id)
             && matches!(
-                self.job.as_str(),
-                "build-read / linux-x64" | "build-write / linux-x64"
+                (loader::CPU, self.job.as_str()),
+                ("x86-64", "build-read / linux-x64" | "build-write / linux-x64")
+                    | ("armv8-a", "build-read / linux-arm64" | "build-write / linux-arm64")
             )
             && self.product_artifact.valid()
             && self.input_artifact.valid()
@@ -1125,7 +1130,7 @@ async fn support(
             }
         || qualification.conditions.backend != "Embedded"
         || qualification.conditions.target != loader::TARGET
-        || qualification.conditions.cpu != "x86-64"
+        || qualification.conditions.cpu != loader::CPU
         || !text(&qualification.conditions.glibc_version, 32)
         || qualification.conditions.mods.len() > 32
         || qualification
@@ -1452,5 +1457,57 @@ mod tests {
             )
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod native_policy_tests {
+    use super::*;
+
+    #[test]
+    fn declarations_bind_the_cpu_to_its_declared_target() {
+        let mut declaration: Declaration = serde_json::from_value(json!({
+            "kind": "sdk",
+            "binary": {"path": "payload.so", "size": 1, "sha256": "a".repeat(64),
+                "entry": "cm_mod_entry_v2", "target": loader::TARGET,
+                "glibc_min": "2.17", "cpu": loader::CPU},
+            "compat": {"abi_major": 2, "abi_minor_min": 2, "abi_minor_max": 2,
+                "host_api_min": "0.11.0", "required_capabilities": ["runtime.lifecycle.v1"]},
+            "dependencies": [], "conflicts": []
+        }))
+        .unwrap();
+        for (target, cpu) in [
+            ("x86_64-unknown-linux-gnu", "x86-64"),
+            ("aarch64-unknown-linux-gnu", "armv8-a"),
+        ] {
+            declaration.binary.target = target.into();
+            declaration.binary.cpu = cpu.into();
+            assert!(declaration.valid());
+            for other in ["unknown", "x86-64", "armv8-a"] {
+                declaration.binary.cpu = other.into();
+                assert_eq!(declaration.valid(), other == cpu);
+            }
+        }
+        declaration.binary.target = "unknown-target".into();
+        assert!(!declaration.valid());
+    }
+
+    #[test]
+    fn production_origin_rejects_a_foreign_native_build_job() {
+        let artifact = json!({"id": 1, "name": "fixture", "size_in_bytes": 1,
+            "digest": format!("sha256:{}", "a".repeat(64))});
+        let mut origin: ProductionOrigin = serde_json::from_value(json!({
+            "source_sha": "a".repeat(40), "workflow_sha": "b".repeat(40),
+            "run_id": 1, "run_attempt": 1, "request_id": "native-policy-fixture",
+            "job": "unknown", "job_id": 1, "product_artifact": artifact, "input_artifact": artifact
+        }))
+        .unwrap();
+        assert!(!origin.valid());
+        for (platform, cpu) in [("linux-x64", "x86-64"), ("linux-arm64", "armv8-a")] {
+            for mode in ["read", "write"] {
+                origin.job = format!("build-{mode} / {platform}");
+                assert_eq!(origin.valid(), loader::CPU == cpu);
+            }
+        }
     }
 }

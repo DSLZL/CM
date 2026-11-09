@@ -39,7 +39,7 @@ def report(index, key, value):
 
 
 def case_versions():
-    value = policy("versions")
+    value = {**policy("versions"), "support_line": mod_manifest.TARGET}
     assert value["maintenance_years"] is None and not value["semver_implies_compatibility"]
     assert value["stable_abi"] == ["1.0", "2.0", "2.1", "2.2"] and value["experimental_abi"] == ["2.3"]
     assert len(value["dimensions"]) == len(set(value["dimensions"])) == 9
@@ -158,9 +158,12 @@ def case_labels():
 
 def case_boundaries():
     value = policy("boundaries")
-    baseline = mod_manifest.read(INPUTS / "upgrade-baseline/reference.json")
-    assert baseline["qualification"]["ci"]["production_origin"]
-    assert baseline["pin"]["executable_sha256"] != mod_manifest.sha(BINARY)
+    if runtime_cases.historical_hosts():
+        baseline = mod_manifest.read(INPUTS / "upgrade-baseline/reference.json")
+        assert baseline["qualification"]["ci"]["production_origin"]
+        assert baseline["pin"]["executable_sha256"] != mod_manifest.sha(BINARY)
+    else:
+        baseline = runtime_cases.deferred_check("s02-boundaries/legacy-upgrade")
     assert not value["release_ready"]
     return report(3, "upgrade_and_hook_boundaries", {"scope": value, "original_reference": baseline})
 

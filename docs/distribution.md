@@ -41,3 +41,10 @@ The SPDX-2.3 document covers actual distributed file digests and resolved produc
 The order is producer/current source and quality checks, material validation, candidate attestation, disconnected compiler-free consumer, complete syscall audit, and final worker receipt/API reconciliation. Failed rounds remain failed evidence. Only the signing job has OIDC/attestation write permission; consumers have read permission and no cache authority.
 
 Offline proof has no live revocation or newest-release guarantee. Updating the verifier, policy or trusted roots requires a newly reviewed Host. Previously valid contents must still satisfy current policy, ABI and state checks. The five S01 checks and the controlled retry/warm-run evidence must be qualified on the independent worker before acceptance; a source check or a signature alone does not qualify a release.
+
+
+## ARM64 implementation candidate
+
+The GNU Linux ARM64 candidate uses `crates/cm/src/distribution-policy-arm64.json`. It pins `DSLZL/CM-build-linux-arm64` / numeric ID `1451045850` and the `gh_2.103.3_linux_arm64.tar.gz` verifier archive. Obtain and review the policy independently before using its repository, certificate identity and archive digest; the x64 command above applies to the x64 policy only. Target, CPU, repository name/ID and invocation bindings are checked together.
+
+This candidate has no ARM64 product qualification yet. Its first-release scope excludes historical native Host upgrade and old-Host rejection tests, which remain explicitly NOT_RUN. Current signature, object, ABI/capability and exact identity gates still apply; an ARM64 signature never inherits the historical x64 acceptance.

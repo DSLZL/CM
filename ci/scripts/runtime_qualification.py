@@ -11,6 +11,7 @@ import tomllib
 
 from mod_manifest import TARGET, read, sha, write
 from runtime_cases import digest
+from cm_platforms import linux_native
 
 REPORTS = ("linux-binary-contract.json", "compiler-free-runtime.json", "linux-runtime-support.json",
            "prebuilt-package-inventory.json", "runtime-qualification-failures.json")
@@ -27,10 +28,38 @@ def command(*args):
     return result.stdout
 
 
+def cpu_notes(data, machine):
+    position = 0
+    while position < len(data):
+        assert position + 12 <= len(data), "Truncated ELF note"
+        names, size, kind = struct.unpack_from("<III", data, position)
+        assert names <= 65536 and size <= 65536, "ELF note exceeds bound"
+        start = position + 12 + (names + 3) // 4 * 4
+        end = start + size
+        assert end <= len(data), "Truncated ELF note descriptor"
+        if data[position + 12:position + 12 + names] == b"GNU\0" and kind == 5:
+            property = start
+            while property < end:
+                assert property + 8 <= end, "Truncated ELF property"
+                code, length = struct.unpack_from("<II", data, property)
+                value = property + 8
+                assert length <= end - value, "Truncated ELF property value"
+                baseline = 0xc0008002 if machine == 62 else 0xc0000000
+                if code == baseline:
+                    allowed = 1 if machine == 62 else 7
+                    assert length == 4 and struct.unpack_from("<I", data, value)[0] & ~allowed == 0, "Unsupported mandatory ELF CPU feature"
+                elif (0xc0008000 <= code <= 0xc000ffff if machine == 62 else 0xc0000000 <= code <= 0xdfffffff):
+                    raise AssertionError("Unknown mandatory ELF CPU property")
+                property = value + (length + 7) // 8 * 8
+                assert property <= end, "Truncated aligned ELF property"
+        position = start + (size + 3) // 4 * 4
+        assert position <= len(data), "Truncated aligned ELF note"
+
+
 def parse_elf(data, text):
     assert len(data) >= 64 and data[:7] == b"\x7fELF\x02\x01\x01", "Expected ELF64 little-endian v1"
     kind, machine, version = struct.unpack_from("<HHI", data, 16)
-    assert kind in (2, 3) and machine == 62 and version == 1 and data[7] in (0, 3) and data[8] == 0, "Unsupported ELF ABI/architecture"
+    assert kind in (2, 3) and machine == linux_native()["machine"] and version == 1 and data[7] in (0, 3) and data[8] == 0, "Unsupported ELF ABI/architecture"
     offset = struct.unpack_from("<Q", data, 32)[0]
     header, stride, count = struct.unpack_from("<HHH", data, 52)
     assert header == 64 and stride == 56 and 0 < count <= 1024 and offset >= 64
@@ -38,6 +67,8 @@ def parse_elf(data, text):
     for index in range(count):
         segment = struct.unpack_from("<IIQQQQQQ", data, offset + index * stride)
         assert segment[2] <= len(data) and segment[5] <= len(data) - segment[2], "Truncated ELF segment"
+        if segment[0] in (4, 0x6474e553):
+            cpu_notes(data[segment[2]:segment[2] + segment[5]], machine)
     assert not re.search(r"\((?:RPATH|RUNPATH)\)", text), "Forbidden ELF search path"
     needed = re.findall(r"\(NEEDED\).*\[([^\]]+)\]", text)
     soname = re.findall(r"\(SONAME\).*\[([^\]]+)\]", text)
@@ -45,11 +76,13 @@ def parse_elf(data, text):
     assert all(re.fullmatch(r"[A-Za-z0-9_+.-]+", value) and value not in (".", "..") for value in needed + soname)
     interpreters = re.findall(r"Requesting program interpreter: ([^\]]+)", text)
     assert len(interpreters) <= 1
+    assert not interpreters or interpreters == [linux_native()["interpreter"]], "Unexpected ELF interpreter"
     # Version definitions describe exports, not the binary's minimum requirement.
     needs = text.split("Version needs section", 1)[1] if "Version needs section" in text else ""
     versions = sorted(set(re.findall(r"\bName: (\S+)", needs)))
     glibc = [tuple(map(int, item[6:].split("."))) for item in versions if re.fullmatch(r"GLIBC_[0-9]+(?:\.[0-9]+)+", item)]
     isa = re.findall(r"x86 ISA needed: ([^\n]+)", text)
+    assert machine == 62 or not isa, "Foreign architecture CPU property"
     assert all(part.strip() == "x86-64-baseline" for row in isa for part in row.split(",")), "Mandatory ISA above x86-64 baseline"
     return {"class": 64, "endian": "little", "machine": machine, "type": kind,
         "osabi": data[7], "abi_version": data[8], "interpreter": interpreters,
@@ -76,7 +109,8 @@ def system_path(value):
 
 def resolve_library(name, cache):
     assert re.fullmatch(r"[A-Za-z0-9_+.-]+", name) and name not in (".", ".."), "Unsafe DT_NEEDED"
-    matches = re.findall(r"^\s*" + re.escape(name) + r" .*x86-64.* => (/\S+)$", cache, re.MULTILINE)
+    matches = re.findall(r"^\s*" + re.escape(name) + r" .*" +
+        re.escape(linux_native()["ldconfig_arch"]) + r".* => (/\S+)$", cache, re.MULTILINE)
     paths = [system_path(value) for value in matches]
     assert paths and len({path.resolve() for path in paths}) == 1, "Missing/ambiguous runtime library: " + name
     return str(paths[0])
@@ -154,7 +188,7 @@ def audit(inputs, frozen):
     for name, record in mods.items():
         binary = binaries[record["path"]]
         assert binary["type"] == 3 and not binary["interpreter"], name
-        assert record["binary"]["target"] == TARGET and record["binary"]["cpu"] == "x86-64"
+        assert record["binary"]["target"] == TARGET and record["binary"]["cpu"] == linux_native()["cpu"]
         minimum = binary["glibc_symbol_min"]
         assert minimum is None or tuple(map(int, minimum.split("."))) <= tuple(map(int, record["binary"]["glibc_min"].split(".")))
         assert tuple(map(int, record["binary"]["glibc_min"].split("."))) <= running_glibc, "Declared glibc exceeds actual producer"
@@ -189,11 +223,11 @@ def reports(inputs, root, closure, evidence, audit_result, steps, checkpoint_ind
         "os_release": Path("/etc/os-release").read_text(), "packages": closure["packages"],
         "rootfs_content_sha256": closure["sha256"], "rootfs_kind": closure["kind"]}
     actual = read(evidence / "g04/missing-library/baseline.json")["runtime_environment"]
-    assert actual["glibc"] == environment["glibc"] and actual["machine"] == "x86_64"
+    assert actual["glibc"] == environment["glibc"] and actual["machine"] == linux_native()["machine_name"]
     verified = {**actual, "runner_image": environment["runner"],
         "native_inputs_sha256": checkpoint_index["steps"]["g04-missing-library"]["inputs"]["native"],
         "execution_origin": steps["g04-missing-library"]["origin"], "execution_kind": steps["g04-missing-library"]["kind"]}
-    assert environment["runner"]["RUNNER_OS"] == "Linux" and environment["runner"]["RUNNER_ARCH"] == "X64"
+    assert environment["runner"]["RUNNER_OS"] == "Linux" and environment["runner"]["RUNNER_ARCH"] == linux_native()["runner_arch"]
     # Existing business cases remain evidence with their own current/reused origin.
     required = ("m02-embedded", "m02-stdio", "m03-process", "m03-terminal", "m03-rejections",
                 "m03-backends", "concurrency-value-flow", "consumer-missing-library", "consumer-library-recovery")
@@ -213,7 +247,7 @@ def reports(inputs, root, closure, evidence, audit_result, steps, checkpoint_ind
          "compiler_linker_jit_build_service_calls": audit_result["compiler_linker_jit_build_service_calls"],
          "python": "audited fixture driver, not a product dependency"},
         {"verified": [verified], "current_validation_environment": environment,
-         "deferred": ["other distributions", "older glibc", "other CPUs", "Windows", "macOS", "ARM64", "musl"],
+         "deferred": ["other distributions", "older glibc", "other CPUs and targets", "Windows", "macOS", "musl"],
          "native_mod_trust": "shares Host process permissions; not a native-code sandbox"},
         {"files": static["package_files"], "runtime_inventory": static["package_inventory"],
          "variants": {"codex_package": "exercised", "codex_app_server_subcommand": "exercised by m02-stdio",
@@ -230,14 +264,28 @@ def self_check():
     require_hosted_linux()
     data = bytearray(120)
     data[:7] = b"\x7fELF\x02\x01\x01"
-    struct.pack_into("<HHI", data, 16, 3, 62, 1)
+    struct.pack_into("<HHI", data, 16, 3, linux_native()["machine"], 1)
     struct.pack_into("<Q", data, 32, 64)
     struct.pack_into("<HHH", data, 52, 64, 56, 1)
     text = "(NEEDED) Shared library: [libc.so.6]\nVersion definition section\nName: GLIBC_99.0\nVersion needs section\nName: GLIBC_2.34\n"
     parsed = parse_elf(data, text)
     assert parsed["glibc_symbol_min"] == "2.34" and parsed["needed"] == ["libc.so.6"]
+    for machine, code, allowed, invalid in ((62, 0xc0008002, 1, 2), (183, 0xc0000000, 7, 8)):
+        note = struct.pack("<III4sIIII", 4, 16, 5, b"GNU\0", code, 4, allowed, 0)
+        cpu_notes(note, machine)
+        bad_feature = bytearray(note)
+        struct.pack_into("<I", bad_feature, 24, invalid)
+        bad_kind = bytearray(note)
+        struct.pack_into("<I", bad_kind, 16, code + 1)
+        for malformed in (bad_feature, bad_kind, *(note[:end] for end in range(1, len(note)))):
+            try:
+                cpu_notes(malformed, machine)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError("Malformed or unsupported CPU property accepted")
     wrong = bytearray(data)
-    struct.pack_into("<H", wrong, 18, 183)
+    struct.pack_into("<H", wrong, 18, 183 if linux_native()["machine"] == 62 else 62)
     for payload, output in ((data[:63], text), (data[:-1], text), (wrong, text), (data, text + "(RUNPATH) [tmp]"),
                             (data, "(NEEDED) [../bad.so]"), (data, "x86 ISA needed: x86-64-v3\n")):
         try:
@@ -277,7 +325,7 @@ def self_check():
         path = Path(temporary) / "library"
         path.touch()
         with patch.object(sys.modules[__name__], "system_path", side_effect=lambda value: Path(value)):
-            cache = " libc.so.6 (libc6,x86-64) => " + str(path) + "\n"
+            cache = " libc.so.6 (libc6," + linux_native()["ldconfig_arch"] + ") => " + str(path) + "\n"
             assert resolve_library("libc.so.6", cache) == str(path)
             for name, index in (("libc.so.6", ""), ("../bad", cache),
                                 ("libc.so.6", cache + cache.replace(str(path), str(path) + "-other"))):
@@ -287,7 +335,7 @@ def self_check():
                     pass
                 else:
                     raise AssertionError("Missing/unsafe/ambiguous dependency accepted")
-    assert elf(Path("/usr/bin/env"))["machine"] == 62
+    assert elf(Path("/usr/bin/env"))["machine"] == linux_native()["machine"]
     for value in ("/etc/hosts", "/usr/lib/../../etc/hosts", "/usr/lib/cm-g04-missing-library"):
         try:
             system_path(value)

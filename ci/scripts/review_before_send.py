@@ -11,6 +11,8 @@ import tarfile
 import tomllib
 
 from linux_ci import TARGET
+from cm_platforms import linux_native
+import runtime_cases
 
 OWNER = "org.example.review-before-send"
 CAPABILITY = "tui.submit_review.v1"
@@ -39,6 +41,8 @@ def driver():
 
 
 def restore_reference():
+    if not runtime_cases.historical_hosts():
+        return
     import host
     import worker_policy as policy
     from linux_ci import load_config
@@ -200,7 +204,7 @@ def prepare(inputs, package, frozen, logs, authors, sdk):
     shutil.copyfile(target / TARGET / cfg["build_profile"] / "libcm_review_before_send.so", payload)
     manifest = tomllib.loads((source / "mod.toml").read_text())
     manifest["binary"].update(size=payload.stat().st_size, sha256=host.sha(payload),
-        glibc_min=mod_manifest.native_glibc_min(payload))
+        glibc_min=mod_manifest.native_glibc_min(payload), target=TARGET, cpu=linux_native()["cpu"])
     manifest["provenance"]["revision"] = os.environ["CM_SOURCE_SHA"]
     mod_manifest.manifest(destination, manifest)
     archive = destination.with_suffix(".cmod")
@@ -234,11 +238,15 @@ def prepare(inputs, package, frozen, logs, authors, sdk):
     probe.parent.mkdir(exist_ok=True)
     run(root, logs, "review-tui-probe-build", probe)
     probe.chmod(0o755)
-    reference = Path(os.environ["RUNNER_TEMP"]) / "cm-review-reference"
-    previous = inputs / "host/review-legacy/codex"
-    previous.parent.mkdir()
-    shutil.copyfile(reference / "host/bin/codex", previous)
-    previous.chmod(0o755)
+    if runtime_cases.historical_hosts():
+        reference = Path(os.environ["RUNNER_TEMP"]) / "cm-review-reference"
+        previous = inputs / "host/review-legacy/codex"
+        previous.parent.mkdir()
+        shutil.copyfile(reference / "host/bin/codex", previous)
+        previous.chmod(0o755)
+        reference_record = host.read(reference / "reference.json")
+    else:
+        reference_record = runtime_cases.deferred_check("review-plug-and-play/legacy-host")
     for relative in ("ci/scripts/review_before_send.py", "fixtures/review-before-send/driver.py"):
         path = inputs / "fixture" / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -247,7 +255,7 @@ def prepare(inputs, package, frozen, logs, authors, sdk):
         "probe": {"path": "/inputs/probes/cm-review-tui", "sha256": host.sha(probe),
             "source_sha256": host.manifest_digest(host.manifest(probe_source)),
             "production_cli_sha256": frozen["executable_sha256"], "separate_from_cli": True},
-        "reference": host.read(reference / "reference.json"),
+        "reference": reference_record,
         "host_rebuilt_after_freeze": False, "a_recompiled": False}
     host.write(inputs / "fixture/review-producer.json", result)
     assert host.sha(package / "bin/codex") == frozen["executable_sha256"]

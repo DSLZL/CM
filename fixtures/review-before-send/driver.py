@@ -23,6 +23,7 @@ import zlib
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ci/scripts"))
 import ci_progress
 import mod_manifest
+import runtime_cases
 
 INPUTS = Path("/inputs")
 BINARY = INPUTS / "host/bin/codex"
@@ -464,17 +465,20 @@ def plug_and_play():
     mod_manifest.manifest(conflict, manifest)
     rejected = cm(home, directory, "install", conflict, success=False)
     assert rejected["code"] == "exclusive_conflict" and (home / "cm-profile.json").read_bytes() == stable
-    old = INPUTS / "host/review-legacy/codex"
-    old_home = Path("/profile/review") / case / "old-host"
-    rejected_old = cm(old_home, directory, "install", INPUTS / "mods/g02b/review-before-send.cmod",
-        binary=old, success=False)
-    assert rejected_old["code"] == "manifest_parse", rejected_old
-    manifest["contributions"][0]["kind"] = "lifecycle"
-    mod_manifest.manifest(conflict, manifest)
-    assert cm(old_home, directory, "install", conflict, binary=old, success=False)["code"] == "compatibility"
-    manifest["compat"]["host_api_min"] = "0.7.0"
-    mod_manifest.manifest(conflict, manifest)
-    assert cm(old_home, directory, "install", conflict, binary=old, success=False)["code"] == "unknown_capability"
+    if runtime_cases.historical_hosts():
+        old = INPUTS / "host/review-legacy/codex"
+        old_home = Path("/profile/review") / case / "old-host"
+        rejected_old = cm(old_home, directory, "install", INPUTS / "mods/g02b/review-before-send.cmod",
+            binary=old, success=False)
+        assert rejected_old["code"] == "manifest_parse", rejected_old
+        manifest["contributions"][0]["kind"] = "lifecycle"
+        mod_manifest.manifest(conflict, manifest)
+        assert cm(old_home, directory, "install", conflict, binary=old, success=False)["code"] == "compatibility"
+        manifest["compat"]["host_api_min"] = "0.7.0"
+        mod_manifest.manifest(conflict, manifest)
+        assert cm(old_home, directory, "install", conflict, binary=old, success=False)["code"] == "unknown_capability"
+    else:
+        rejected_old = runtime_cases.deferred_check("review-plug-and-play/legacy-host")
     cm(home, directory, "remove", OWNER)
     with terminal(case, "removed", home=home, enabled=False) as tui:
         tui.send("CM_M02_removed")

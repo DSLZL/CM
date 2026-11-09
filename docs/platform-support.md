@@ -74,3 +74,10 @@ The G01 prepared-slot loader and embedded identity passed their own
 See [runtime-hooks.md](runtime-hooks.md) for the qualified Host, slot and rejection
 boundary. The G04 run above remains evidence for its recorded executable and
 environment only.
+
+
+## New native platform candidates
+
+The six-target expansion is tracked separately from the historical x64 evidence above. GNU Linux ARM64 has native component preflight evidence and a full-pipeline implementation candidate; this does not yet qualify an ARM64 product or any additional CPU/image. Its exact Host, Mods, helpers, consumer and incremental reuse still require independent hosted acceptance. macOS and Windows targets remain unqualified.
+
+First releases on new platforms defer historical native Host upgrades and old-Host rejection checks. Those checks are explicitly NOT_RUN, with no old CLI compiled or x64 Host used as a substitute. Current-H installation, composition, enable/disable, state/transaction and static identity rejection remain required. See the [pipeline and scope rules](../ci/README.md#gnu-linux-arm64-candidate). Existing x64 historical qualification remains bounded to its original bytes and environment.

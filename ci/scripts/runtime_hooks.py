@@ -14,6 +14,7 @@ def prepare(inputs, frozen, logs, authors):
     import mod_manifest
     import runtime_composition as composition
     from linux_ci import load_config, TARGET
+    import runtime_cases
     root = Path(os.environ["CM_SOURCE_DIR"])
     identity = frozen["host_identity"]
     mapping = identity["patch_map"]
@@ -46,17 +47,21 @@ def prepare(inputs, frozen, logs, authors):
     destination.parent.mkdir(exist_ok=True)
     shutil.copyfile(probe, destination)
     destination.chmod(0o755)
-    legacy = inputs / "host/g02a-legacy/codex"
-    previous = host.read(inputs / "fixture/g02a-legacy-host.json")
-    assert host.sha(legacy) == previous["host"]["executable_sha256"] != frozen["executable_sha256"]
+    if runtime_cases.historical_hosts():
+        legacy = inputs / "host/g02a-legacy/codex"
+        previous = host.read(inputs / "fixture/g02a-legacy-host.json")
+        assert host.sha(legacy) == previous["host"]["executable_sha256"] != frozen["executable_sha256"]
+        previous_host = {"path": "/inputs/host/g02a-legacy/codex", "origin": previous["origin"],
+            "executable_sha256": host.sha(legacy)}
+    else:
+        previous_host = runtime_cases.deferred_check("g01-binding-other-host")
     for name in ("ci/scripts/runtime_hooks.py", "fixtures/runtime-hooks/driver.py"):
         path = inputs / "fixture" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(root / name, path)
     result = {"packages": packages, "patch_map_sha256": identity["patch_map_sha256"],
         "original_query_count": 1, "bridge_count": 1,
-        "previous_host": {"path": "/inputs/host/g02a-legacy/codex", "origin": previous["origin"],
-            "executable_sha256": host.sha(legacy)},
+        "previous_host": previous_host,
         "probe": {"path": "/inputs/probes/cm-hook-policy", "sha256": host.sha(destination),
             "separate_from_cli": True, "role": "policy continuation/lifetime supplement only"}}
     host.write(inputs / "fixture/g01-producer.json", result)
@@ -65,9 +70,9 @@ def prepare(inputs, frozen, logs, authors):
 
 def reports(evidence, steps, audit):
     from mod_manifest import read, write
-    from runtime_cases import GROUPS
+    from runtime_cases import GROUPS, cases
     assert audit["status"] == "pass" and audit["compiler_linker_jit_build_service_calls"] == 0
-    assert all(steps["g01-" + case]["status"] == "pass" for case in GROUPS["g01"])
+    assert all(steps["g01-" + case]["status"] == "pass" for case in cases("g01"))
     sdk_cases = ["m02-" + case for case in GROUPS["m02"]]
     assert all(steps[case]["status"] == "pass" for case in sdk_cases)
     matrix = read(evidence / REPORTS[0])

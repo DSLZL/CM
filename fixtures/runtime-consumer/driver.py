@@ -96,7 +96,10 @@ def environment(label):
     assert snapshot["root"] == "/" and all(root == "/" for root in process_roots.values())
     assert not any(line.split()[1] == "00000000" for line in routes.splitlines()[1:])
     assert set(interfaces) == {"lo"}
-    assert set(os.environ) <= {"PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "HOME", "PYTHONNOUSERSITE", "PYTHONDONTWRITEBYTECODE"}
+    assert set(os.environ) <= {"PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "HOME", "PYTHONNOUSERSITE", "PYTHONDONTWRITEBYTECODE", "CM_TARGET", "CM_PLATFORM"}
+    from cm_platforms import linux_native
+    assert os.environ["CM_TARGET"] == read(INPUTS / "producer.json")["target"]
+    assert os.environ["CM_PLATFORM"] == linux_native()["key"]
     check_mounts(mounts, context["bind_roots"])
     core.enable_input_digest_cache()
     for forbidden in ("/var/run/docker.sock", "/run/docker.sock", "/run/host", "/sys", "/etc/resolv.conf",
@@ -334,6 +337,7 @@ def case_states(env, baseline, official_before, producer, data, retained):
 
 
 def case_startup(env, baseline, official_before, producer, data, retained, case):
+    from cm_platforms import foreign_linux_target
     known_success = tree(PROFILE / "mods")
     selection = (PROFILE / "cm-runtime.toml").read_bytes()
     failures = []
@@ -354,7 +358,7 @@ def case_startup(env, baseline, official_before, producer, data, retained, case)
     elif kind != "backend":
         changes = {"conflict": {"conflicts": ["serial-fixture"]}, "abi": {"abi_minor": 99},
             "dependency": {"dependencies": [{"id": "missing-mod", "version": "0.1.0"}]},
-            "target": {"target": "aarch64-unknown-linux-gnu"}, "capability": {"required_capabilities": ["unknown.capability"]}}
+            "target": {"target": foreign_linux_target()}, "capability": {"required_capabilities": ["unknown.capability"]}}
         change_manifest(package, lambda fields: fields.update(changes[kind]))
     report = startup("failures/" + kind, candidate, remote=kind == "backend")
     if kind not in ("backend", "conflict"):

@@ -16,7 +16,10 @@ use crate::LoadError;
 use crate::loader::{self, InputPin, InstallationSnapshot};
 
 const LIMIT: u64 = 2 * 1024 * 1024;
+#[cfg(target_arch = "x86_64")]
 const POLICY: &str = include_str!("distribution-policy.json");
+#[cfg(target_arch = "aarch64")]
+const POLICY: &str = include_str!("distribution-policy-arm64.json");
 const ROOT: &[u8] = include_bytes!("distribution-root.jsonl");
 
 fn failure(message: &str) -> LoadError {
@@ -285,6 +288,12 @@ fn verify_signature(bytes: &[u8], bundle: &[u8], signer: &Signer) -> Result<Inpu
         .map_err(|_| failure("cannot pin bundle"))?;
     let roots = loader::sealed_snapshot(ROOT).map_err(|_| failure("cannot pin roots"))?;
     let bundle_alias = BundleAlias::new(&bundle)?;
+    let policy: Value = serde_json::from_str(POLICY).expect("compiled policy");
+    let repository = policy["builder_repository"]
+        .as_str()
+        .expect("builder repository");
+    let certificate =
+        format!("https://github.com/{repository}/.github/workflows/build.yml@refs/heads/main");
     let child = Command::new(parent_path(&helper))
         .args(["attestation", "verify"])
         .arg(parent_path(&subject))
@@ -294,9 +303,9 @@ fn verify_signature(bytes: &[u8], bundle: &[u8], signer: &Signer) -> Result<Inpu
         .arg(parent_path(&roots))
         .args([
             "--repo",
-            "DSLZL/CM-build-linux-x64",
+            repository,
             "--cert-identity",
-            "https://github.com/DSLZL/CM-build-linux-x64/.github/workflows/build.yml@refs/heads/main",
+            &certificate,
             "--cert-oidc-issuer",
             "https://token.actions.githubusercontent.com",
             "--source-ref",
@@ -330,19 +339,28 @@ fn verify_signature(bytes: &[u8], bundle: &[u8], signer: &Signer) -> Result<Inpu
 }
 
 fn verify_output(stdout: &[u8], bytes: &[u8], signer: &Signer) -> Result<(), LoadError> {
+    let policy: Value = serde_json::from_str(POLICY).expect("compiled policy");
     let results: Vec<Value> =
         serde_json::from_slice(stdout).map_err(|_| failure("invalid verifier output"))?;
     if results.is_empty() || results.len() > 8 {
         return Err(failure("unexpected verifier result count"));
     }
     let invocation = format!(
-        "https://github.com/DSLZL/CM-build-linux-x64/actions/runs/{}/attempts/{}",
-        signer.run_id, signer.attempt
+        "https://github.com/{}/actions/runs/{}/attempts/{}",
+        policy["builder_repository"]
+            .as_str()
+            .expect("builder repository"),
+        signer.run_id,
+        signer.attempt
     );
     let subject = loader::hash(bytes);
     for row in results {
         let result = &row["verificationResult"];
-        if result["signature"]["certificate"]["sourceRepositoryIdentifier"] != "1430833977"
+        if result["signature"]["certificate"]["sourceRepositoryIdentifier"]
+            != policy["builder_repository_id"]
+                .as_u64()
+                .expect("builder ID")
+                .to_string()
             || result["verifiedTimestamps"]
                 .as_array()
                 .is_none_or(|v| v.is_empty())
@@ -485,9 +503,10 @@ mod tests {
     }
 
     fn signer() -> Signer {
+        let policy: Value = serde_json::from_str(POLICY).unwrap();
         Signer {
-            repository: "DSLZL/CM-build-linux-x64".into(),
-            repository_id: 1430833977,
+            repository: policy["builder_repository"].as_str().unwrap().into(),
+            repository_id: policy["builder_repository_id"].as_u64().unwrap(),
             workflow: ".github/workflows/build.yml".into(),
             workflow_sha: "a".repeat(40),
             run_id: 1,
@@ -498,12 +517,13 @@ mod tests {
     #[test]
     fn verifier_output_requires_all_verified_identity_fields() {
         let bytes = b"subject bytes";
+        let authority = signer();
         let row = json!({"verificationResult": {
-            "signature": {"certificate": {"sourceRepositoryIdentifier": "1430833977"}},
+            "signature": {"certificate": {"sourceRepositoryIdentifier": authority.repository_id.to_string()}},
             "verifiedTimestamps": [{"type": "unit-parser-fixture"}],
             "statement": {"predicateType": "https://slsa.dev/provenance/v1",
                 "predicate": {"runDetails": {"metadata": {"invocationId":
-                    "https://github.com/DSLZL/CM-build-linux-x64/actions/runs/1/attempts/2"}}},
+                    format!("https://github.com/{}/actions/runs/1/attempts/2", authority.repository)}}},
                 "subject": [{"digest": {"sha256": loader::hash(bytes)}}]}}});
         assert!(
             verify_output(
@@ -539,6 +559,21 @@ mod tests {
         ] {
             assert!(verify_output(invalid, bytes, &signer()).is_err());
         }
+        let mut foreign = row.clone();
+        foreign["verificationResult"]["signature"]["certificate"]["sourceRepositoryIdentifier"] =
+            json!(if authority.repository_id == 1430833977 {
+                "1451045850"
+            } else {
+                "1430833977"
+            });
+        assert!(
+            verify_output(
+                &serde_json::to_vec(&vec![foreign]).unwrap(),
+                bytes,
+                &authority
+            )
+            .is_err()
+        );
         assert!(
             verify_output(
                 &serde_json::to_vec(&vec![row; 9]).unwrap(),

@@ -383,7 +383,8 @@ def case_protocol_resource():
 def case_target_cpu():
     home = install()
     rejected = {}
-    for field, value in (("target", "aarch64-unknown-linux-gnu"), ("cpu", "x86-64-v4")):
+    from cm_platforms import foreign_linux_target
+    for field, value in (("target", foreign_linux_target()), ("cpu", "x86-64-v4")):
         package = variant(home, lambda fields, _: fields["binary"].update({field: value}), name=field)
         rejected[field] = upgrade(home, check=True, variants=[package], success=False)
         assert rejected[field]["result"]["field"] == "binary." + field

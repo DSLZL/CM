@@ -133,7 +133,7 @@ def reports(evidence, inputs, validation, closure, steps, audit, common):
         directory = inputs / "mods" / relative
         mods[name] = {"manifest": tomllib.loads((directory / "mod.toml").read_text()),
             "manifest_sha256": sha(directory / "mod.toml"), "payload_sha256": sha(directory / "payload.so")}
-    baseline = read(inputs / "fixture/g05-producer.json")
+    baseline = read(inputs / "fixture/g05-producer.json") if runtime_cases.historical_hosts() else None
     rows, identities = [], {}
 
     def row(name, scope, labels, reports, roles=(), maturity="stable", kind="sdk", interfaces=("2.2",)):
@@ -178,9 +178,18 @@ def reports(evidence, inputs, validation, closure, steps, audit, common):
             [("budget-" if role == "a" else "review-" if role == "b" else "concurrency-")
                 + label.removeprefix(phase_name + "-") + ".json" for label in phase(phase_name)], (role,))
     row("abc", policy["cases"]["abc"]["scope"], ["s02-abc"], ["s02/abc/reports.json"], ("a", "b", "c"))
-    row("upgrade-h0-h1", policy["cases"]["boundaries"]["upgrade"], phase("g05") + ["s02-boundaries", "s02-conflict"],
-        ["upgrade-binary-reuse.json", "upgrade-compatibility-rejections.json", "upgrade-state-and-labels.json"],
-        interfaces=("2.2", "manifest/protocol/state negotiation"))
+    if runtime_cases.historical_hosts():
+        row("upgrade-h0-h1", policy["cases"]["boundaries"]["upgrade"], phase("g05") + ["s02-boundaries", "s02-conflict"],
+            ["upgrade-binary-reuse.json", "upgrade-compatibility-rejections.json", "upgrade-state-and-labels.json"],
+            interfaces=("2.2", "manifest/protocol/state negotiation"))
+    else:
+        deferred = runtime_cases.deferred_check("s02-boundaries/legacy-upgrade")
+        identities["upgrade-h0-h1"] = {"host": host, "historical_upgrade": deferred}
+        rows.append({"id": "upgrade-h0-h1", "level": "declared", "maturity": "stable", "kind": "boundary",
+            "scope": policy["cases"]["boundaries"]["upgrade"], "identity": identities["upgrade-h0-h1"],
+            "environment": environment, "interfaces": ["2.2", "manifest/protocol/state negotiation"],
+            "steps": {}, "evidence": [reference(evidence, "qualification-scope.json")],
+            "exclusions": ["Historical native Host upgrade and rejection checks"], "not_run_reason": deferred["reason"]})
     row("experimental-seams", "Finite G06 suites; no stable promotion", phase("g06"),
         ["s02/labels/reports.json", *sdk_seams.REPORTS], maturity="experimental", interfaces=("2.3", "nested runtime 2.2"))
     row("exact-host", "G01 prepared slots on exact H; unknown shapes refused", phase("g01"),
@@ -188,7 +197,7 @@ def reports(evidence, inputs, validation, closure, steps, audit, common):
     identities["deferred"] = {"unsupported": policy["cases"]["boundaries"]["unsupported"]}
     rows.append({"id": "deferred", "level": "declared", "maturity": "experimental", "kind": "boundary",
         "scope": "Explicit support exclusions", "identity": identities["deferred"], "environment": environment,
-        "interfaces": ["outside this GNU Linux x64 qualification"], "steps": {},
+        "interfaces": ["outside this " + producer["target"] + " qualification"], "steps": {},
         "evidence": [reference(evidence, "s02/boundaries/reports.json")],
         "exclusions": policy["cases"]["boundaries"]["unsupported"],
         "not_run_reason": "No native qualification for these excluded platforms or features"})
@@ -202,7 +211,7 @@ def reports(evidence, inputs, validation, closure, steps, audit, common):
     for name in REPORTS:
         value = read(evidence / name)
         assert value["status"] == "behavior_pass"
-        value.update(support_matrix=matrix_ref, support_line="GNU Linux x64", maintenance_years=None,
+        value.update(support_matrix=matrix_ref, support_line=producer["target"], maintenance_years=None,
             program_complete=False, hot_unload=False, native_sandbox=False)
         write(evidence / name, value)
 

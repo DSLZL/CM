@@ -4,12 +4,12 @@ CM source is DSLZL/CM. Each native target owns a separate builder repository and
 
 ## Native platform routing
 
-[cm-platforms.json](../.github/cm-platforms.json) is the closed six-target registry. `enabled` controls infrastructure dispatch, independently of product qualification. New targets remain disabled until their native recipes and runtime boundaries have been reviewed and validated.
+[cm-platforms.json](../.github/cm-platforms.json) is the closed six-target registry. `enabled` controls infrastructure dispatch, independently of product qualification. A reviewed native recipe may be enabled for qualification runs; product support requires its separate native acceptance. Unimplemented targets stay disabled.
 
 | Platform | Independent repository | Native runner | Rust target | Routing |
 | --- | --- | --- | --- | --- |
 | Linux x64 | DSLZL/CM-build-linux-x64 | ubuntu-24.04 | x86_64-unknown-linux-gnu | Existing entry |
-| Linux arm64 | DSLZL/CM-build-linux-arm64 | ubuntu-24.04-arm | aarch64-unknown-linux-gnu | Disabled |
+| Linux arm64 | DSLZL/CM-build-linux-arm64 | ubuntu-24.04-arm | aarch64-unknown-linux-gnu | Qualification candidate; support pending |
 | macOS arm64 | DSLZL/CM-build-macos-arm64 | macos-26 | aarch64-apple-darwin | Disabled |
 | macOS x64 | DSLZL/CM-build-macos-x64 | macos-26-intel | x86_64-apple-darwin | Disabled |
 | Windows x64 | DSLZL/CM-build-windows-x64 | windows-2025 | x86_64-pc-windows-msvc | Disabled |
@@ -417,3 +417,16 @@ V01, production H, cache reuse and runtime qualification remain NOT_RUN until
 their own hosted evidence is reviewed. The platform stays disabled. The shared
 helper recipe and loader changes also require affected Linux x64 regression
 evidence before final integration.
+
+
+## GNU Linux ARM64 candidate
+
+The shared GNU Linux pipeline now has a native ARM64 candidate in `DSLZL/CM-build-linux-arm64`, using `ubuntu-24.04-arm` and `aarch64-unknown-linux-gnu`. Enabling its infrastructure permits qualification runs; it does not grant product support. ARM64 preflight results cover their recorded component mechanisms only. Full Host/A/B/C/helper, strict consumer, reuse and affected Linux x64 regression evidence must come from the candidate's own hosted runs.
+
+The fixed builder repository chooses the runner, target and artifact namespace. The closed native facts select ELF machine 62/183, x86-64/armv8-a CPU declarations, compiler flags, interpreter and system-library architecture. Unknown targets and foreign worker/CPU/target bindings reject. Frozen Python drivers carry the same target through a cleared rootfs environment. Each binary retains its own target; no x64 reference executes on ARM64.
+
+Source and hook-slot manifests retain complete audit records, while only the selected target's overlay, distribution policy and slot descriptor enter its Host identity. The ARM64 verifier policy pins builder repository ID 1451045850 and the ARM64 GitHub CLI archive; the x64 policy remains separate. An inactive platform's policy or slot listing does not invalidate the current Host. Test case/report edits remain outside the compiler identity and use their actual dependency checkpoints.
+
+For the first release of each new platform, historical native Host upgrade and old-Host rejection checks are deferred by user decision. The ARM64 consumer retains the full catalog and emits `qualification-scope.json`: every G05 case, `g01-binding-other-host`, `g06-old-host-reject`, and the historical branches of A/B plug-and-play, S01 compatibility and S02 boundaries are NOT_RUN. It does not download x64 legacy Hosts or build substitute old CLIs. The support matrix's `upgrade-h0-h1` row stays declared with a reason. Current-H install, composition, enable/disable, state/transaction and identity/ABI/capability checks remain required. Existing x64 historical acceptance is unchanged.
+
+All cache namespaces in each independent repository share the 10,000,000,000-byte admission limit. Unknown capacity or an over-budget save skips writing; restored artifacts preserve their original production and execution origins. The source dispatcher master switch stays off, and the four macOS/Windows product routes remain disabled until their own reviewed native candidates.

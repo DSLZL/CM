@@ -82,30 +82,99 @@
   ],
   "allOf": [
     {
-      "if": {"properties": {"kind": {"const": "sdk"}}, "required": ["kind"]},
-      "then": {"properties": {"compat": {"not": {"required": ["exact_host"]}}}}
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "sdk"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "compat": {
+            "not": {
+              "required": [
+                "exact_host"
+              ]
+            }
+          }
+        }
+      }
     },
     {
-      "if": {"properties": {"kind": {"enum": ["exact_host", "advanced_hook"]}}, "required": ["kind"]},
-      "then": {"properties": {"compat": {"required": ["exact_host"]}}}
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "exact_host",
+              "advanced_hook"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "compat": {
+            "required": [
+              "exact_host"
+            ]
+          }
+        }
+      }
     },
     {
-      "if": {"properties": {"kind": {"const": "advanced_hook"}}, "required": ["kind"]},
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "advanced_hook"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
       "then": {
         "properties": {
           "compat": {
             "properties": {
-              "abi_major": {"const": 2},
-              "required_capabilities": {"const": ["core.tool_parallel_eligibility.compose.v1"]},
-              "exact_host": {"required": ["patch_map_sha256"]}
+              "abi_major": {
+                "const": 2
+              },
+              "required_capabilities": {
+                "const": [
+                  "core.tool_parallel_eligibility.compose.v1"
+                ]
+              },
+              "exact_host": {
+                "required": [
+                  "patch_map_sha256"
+                ]
+              }
             }
           },
           "contributions": {
             "items": {
               "properties": {
-                "kind": {"enum": ["before", "around", "replacement", "after"]},
-                "capability": {"const": "core.tool_parallel_eligibility.compose.v1"},
-                "resource": {"const": "core.tool_parallel_eligibility.v1"}
+                "kind": {
+                  "enum": [
+                    "before",
+                    "around",
+                    "replacement",
+                    "after"
+                  ]
+                },
+                "capability": {
+                  "const": "core.tool_parallel_eligibility.compose.v1"
+                },
+                "resource": {
+                  "const": "core.tool_parallel_eligibility.v1"
+                }
               }
             }
           }
@@ -117,21 +186,51 @@
         "properties": {
           "compat": {
             "properties": {
-              "required_capabilities": { "contains": { "const": "state.files.v1" } }
+              "required_capabilities": {
+                "contains": {
+                  "const": "state.files.v1"
+                }
+              }
             },
-            "required": ["required_capabilities"]
+            "required": [
+              "required_capabilities"
+            ]
           }
         },
-        "required": ["compat"]
+        "required": [
+          "compat"
+        ]
       },
       "then": {
-        "required": ["state"],
+        "required": [
+          "state"
+        ],
         "properties": {
-          "compat": { "properties": { "abi_major": { "const": 2 } } },
+          "compat": {
+            "properties": {
+              "abi_major": {
+                "const": 2
+              }
+            }
+          },
           "state": {
             "properties": {
-              "owner": { "not": { "enum": [".", ".."] } },
-              "schema": { "not": { "enum": [".", ".."] } }
+              "owner": {
+                "not": {
+                  "enum": [
+                    ".",
+                    ".."
+                  ]
+                }
+              },
+              "schema": {
+                "not": {
+                  "enum": [
+                    ".",
+                    ".."
+                  ]
+                }
+              }
             }
           }
         }
@@ -203,7 +302,10 @@
           "pattern": "^[a-f0-9]{64}$"
         },
         "target": {
-          "const": "x86_64-unknown-linux-gnu"
+          "enum": [
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu"
+          ]
         },
         "entry": {
           "enum": [
@@ -217,7 +319,10 @@
           "maxLength": 16
         },
         "cpu": {
-          "const": "x86-64"
+          "enum": [
+            "x86-64",
+            "armv8-a"
+          ]
         }
       },
       "required": [
@@ -228,6 +333,28 @@
         "entry",
         "glibc_min",
         "cpu"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "target": {
+              "const": "x86_64-unknown-linux-gnu"
+            },
+            "cpu": {
+              "const": "x86-64"
+            }
+          }
+        },
+        {
+          "properties": {
+            "target": {
+              "const": "aarch64-unknown-linux-gnu"
+            },
+            "cpu": {
+              "const": "armv8-a"
+            }
+          }
+        }
       ]
     },
     "exact_host": {

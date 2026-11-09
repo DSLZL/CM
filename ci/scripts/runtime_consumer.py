@@ -19,8 +19,9 @@ import time
 import types
 
 import ci_progress
+from cm_platforms import linux_native
 
-TARGET = "x86_64-unknown-linux-gnu"
+TARGET = linux_native()["target"]
 TRACE_SYSCALLS = ("trace=execve,execveat,socket,getsockname,accept,accept4,connect,sendto,recvfrom,socketpair,"
                   "symlink,symlinkat,open,openat,openat2,close,close_range,dup,dup2,dup3,fcntl,readlink,"
                   "mmap,mprotect,memfd_create,clone,clone3,fork,vfork,getpid,gettid")
@@ -103,10 +104,9 @@ def provenance():
 
 
 def hosted():
-    assert os.environ.get("GITHUB_ACTIONS") == "true"
-    assert os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
-    assert os.environ.get("RUNNER_OS") == "Linux" and os.environ.get("RUNNER_ARCH") == "X64"
-    assert os.environ["GITHUB_REPOSITORY"] == "DSLZL/CM-build-linux-x64"
+    from record_run import require_hosted_worker
+    entry = require_hosted_worker()
+    assert entry["runner_os"] == "Linux" and entry["target"] == TARGET
 
 
 def relocate_profile_links(profile, original, copied):
@@ -204,7 +204,7 @@ def produce():
     assert read(logs / "output-limit-c-layout.log")["v21_all_sizes_alignments_offsets"]
     assert "linux_x64_additive_layout ... ok" in host.build_log(logs, "host-test").read_text()
     for relative in ("fixtures/runtime-consumer/driver.py", "fixtures/native-loader/core_acceptance.py", "fixtures/native-loader/tool_barrier.py",
-                     "ci/scripts/mod_manifest.py", "ci/scripts/ci_progress.py"):
+                     "ci/scripts/mod_manifest.py", "ci/scripts/cm_platforms.py", "ci/scripts/ci_progress.py"):
         destination = inputs / "fixture" / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(root / relative, destination)
@@ -224,6 +224,7 @@ def produce():
     (inputs / "observer.py").write_text(runtime_observer_source(composition), encoding="utf-8")
     shutil.copyfile(Path(__file__), inputs / "runtime_consumer.py")
     shutil.copyfile(root / "ci/scripts/ci_progress.py", inputs / "ci_progress.py")
+    shutil.copyfile(root / "ci/scripts/cm_platforms.py", inputs / "cm_platforms.py")
     official_root = Path(os.environ["RUNNER_TEMP"]) / "cm-p04-official"
     official_root.mkdir()
     installation, official = host.official_fixture(root, official_root)
@@ -274,7 +275,8 @@ def produce():
         import runtime_hooks
         hooks = runtime_hooks.prepare(inputs, frozen, logs, authors)
     upgrade = None
-    if cfg["task_id"] in ("CM-G05", "CM-G06", "CM-S01", "CM-S02", "CM-S03"):
+    from runtime_cases import historical_hosts
+    if historical_hosts() and cfg["task_id"] in ("CM-G05", "CM-G06", "CM-S01", "CM-S02", "CM-S03"):
         import runtime_upgrade
         upgrade = runtime_upgrade.prepare(inputs, frozen)
     seams = None
@@ -322,7 +324,8 @@ def elf_dependencies(path):
     needed = re.findall(r'\(NEEDED\).*\[([^\]]+)\]', header)
     cache = subprocess.check_output(["ldconfig", "-p"], text=True)
     for library in needed:
-        matches = re.findall(r'^\s*' + re.escape(library) + r' .*x86-64.* => (/\S+)$', cache, re.MULTILINE)
+        matches = re.findall(r'^\s*' + re.escape(library) + r' .*' +
+            re.escape(linux_native()["ldconfig_arch"]) + r'.* => (/\S+)$', cache, re.MULTILINE)
         assert matches, "Unresolved ELF dependency: " + library
         assert len({str(Path(name).resolve(strict=True)) for name in matches}) == 1, "Ambiguous ELF dependency: " + library
         result.append(matches[0])
@@ -844,16 +847,18 @@ def self_check():
         raise AssertionError("Unexpected runtime mount was accepted: " + repr(invalid))
     print(json.dumps({"consumer_mount_validation": "pass"}))
 
-    loader = "/lib64/ld-linux-x86-64.so.2"
+    loader = linux_native()["interpreter"]
+    arch = linux_native()["dpkg_arch"]
+    libc = "libc6:" + arch
     diversions = "diversion by libc6 from: " + loader + "\ndiversion by libc6 to: " + loader + ".usr-is-merged\n"
-    assert dpkg_owners(diversions + "libc6:amd64: " + loader + "\n", loader) == ["libc6:amd64"]
-    assert dpkg_owners("libc6:amd64, libc6-compat:amd64: " + loader, loader) == ["libc6-compat:amd64", "libc6:amd64"]
+    assert dpkg_owners(diversions + libc + ": " + loader + "\n", loader) == [libc]
+    assert dpkg_owners(libc + ", libc6-compat:" + arch + ": " + loader, loader) == ["libc6-compat:" + arch, libc]
     assert dpkg_owners("bash: /bin/bash\n", "/bin/bash") == ["bash"]
     for invalid in (diversions, "not a package: " + loader, "-invalid: " + loader,
-                    "libc6:amd64: " + loader + ".other", ""):
+                    libc + ": " + loader + ".other", ""):
         assert dpkg_owners(invalid, loader) == []
     actual_owners = system_package_owners(Path(loader))
-    assert "libc6:amd64" in actual_owners, actual_owners
+    assert libc in actual_owners, actual_owners
     for owner in actual_owners:
         assert subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", owner], text=True).strip()
     print(json.dumps({"dpkg_query_loader_owners": actual_owners}))
@@ -1236,11 +1241,13 @@ def bind_tui_mcp_listener(record, metadata, bound_hosts, observer, *, process_ca
 
 @ci_progress.case()
 def check_distribution_verifier_binding(source):
+    import distribution_provenance
+    policy_path = distribution_provenance.POLICY_PATH
     with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as temporary:
         root = Path(temporary) / "rootfs"
-        paths = ("fixture/s01-producer.json", "fixture/crates/cm/src/distribution-policy.json",
+        paths = ("fixture/s01-producer.json", "fixture/" + policy_path,
             "fixture/s01-bootstrap/identity.json", "inputs/host/cm-host.json")
-        policy = read(source / "crates/cm/src/distribution-policy.json")
+        policy = read(source / policy_path)
         helper = b"audit parser fixture, not a cryptographic verifier"
         identity = hashlib.sha256(helper).hexdigest()
         values = ({}, policy, {"binary_sha256": identity},
@@ -1320,7 +1327,8 @@ def bind_distribution_verifiers(calls, consumer_root):
     root = consumer_root / "rootfs"
     if not (root / "fixture/s01-producer.json").is_file():
         return set()
-    policy = read(root / "fixture/crates/cm/src/distribution-policy.json")
+    import distribution_provenance
+    policy = read(root / "fixture" / distribution_provenance.POLICY_PATH)
     bootstrap = read(root / "fixture/s01-bootstrap/identity.json")
     helper = root / "inputs/host/codex-resources/gh"
     identity = read(root / "inputs/host/cm-host.json")
@@ -1885,6 +1893,11 @@ def consume():
     logs = Path(os.environ["CM_CI_LOG_DIR"])
     artifact.mkdir(parents=True)
     logs.mkdir(parents=True, exist_ok=True)
+    if not runtime_cases.historical_hosts():
+        scope = runtime_cases.qualification_scope()
+        write(artifact / "qualification-scope.json", scope)
+        write(logs / "qualification-scope.json", scope)
+        print("CM qualification scope:", json.dumps(scope, sort_keys=True), flush=True)
     p04_acceptance = {"schema_version": 1, "task_id": "CM-P04", "target": TARGET, "status": "not_run",
         "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-P04-AC0" + str(index),
         "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate((
@@ -1957,7 +1970,7 @@ def consume():
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-G01-AC0" + str(index),
             "status": "not_run", "evidence": ["evidence/" + name]} for index, name in enumerate(runtime_hooks.REPORTS, 1)]}
     upgrade_acceptance = None
-    if producer["task_id"] in ("CM-G05", "CM-G06", "CM-S01", "CM-S02", "CM-S03"):
+    if runtime_cases.historical_hosts() and producer["task_id"] in ("CM-G05", "CM-G06", "CM-S01", "CM-S02", "CM-S03"):
         import runtime_upgrade
         upgrade_acceptance = {"schema_version": 1, "task_id": "CM-G05", "target": TARGET, "status": "not_run",
             "implementation_commit": os.environ["CM_SOURCE_SHA"], "checks": [{"id": "CM-G05-AC0" + str(index),
@@ -2046,6 +2059,7 @@ def consume():
             "--bind", str(temp / "profile"), "/profile", "--bind", str(temp / "work"), "/work",
             "--bind", str(evidence), "/evidence", "--chdir", "/work", "--clearenv"]
         for key, value in {"PATH": "/usr/bin:/bin:/inputs/host/codex-path", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+                           "CM_TARGET": TARGET, "CM_PLATFORM": linux_native()["key"],
                            "TERM": "dumb", "TMPDIR": "/tmp", "HOME": "/home/fixture", "PYTHONNOUSERSITE": "1",
                            "PYTHONDONTWRITEBYTECODE": "1"}.items():
             base += ["--setenv", key, value]
@@ -2118,7 +2132,7 @@ def consume():
             if program_acceptance is not None:
                 phase_reports["program"] = list(program_integration.REPORTS)
             for phase in phase_reports:
-                for case in runtime_cases.GROUPS[phase]:
+                for case in runtime_cases.cases(phase):
                     report_names[phase + "-" + case] = [phase + "/" + case + "/reports.json"]
             checkpoints = retry.Checkpoints(sys.modules[__name__], validation, closure, temp, evidence, logs, report_names, canary_hits)
             stage = "independent isolated matrices"
@@ -2135,7 +2149,7 @@ def consume():
                     "g05": "fixtures/compatibility/driver.py", "g06": "fixtures/sdk-seams/driver.py",
                     "s01": "fixtures/distribution-provenance/driver.py", "s02": "fixtures/compatibility-policy/driver.py",
                     "s03": "fixtures/binary-index/driver.py", "program": "fixtures/tool-concurrency/driver.py"}[phase]
-                for case in runtime_cases.GROUPS[phase]:
+                for case in runtime_cases.cases(phase):
                     if phase == "g04" and case == "missing-library":
                         continue
                     label = phase + "-" + case
@@ -2195,7 +2209,7 @@ def consume():
                 if phase not in phase_reports:
                     continue
                 wrapper = {"m03": "managed_package", "m04": "runtime_state"}[phase]
-                for case in runtime_cases.GROUPS[phase]:
+                for case in runtime_cases.cases(phase):
                     label = phase + "-" + case
                     remaining.append((label, command(label, [*CONSUMER_ENV_PREFIX, "/usr/bin/python3", "-B",
                         "/fixture/ci/scripts/" + wrapper + ".py", "matrix", case]), 1800))
@@ -2244,6 +2258,9 @@ def consume():
                 "host": producer["host"], "input_manifest_sha256": manifest["sha256"], "rootfs_sha256": closure["sha256"],
                 "outer_audit": report_audit(audit, evidence), "release_ready": False}
             common["production_origin"] = origin
+            if not runtime_cases.historical_hosts():
+                common["qualification_scope"] = runtime_cases.qualification_scope()
+                write(evidence / "qualification-scope.json", common["qualification_scope"])
             common["test_build_origins"] = validation.get("test_builds", {})
             common["runtime_steps"] = {label: {k: v for k, v in row.items() if k != "audit"} for label, row in checkpoints.results.items()}
             if m05_acceptance is not None:
@@ -2312,6 +2329,8 @@ def consume():
                 binary_index.reports(evidence, checkpoints.results, audit)
                 report_sets.append(index_acceptance)
             for report_set in report_sets:
+                if not runtime_cases.historical_hosts():
+                    report_set["qualification_scope"] = common["qualification_scope"]
                 if report_set is support_acceptance:
                     # Hash baseline reports after their final provenance fields have been written.
                     support_policy.reports(evidence, inputs, validation, closure, checkpoints.results, audit, common)
@@ -2324,7 +2343,7 @@ def consume():
                     label = check.get("phase")
                     phase = report_set["task_id"][3:].lower()
                     executions = {label: checkpoints.results[label]} if label else {
-                        phase + "-" + case: checkpoints.results[phase + "-" + case] for case in runtime_cases.GROUPS[phase]}
+                        phase + "-" + case: checkpoints.results[phase + "-" + case] for case in runtime_cases.cases(phase)}
                     kinds = {row["kind"] for row in executions.values()}
                     check.update(status=status, command="isolated compiler-free consumer: " + (label or phase),
                         execution_kind=next(iter(kinds)) if len(kinds) == 1 else "mixed",
@@ -2370,13 +2389,22 @@ def consume():
             if g04_acceptance is not None:
                 write(artifact / "g03-baseline-acceptance.json", concurrency_acceptance)
                 write(logs / "g03-baseline-acceptance.json", concurrency_acceptance)
-            if upgrade_acceptance is not None:
+            if upgrade_acceptance is not None or seams_acceptance is not None:
                 for name, baseline in (("g04", g04_acceptance), ("g01", hooks_acceptance)):
                     write(artifact / (name + "-baseline-acceptance.json"), baseline)
                     write(logs / (name + "-baseline-acceptance.json"), baseline)
             if seams_acceptance is not None:
-                write(artifact / "g05-baseline-acceptance.json", upgrade_acceptance)
-                write(logs / "g05-baseline-acceptance.json", upgrade_acceptance)
+                if upgrade_acceptance is None:
+                    import runtime_upgrade
+                    upgrade_record = {"schema_version": 1, "task_id": "CM-G05", "target": TARGET, "status": "not_run",
+                        "implementation_commit": os.environ["CM_SOURCE_SHA"], "qualification_scope": common["qualification_scope"],
+                        "checks": [{"id": "CM-G05-AC0" + str(index), "status": "not_run",
+                            "reason": runtime_cases.deferred_check("CM-G05")["reason"]}
+                            for index, _ in enumerate(runtime_upgrade.REPORTS, 1)]}
+                else:
+                    upgrade_record = upgrade_acceptance
+                write(artifact / "g05-baseline-acceptance.json", upgrade_record)
+                write(logs / "g05-baseline-acceptance.json", upgrade_record)
             if distribution_acceptance is not None:
                 write(artifact / "g06-baseline-acceptance.json", seams_acceptance)
                 write(logs / "g06-baseline-acceptance.json", seams_acceptance)
@@ -2469,6 +2497,7 @@ def consume_index_proof():
         "--bind", str(temp / "profile"), "/profile", "--bind", str(temp / "work"), "/work",
         "--bind", str(temp / "evidence"), "/evidence", "--chdir", "/work", "--clearenv"]
     for key, value in {"PATH": "/usr/bin:/bin:/inputs/host/codex-path", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+            "CM_TARGET": TARGET, "CM_PLATFORM": linux_native()["key"],
             "TERM": "dumb", "TMPDIR": "/tmp", "HOME": "/home/fixture", "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"}.items():
         base += ["--setenv", key, value]
     evidence, audits = temp / "evidence", {}

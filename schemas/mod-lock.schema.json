@@ -32,7 +32,10 @@
               "pattern": "^[a-f0-9]{64}$"
             },
             "target": {
-              "const": "x86_64-unknown-linux-gnu"
+              "enum": [
+                "x86_64-unknown-linux-gnu",
+                "aarch64-unknown-linux-gnu"
+              ]
             },
             "api_version": {
               "type": "string"
@@ -50,12 +53,17 @@
               }
             },
             "patch_map_sha256": {
-              "type": ["string", "null"],
+              "type": [
+                "string",
+                "null"
+              ],
               "pattern": "^[a-f0-9]{64}$"
             },
             "prepared_slots": {
               "type": "array",
-              "items": {"const": "core.tool_parallel_eligibility.v1"},
+              "items": {
+                "const": "core.tool_parallel_eligibility.v1"
+              },
               "maxItems": 1,
               "uniqueItems": true
             }

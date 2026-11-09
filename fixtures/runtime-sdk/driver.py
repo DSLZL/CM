@@ -51,7 +51,7 @@ def install(home, owners=("lifecycle-audit", "example-tool"), variant="normal"):
 
 
 def environment(home, directory, mode="handles", old_handle=None):
-    inherited = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR") if key in os.environ}
+    inherited = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "CM_TARGET", "CM_PLATFORM") if key in os.environ}
     result = {**inherited, "HOME": str(directory / "home"), "CODEX_HOME": str(home), "CODEX_SQLITE_HOME": str(home),
         "CM_NATIVE_TRACE": str(directory / "native.jsonl"), "CM_RUNTIME_EVENTS": str(directory / "events.jsonl"),
         "CM_RUNTIME_MODE": mode, "CM_RUNTIME_BARRIER": str(directory / "release"),

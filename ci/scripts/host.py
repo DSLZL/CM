@@ -17,6 +17,7 @@ import urllib.request
 
 from linux_ci import TARGET, append_environment, build_commands, digest, execute, load_config, source_file
 from record_run import require_hosted_linux
+from cm_platforms import linux_native
 
 ADAPTER = "adapters/codex-e4568a3"
 HOST = ADAPTER + "/host"
@@ -90,12 +91,19 @@ def cm_manifest(root):
 
 def product_manifest(root):
     pin = read(root / ADAPTER / "source.json")
-    paths = {ADAPTER + "/source.json", *(ADAPTER + "/" + name for name in pin["patches"]), *pin["overlay"]}
+    overlay = {**pin["overlay"], **pin.get("target_overlay", {}).get(TARGET, {})}
+    paths = {ADAPTER + "/source.json", *(ADAPTER + "/" + name for name in pin["patches"]), *overlay}
     if "runtime_slots" in pin:
         paths.add(ADAPTER + "/" + pin["runtime_slots"])
     published = {entry["path"]: entry for entry in cm_manifest(root)}
     if not paths <= published.keys():
         raise RuntimeError("Host product inputs must be reviewed publication inputs")
+    pin = {key: value for key, value in pin.items() if key not in ("official_asset", "official_assets", "target_overlay")}
+    pin["overlay"] = overlay
+    published[ADAPTER + "/source.json"] = {**published[ADAPTER + "/source.json"], "sha256": digest(pin)}
+    if "runtime_slots" in pin:
+        name = ADAPTER + "/" + pin["runtime_slots"]
+        published[name] = {**published[name], "sha256": digest(slot_descriptor(root, TARGET))}
     return [published[path] for path in sorted(paths)]
 
 
@@ -123,7 +131,8 @@ def prepare(root, logs):
     execute(pristine, logs, "host-worktree", ["git", "worktree", "add", "--detach", str(host), pin["commit"]])
     for index, patch in enumerate(pin["patches"]):
         execute(host, logs, "host-overlay-" + str(index), ["git", "apply", str(source_file(root, ADAPTER + "/" + patch))])
-    for source, destination in pin["overlay"].items():
+    overlay = {**pin["overlay"], **pin.get("target_overlay", {}).get(TARGET, {})}
+    for source, destination in overlay.items():
         mapped = host / destination
         mapped.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source_file(root, source), mapped)
@@ -140,7 +149,7 @@ def prepare(root, logs):
     after = {entry["path"]: entry for entry in final}
     changes = [{"path": name, "original": before.get(name), "host": after.get(name)}
                for name in sorted(before.keys() | after.keys()) if before.get(name) != after.get(name)]
-    expected_changes = {*pin["patched_paths"], *pin["overlay"].values()}
+    expected_changes = {*pin["patched_paths"], *overlay.values()}
     if {change["path"] for change in changes} != expected_changes:
         raise RuntimeError("Unexpected source changes outside the reviewed Host overlay")
     original_lock = pristine / "codex-rs/Cargo.lock"
@@ -152,7 +161,7 @@ def prepare(root, logs):
         "original_manifest_sha256": manifest_digest(original), "host_manifest_sha256": manifest_digest(final),
         "original_lock_sha256": sha(original_lock), "host_lock_sha256": sha(final_lock),
         "cm_patch_sha256": {name: sha(root / ADAPTER / name) for name in pin["patches"]},
-        "overlay": {name: sha(root / name) for name in pin["overlay"]},
+        "overlay": {name: sha(root / name) for name in overlay},
         "changes": changes,
         "lock_change": "none; original and final roles remain separate" if sha(original_lock) == sha(final_lock)
                        else "changed by the reviewed CM overlay",
@@ -242,12 +251,12 @@ def resolve_v8(root, target=TARGET):
 
 def native(root, logs):
     import distribution_provenance
-    v8_env = resolve_v8(root)
+    v8_env = resolve_v8(root, TARGET)
     versions, package_files = {}, set()
     gcc_major = subprocess.check_output(["gcc", "-dumpversion"], text=True).strip().split(".")[0]
     packages = (*NATIVE_PACKAGES, "gcc-" + gcc_major, "g++-" + gcc_major, "cpp-" + gcc_major,
                 "libgcc-" + gcc_major + "-dev", "libstdc++-" + gcc_major + "-dev",
-                "binutils-x86-64-linux-gnu", "libc-bin")
+                linux_native()["binutils"], "libc-bin")
     for package in packages:
         versions[package] = subprocess.check_output(["dpkg-query", "-W", package], text=True).strip()
         package_files.update(subprocess.check_output(["dpkg-query", "-L", package], text=True).splitlines())
@@ -380,9 +389,19 @@ def identity_inputs(root, logs):
     return inputs
 
 
-def hook_map(root, inputs):
+def slot_descriptor(root, target):
     pin = read(root / ADAPTER / "source.json")
     descriptor = read(root / ADAPTER / pin["runtime_slots"])
+    targets = descriptor.pop("targets")
+    if not isinstance(targets, list) or len(targets) != len(set(targets)) or target not in targets:
+        raise RuntimeError("Prepared slots do not support the actual Host target")
+    descriptor["target"] = target
+    return descriptor
+
+
+def hook_map(root, inputs):
+    pin = read(root / ADAPTER / "source.json")
+    descriptor = slot_descriptor(root, inputs["target"])
     if (descriptor["backend"] != "prepared_slots" or descriptor["upstream"] != pin["commit"]
             or descriptor["target"] != inputs["target"]):
         raise RuntimeError("Prepared-slot descriptor differs from the actual Host inputs")
@@ -574,7 +593,9 @@ def verify_binary(path, expected, env=None):
 
 
 def official_fixture(root, fixture):
-    pin = read(root / ADAPTER / "source.json")["official_asset"]
+    source = read(root / ADAPTER / "source.json")
+    pin = (source["official_asset"] if TARGET == "x86_64-unknown-linux-gnu"
+           else source["official_assets"][TARGET])
     archive = fixture / "official.tar.gz"
     with urllib.request.urlopen(pin["url"], timeout=120) as response, archive.open("wb") as output:
         shutil.copyfileobj(response, output)
@@ -585,7 +606,7 @@ def official_fixture(root, fixture):
     with tarfile.open(archive) as bundle:
         bundle.extractall(installation, filter="data")
     binaries = [path for path in installation.rglob("*") if path.is_file() and
-                path.name in {"codex", "codex-x86_64-unknown-linux-musl"}]
+                path.name in {"codex", "codex-" + TARGET.replace("-gnu", "-musl")}]
     if len(binaries) != 1:
         raise RuntimeError("Official fixture must contain exactly one Codex entrypoint")
     return installation, binaries[0]
@@ -759,7 +780,7 @@ def acceptance(root, logs, report_name="acceptance.json"):
                                            "The official release uses a distinct commit; no binary equivalence is claimed."}
     verify_sources(root, logs)
     package_manifest = manifest(package)
-    archive = artifact / ("cm-host-" + identity["host_build_id"].removeprefix("sha256:")[:16] + "-linux-x64.tar.gz")
+    archive = artifact / ("cm-host-" + identity["host_build_id"].removeprefix("sha256:")[:16] + "-" + linux_native()["key"] + ".tar.gz")
     with tarfile.open(archive, "w:gz") as bundle:
         bundle.add(package, arcname="cm-host")
     receipt = {"schema_version": 1, "host_identity": identity, "artifact_sha256": sha(archive),
@@ -806,7 +827,7 @@ def acceptance(root, logs, report_name="acceptance.json"):
 
 def main():
     require_hosted_linux()
-    if os.environ.get("GITHUB_REPOSITORY") != "DSLZL/CM-build-linux-x64":
+    if os.environ.get("GITHUB_REPOSITORY") != "DSLZL/CM-build-" + linux_native()["key"]:
         raise RuntimeError("Host execution requires the fixed independent builder repository")
     root = Path(os.environ["CM_SOURCE_DIR"]).resolve()
     logs = Path(os.environ["CM_CI_LOG_DIR"]).resolve()

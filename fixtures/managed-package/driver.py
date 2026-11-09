@@ -24,6 +24,7 @@ import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ci/scripts"))
 import ci_progress
+from cm_platforms import foreign_linux_target, linux_native
 
 INPUTS = Path("/inputs")
 BINARY = INPUTS / "host/bin/codex"
@@ -79,7 +80,7 @@ def protected_inventory(root):
 
 def official_entrypoint(installation):
     binaries = [path for path in installation.rglob("*") if path.is_file() and
-                path.name in {"codex", "codex-x86_64-unknown-linux-musl"}]
+                path.name in {"codex", "codex-" + linux_native()["target"].replace("-gnu", "-musl")}]
     assert len(binaries) == 1, "Official fixture must contain exactly one Codex entrypoint"
     return binaries[0]
 
@@ -419,7 +420,7 @@ def rejections(home):
     for package in m01_rejection_inputs(work):
         result.append(reject_install(home, package, package.parents[1].name))
     for name, change in (
-        ("target", lambda fields: fields["binary"].update(target="aarch64-unknown-linux-gnu")),
+        ("target", lambda fields: fields["binary"].update(target=foreign_linux_target())),
         ("cpu", lambda fields: fields["binary"].update(cpu="x86-64-v3")),
         ("glibc-understated", lambda fields: fields["binary"].update(glibc_min="2.2")),
         ("dependency", lambda fields: fields.update(dependencies=[{"id": "missing", "version": "^1"}])),
@@ -437,7 +438,7 @@ def rejections(home):
         payload = package / fields["binary"]["path"]
         data = bytearray(payload.read_bytes())
         if name == "elf-architecture":
-            struct.pack_into("<H", data, 18, 183)
+            struct.pack_into("<H", data, 18, 183 if linux_native()["machine"] == 62 else 62)
         elif name == "actual-glibc":
             match = re.search(rb"GLIBC_[0-9][.][0-9]+(?:[.][0-9]+)?\x00", data)
             assert match
@@ -470,7 +471,8 @@ def mandatory_cpu(data):
     stride, count = struct.unpack_from("<HH", result, 54)
     header = next(headers + index * stride for index in range(count)
         if struct.unpack_from("<I", result, headers + index * stride)[0] == 0x6474e551)
-    note = struct.pack("<III4sIII4x", 4, 16, 5, b"GNU\x00", 0xc0008002, 4, 2)
+    kind, features = (0xc0008002, 2) if linux_native()["machine"] == 62 else (0xc0000000, 8)
+    note = struct.pack("<III4sIII4x", 4, 16, 5, b"GNU\x00", kind, 4, features)
     offset = len(result)
     result.extend(note)
     struct.pack_into("<IIQQQQQQ", result, header, 4, 4, offset, 0, 0, len(note), len(note), 8)
@@ -663,7 +665,7 @@ def self_check():
     assert config["model_providers"]["cm_fixture"]["base_url"] == "http://127.0.0.1:1234/v1"
     with tempfile.TemporaryDirectory() as directory:
         installation = Path(directory)
-        binary = installation / "codex-x86_64-unknown-linux-musl"
+        binary = installation / ("codex-" + linux_native()["target"].replace("-gnu", "-musl"))
         binary.write_bytes(b"official fixture")
         assert official_entrypoint(installation) == binary
         (installation / "codex").write_bytes(b"ambiguous entrypoint")
@@ -683,13 +685,13 @@ def self_check():
     struct.pack_into("<I", elf, 64, 0x6474e551)
     changed = mandatory_cpu(elf)
     assert len(changed) == 160 and struct.unpack_from("<I", changed, 64)[0] == 4
-    assert struct.unpack_from("<I", changed, 152)[0] == 2
+    assert struct.unpack_from("<I", changed, 152)[0] == (2 if linux_native()["machine"] == 62 else 8)
 
 
 def case_setup():
     import mod_manifest
     import managed_package
-    assert os.uname().sysname == "Linux" and os.uname().machine == "x86_64"
+    assert os.uname().sysname == "Linux" and os.uname().machine == linux_native()["machine_name"]
     sdk = sdk_module()
     WORK.mkdir(parents=True)
     PROFILE.mkdir(parents=True)

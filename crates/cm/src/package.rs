@@ -70,7 +70,7 @@ fn same_development_copy(executable: &Path, root: &Path, original: &Path) -> boo
         return false;
     };
     if package.version != "0.0.0"
-        || package.target != "x86_64-unknown-linux-gnu"
+        || package.target != loader::TARGET
         || package.entrypoint != "bin/codex"
     {
         return false;
@@ -131,7 +131,7 @@ fn validate_at(executable: &Path, allow_development: bool) -> Result<(), LoadErr
             .ok_or("missing package root")?;
         // Upstream integration tests install copies of the 0.0.0 development CLI.
         if let Some(target) = option_env!("CARGO_TARGET_DIR").filter(|_| allow_development) {
-            let original = Path::new(target).join("x86_64-unknown-linux-gnu/dev-small/codex");
+            let original = Path::new(target).join(loader::TARGET).join("dev-small/codex");
             if same_build_inode(executable, &original)
                 || same_development_copy(executable, root, &original)
             {
@@ -347,10 +347,14 @@ mod tests {
         fs::copy(&original, &copied).unwrap();
         assert!(!same_development_copy(&copied, &root, &original));
         let mut package = serde_json::json!({
-            "version": "0.0.0", "target": "x86_64-unknown-linux-gnu", "entrypoint": "bin/codex"
+            "version": "0.0.0", "target": crate::loader::TARGET, "entrypoint": "bin/codex"
         });
         fs::write(&manifest, serde_json::to_vec(&package).unwrap()).unwrap();
         assert!(same_development_copy(&copied, &root, &original));
+        package["target"] = "unknown-target".into();
+        fs::write(&manifest, serde_json::to_vec(&package).unwrap()).unwrap();
+        assert!(!same_development_copy(&copied, &root, &original));
+        package["target"] = crate::loader::TARGET.into();
         package["version"] = "0.3.0-p04".into();
         fs::write(&manifest, serde_json::to_vec(&package).unwrap()).unwrap();
         assert!(!same_development_copy(&copied, &root, &original));

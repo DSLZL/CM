@@ -77,14 +77,16 @@ jobs:
               "ci/worker/cache-save/action.yml": ".github/actions/cache-save/action.yml"}.items())
           arm_worker = json.loads(Path("ci/worker-files-linux-arm64.json").read_text(encoding="utf-8"))
           assert arm_worker["repository"] == "DSLZL/CM-build-linux-arm64"
-          assert arm_worker["scope"] == "initial-native-mechanism-preflight"
-          assert len(arm_worker["files"]) == 7
-          assert len({row["destination"] for row in arm_worker["files"]}) == 7
+          assert arm_worker["scope"] == "native-gnu-linux-build-and-qualification"
+          assert len(arm_worker["files"]) == 18
+          assert len({row["destination"] for row in arm_worker["files"]}) == 18
           assert all(row["source"] in paths for row in arm_worker["files"])
-          assert {row["destination"] for row in arm_worker["files"]} == {
-              ".github/cm-platforms.json", ".github/scripts/cm_platforms.py", ".github/scripts/record_run.py",
-              ".github/scripts/worker_policy.py", ".github/actions/cache-authority/action.yml",
-              ".github/actions/cache-authority/index.js", ".github/workflows/native-preflight.yml"}
+          arm_deployments = {row["source"]: row["destination"] for row in arm_worker["files"]}
+          assert arm_deployments.pop("ci/worker/linux-arm64-preflight.yml") == ".github/workflows/native-preflight.yml"
+          assert arm_deployments.pop("crates/cm/src/distribution-policy-arm64.json") == ".github/scripts/distribution-policy.json"
+          assert arm_deployments == {source: destination for source, destination in deployments.items()
+              if source not in {"crates/cm/src/distribution-policy.json", "ci/worker/benchmark.yml",
+                  "ci/worker/benchmark-author.yml", "ci/worker/benchmark-role/action.yml"}}
           arm_recipe = Path("ci/worker/linux-arm64-preflight.yml").read_text()
           assert "runs-on: ubuntu-24.04-arm" in arm_recipe and "cache-mode: none" in arm_recipe
           assert not any(value in arm_recipe for value in ("actions/cache/", "cache-save", "secrets.", "attestations: write", "id-token: write"))
@@ -121,27 +123,26 @@ jobs:
               assert (policy["source_repository_id"], policy["builder_repository_id"]) == (1430833890, 1430833977)
               assert policy["workflow"] == ".github/workflows/build.yml" and policy["ref"] == "refs/heads/main"
               assert policy["verifier"]["version"] == "2.103.3" and len(policy["verifier"]["archive_sha256"]) == 64
+              arm_policy = json.loads(Path("crates/cm/src/distribution-policy-arm64.json").read_text())
+              assert (arm_policy["source_repository_id"], arm_policy["builder_repository"], arm_policy["builder_repository_id"]) == (
+                  1430833890, "DSLZL/CM-build-linux-arm64", 1451045850)
+              assert arm_policy["verifier"]["archive"] == "gh_2.103.3_linux_arm64.tar.gz"
+              for key in set(policy) - {"builder_repository", "builder_repository_id", "verifier"}:
+                  assert arm_policy[key] == policy[key], key
               assert len([json.loads(line) for line in Path("crates/cm/src/distribution-root.jsonl").read_text().splitlines()]) == 2
               schema = json.loads(Path("schemas/release-receipt.schema.json").read_text())
               assert schema["additionalProperties"] is False and set(schema["required"]) == set(schema["properties"])
               for path in ("crates/cm/src/provenance.rs", "crates/cm/src/distribution-policy.json", "crates/cm/src/distribution-root.jsonl"):
                   assert path in cfg["native_identity_files"]
-          scripts = [Path("ci/scripts") / (name + ".py") for name in
-                     ("cm_platforms", "record_run", "worker_policy", "linux_arm64_preflight", "dispatch_build", "acceptance_cache", "retry", "runtime_cases", "sdk_seams", "distribution_provenance", "support_policy", "binary_index", "build_benchmarks", "program_integration", "runtime_consumer")]
-          scripts.append(Path("fixtures/distribution-provenance/driver.py"))
-          scripts.append(Path("fixtures/compatibility-policy/driver.py"))
-          scripts.append(Path("fixtures/binary-index/driver.py"))
-          scripts.append(Path("fixtures/build-benchmarks/driver.py"))
-          scripts.append(Path("fixtures/program-integration/driver.py"))
-          scripts.append(Path("fixtures/native-loader/terminal.py"))
+          scripts = [Path(path) for path in sorted(tracked) if path.endswith(".py")]
           if cfg["task_id"] == "CM-S02":
               support = json.loads(Path("fixtures/compatibility-policy/policy.json").read_text())
               matrix = json.loads(Path("schemas/support-matrix.schema.json").read_text())
               assert support["schema_version"] == 1 and len(support["cases"]) == 8
               assert support["cases"]["versions"]["maintenance_years"] is None
               assert matrix["additionalProperties"] is False and set(matrix["required"]) == set(matrix["properties"])
-          for script in scripts:
-              py_compile.compile(str(script), cfile=str(Path(os.environ["RUNNER_TEMP"]) / (script.stem + ".pyc")),
+          for index, script in enumerate(scripts):
+              py_compile.compile(str(script), cfile=str(Path(os.environ["RUNNER_TEMP"]) / (str(index) + ".pyc")),
                                  doraise=True)
           import cm_platforms
           import record_run
@@ -150,14 +151,20 @@ jobs:
           default_platform = cm_platforms.select()
           assert worker["repository"] == default_platform["repository"]
           assert cfg["target"] == cm_platforms.native_inputs()["target"]
-          assert "runs-on: " + default_platform["runner"] in Path("ci/worker/linux-recipe.yml").read_text()
+          recipe = Path("ci/worker/linux-recipe.yml").read_text()
+          assert "github.repository == 'DSLZL/CM-build-linux-arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04'" in recipe
+          assert "CM_PLATFORM:" in recipe and "CM_TARGET:" in recipe
           cm_platforms.self_check()
           record_run.self_check()
           worker_policy.cache_budget_self_check()
           worker_policy.native_preflight_self_check()
           import linux_arm64_preflight
           linux_arm64_preflight.self_check()
-          assert not cm_platforms.select("linux-arm64")["enabled"]
+          assert cm_platforms.select("linux-arm64")["enabled"]
+          assert all(not row["enabled"] for key, row in cm_platforms.load()["platforms"].items()
+              if key.startswith(("macos-", "windows-")))
+          import runtime_cases
+          runtime_cases.self_check()
           dispatch_build.self_check()
           import retry
           retry.validation_self_check()

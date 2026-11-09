@@ -17,6 +17,7 @@ import tomllib
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ci/scripts"))
 import ci_progress
 import mod_manifest
+import runtime_cases
 
 INPUTS = Path("/inputs")
 BINARY = INPUTS / "host/bin/codex"
@@ -520,39 +521,43 @@ def plug_and_play():
     rejected_capability = cm(home, management, "install", unsupported, success=False)
     assert rejected_capability["code"] == "unknown_capability", rejected_capability
     assert active(home) == stable
-    legacy = read(Path("/fixture/g02a-legacy-host.json"))
-    old_binary = Path(legacy["path"])
-    assert sha(old_binary) == legacy["host"]["executable_sha256"]
-    old_home = Path("/profile/g02a") / case / "legacy-host"
-    cm(old_home, management, "install", INPUTS / "mods/m02/lifecycle-audit/normal", binary=old_binary)
-    old_stable = active(old_home)
-    old_package = cm(old_home, management, "install", INPUTS / "mods/g02a/turn-budget.cmod",
-        success=False, binary=old_binary)
-    assert old_package["code"] == "manifest_parse" and active(old_home) == old_stable, old_package
-    old_candidate = Path("/work/g02a-old-capability")
-    shutil.copytree(INPUTS / "mods/g02a/turn-budget", old_candidate)
-    fields = tomllib.loads((old_candidate / "mod.toml").read_text())
-    # The old parser needs a known kind to reach API/capability gates; this payload must never load.
-    fields["contributions"][0]["kind"] = "lifecycle"
-    mod_manifest.manifest(old_candidate, fields)
-    assert sha(old_candidate / "payload.so") == before_a
-    old_api = cm(old_home, management, "install", old_candidate, success=False, binary=old_binary)
-    assert old_api["code"] == "compatibility" and active(old_home) == old_stable, old_api
-    fields["compat"]["host_api_min"] = "0.6.0"
-    mod_manifest.manifest(old_candidate, fields)
-    old_capability = cm(old_home, management, "install", old_candidate, success=False, binary=old_binary)
-    assert old_capability["code"] == "unknown_capability" and active(old_home) == old_stable, old_capability
-    assert sha(old_binary) == legacy["host"]["executable_sha256"]
+    if runtime_cases.historical_hosts():
+        legacy = read(Path("/fixture/g02a-legacy-host.json"))
+        old_binary = Path(legacy["path"])
+        assert sha(old_binary) == legacy["host"]["executable_sha256"]
+        old_home = Path("/profile/g02a") / case / "legacy-host"
+        cm(old_home, management, "install", INPUTS / "mods/m02/lifecycle-audit/normal", binary=old_binary)
+        old_stable = active(old_home)
+        old_package = cm(old_home, management, "install", INPUTS / "mods/g02a/turn-budget.cmod",
+            success=False, binary=old_binary)
+        assert old_package["code"] == "manifest_parse" and active(old_home) == old_stable, old_package
+        old_candidate = Path("/work/g02a-old-capability")
+        shutil.copytree(INPUTS / "mods/g02a/turn-budget", old_candidate)
+        fields = tomllib.loads((old_candidate / "mod.toml").read_text())
+        # The old parser needs a known kind to reach API/capability gates; this payload must never load.
+        fields["contributions"][0]["kind"] = "lifecycle"
+        mod_manifest.manifest(old_candidate, fields)
+        assert sha(old_candidate / "payload.so") == before_a
+        old_api = cm(old_home, management, "install", old_candidate, success=False, binary=old_binary)
+        assert old_api["code"] == "compatibility" and active(old_home) == old_stable, old_api
+        fields["compat"]["host_api_min"] = "0.6.0"
+        mod_manifest.manifest(old_candidate, fields)
+        old_capability = cm(old_home, management, "install", old_candidate, success=False, binary=old_binary)
+        assert old_capability["code"] == "unknown_capability" and active(old_home) == old_stable, old_capability
+        assert sha(old_binary) == legacy["host"]["executable_sha256"]
+        legacy_result = {"origin": legacy["origin"], "host": legacy["host"],
+            "original_package_rejection": old_package, "api_rejection": old_api,
+            "capability_rejection": old_capability, "metadata_probe_kind": "lifecycle",
+            "payload_sha256": sha(old_candidate / "payload.so"), "successful_profile_preserved": True}
+    else:
+        legacy_result = runtime_cases.deferred_check("g02a-plug-and-play/legacy-host")
     assert charged(business("after-rejection", "failed")) == [1]
     cm(home, management, "remove", OWNER)
     assert not charged(business("removed", "completed"))
     assert sha(BINARY) == before_h and sha(INPUTS / "mods/g02a/turn-budget/payload.so") == before_a
     report(case, {"managed_install_disable_enable_remove": True, "conflict_rejected_before_native": rejected,
         "missing_capability_rejected_before_native": rejected_capability, "successful_profile_preserved": True,
-        "legacy_host": {"origin": legacy["origin"], "host": legacy["host"],
-            "original_package_rejection": old_package, "api_rejection": old_api,
-            "capability_rejection": old_capability, "metadata_probe_kind": "lifecycle",
-            "payload_sha256": sha(old_candidate / "payload.so"), "successful_profile_preserved": True},
+        "legacy_host": legacy_result,
         "host_and_mod_bytes_unchanged": True, "runtime_build_requests": 0})
 
 

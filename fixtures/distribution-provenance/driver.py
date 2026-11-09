@@ -305,13 +305,16 @@ def case_digests():
 def case_compatibility():
     verified = verified_subject("sdk-a")
     install(PROFILE)
-    old = INPUTS / "upgrade-baseline/host/bin/codex"
-    assert old.is_file() and distribution.sha(old) != distribution.sha(BINARY)
-    incompatible = command(PROFILE / "old-host", "install", INPUTS / "mods/s01/a", binary=old, good=False)
-    diagnostic = json.loads(incompatible["stderr"].splitlines()[0])
-    # The frozen pre-2.3 Host rejects this valid newer manifest while parsing.
-    assert diagnostic["code"] == "manifest_parse" and diagnostic["already_native_executed"] is False, incompatible
-    assert state(PROFILE / "old-host") is None
+    if runtime_cases.historical_hosts():
+        old = INPUTS / "upgrade-baseline/host/bin/codex"
+        assert old.is_file() and distribution.sha(old) != distribution.sha(BINARY)
+        incompatible = command(PROFILE / "old-host", "install", INPUTS / "mods/s01/a", binary=old, good=False)
+        diagnostic = json.loads(incompatible["stderr"].splitlines()[0])
+        # The frozen pre-2.3 Host rejects this valid newer manifest while parsing.
+        assert diagnostic["code"] == "manifest_parse" and diagnostic["already_native_executed"] is False, incompatible
+        assert state(PROFILE / "old-host") is None
+    else:
+        incompatible = runtime_cases.deferred_check("s01-compatibility/legacy-host")
     before = state(PROFILE)
     source = WORK / "bad-abi"
     shutil.copytree(INPUTS / "mods/s01/b", source)

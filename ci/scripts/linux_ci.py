@@ -11,9 +11,10 @@ import subprocess
 import sys
 import time
 import tomllib
+import cm_platforms
 from record_run import require_hosted_linux
 
-TARGET = "x86_64-unknown-linux-gnu"
+TARGET = cm_platforms.linux_native()["target"]
 SCCACHE_VERSION = "0.18.0"
 
 
@@ -44,8 +45,18 @@ def load_config(root):
     cfg = json.loads(path.read_text(encoding="utf-8"))
     if cfg.get("schema_version") != 1 or cfg.get("configured") is not True:
         raise RuntimeError("CM-000/P01 must map and review the real CI configuration; this template is blocked until configured=true")
-    if cfg.get("target") != TARGET:
-        raise RuntimeError("Only the first Linux x64 GNU target is enabled")
+    if cfg.get("target") != cm_platforms.select(root=root)["target"]:
+        raise RuntimeError("The common CI configuration must retain its reviewed default target")
+    native = cm_platforms.linux_native()
+    if native["target"] != cm_platforms.select(os.environ.get("CM_PLATFORM"), root=root)["target"]:
+        raise RuntimeError("Native target differs from the reviewed current platform")
+    cfg["target"] = native["target"]
+    if native["target"] == "aarch64-unknown-linux-gnu":
+        cfg["compile_env"] = {**cfg["compile_env"], "RUSTFLAGS": native["rustflags"],
+            "CFLAGS": native["cflags"], "CXXFLAGS": native["cflags"]}
+        cfg["native_identity_files"] = [
+            "crates/cm/src/distribution-policy-arm64.json" if path == "crates/cm/src/distribution-policy.json" else path
+            for path in cfg.get("native_identity_files", [])]
     if not re.fullmatch(r"CM-(?:000|[A-Z]\d\d[A-Z]?)", cfg.get("task_id", "")):
         raise RuntimeError("task_id must identify the current mapped CM implementation task")
     checks = cfg.get("required_checks", [])
@@ -144,7 +155,7 @@ def identify(root, logs, cfg):
     # Image release numbers are provenance; compiler bytes, inputs and flags determine reuse.
     fingerprint = digest({key: value for key, value in compatibility.items() if key != "image_version"})
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
-    platform = "Linux-X64-" + TARGET
+    platform = "Linux-" + cm_platforms.linux_native()["runner_arch"] + "-" + TARGET
     epoch = os.environ.get("CM_CACHE_EPOCH", "v1")
     cargo_prefix = "cm-cargo-" + epoch + "-" + platform + "-" + compiler_hash + "-"
     sccache_base = "cm-sccache-" + epoch + "-" + platform + "-" + SCCACHE_VERSION + "-"

@@ -26,6 +26,9 @@ def baseline_file():
 
 
 def restore_reference(*, producer=False):
+    from runtime_cases import historical_hosts
+    if not historical_hosts():
+        return
     import worker_policy as policy
     from record_run import require_hosted_linux
     require_hosted_linux()

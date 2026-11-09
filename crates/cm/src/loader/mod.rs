@@ -37,6 +37,10 @@ pub(crate) const MAX_CONTRIBUTIONS: usize = 128;
 pub const TARGET: &str = "x86_64-unknown-linux-gnu";
 #[cfg(target_arch = "aarch64")]
 pub const TARGET: &str = "aarch64-unknown-linux-gnu";
+#[cfg(target_arch = "x86_64")]
+pub(crate) const CPU: &str = "x86-64";
+#[cfg(target_arch = "aarch64")]
+pub(crate) const CPU: &str = "armv8-a";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]

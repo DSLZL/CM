@@ -41,10 +41,16 @@
       "additionalProperties": false,
       "properties": {
         "repository": {
-          "const": "DSLZL/CM-build-linux-x64"
+          "enum": [
+            "DSLZL/CM-build-linux-x64",
+            "DSLZL/CM-build-linux-arm64"
+          ]
         },
         "repository_id": {
-          "const": 1430833977
+          "enum": [
+            1430833977,
+            1451045850
+          ]
         },
         "workflow": {
           "const": ".github/workflows/build.yml"
@@ -69,6 +75,28 @@
         "workflow_sha",
         "run_id",
         "attempt"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "repository": {
+              "const": "DSLZL/CM-build-linux-x64"
+            },
+            "repository_id": {
+              "const": 1430833977
+            }
+          }
+        },
+        {
+          "properties": {
+            "repository": {
+              "const": "DSLZL/CM-build-linux-arm64"
+            },
+            "repository_id": {
+              "const": 1451045850
+            }
+          }
+        }
       ]
     },
     "policy_sha256": {
@@ -236,8 +264,10 @@
                     "pattern": "^[0-9a-f]{64}$"
                   },
                   "target": {
-                    "type": "string",
-                    "pattern": "^[A-Za-z0-9._-]{1,128}$"
+                    "enum": [
+                      "x86_64-unknown-linux-gnu",
+                      "aarch64-unknown-linux-gnu"
+                    ]
                   },
                   "entry": {
                     "enum": [
@@ -251,7 +281,10 @@
                     "maxLength": 16
                   },
                   "cpu": {
-                    "const": "x86-64"
+                    "enum": [
+                      "x86-64",
+                      "armv8-a"
+                    ]
                   }
                 },
                 "required": [
@@ -262,6 +295,28 @@
                   "entry",
                   "glibc_min",
                   "cpu"
+                ],
+                "oneOf": [
+                  {
+                    "properties": {
+                      "target": {
+                        "const": "x86_64-unknown-linux-gnu"
+                      },
+                      "cpu": {
+                        "const": "x86-64"
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "target": {
+                        "const": "aarch64-unknown-linux-gnu"
+                      },
+                      "cpu": {
+                        "const": "armv8-a"
+                      }
+                    }
+                  }
                 ]
               },
               "compat": {
@@ -589,10 +644,16 @@
       "additionalProperties": false,
       "properties": {
         "repository": {
-          "const": "DSLZL/CM-build-linux-x64"
+          "enum": [
+            "DSLZL/CM-build-linux-x64",
+            "DSLZL/CM-build-linux-arm64"
+          ]
         },
         "repository_id": {
-          "const": 1430833977
+          "enum": [
+            1430833977,
+            1451045850
+          ]
         },
         "workflow": {
           "const": ".github/workflows/build.yml"
@@ -617,6 +678,28 @@
         "workflow_sha",
         "run_id",
         "attempt"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "repository": {
+              "const": "DSLZL/CM-build-linux-x64"
+            },
+            "repository_id": {
+              "const": 1430833977
+            }
+          }
+        },
+        {
+          "properties": {
+            "repository": {
+              "const": "DSLZL/CM-build-linux-arm64"
+            },
+            "repository_id": {
+              "const": 1451045850
+            }
+          }
+        }
       ]
     }
   }

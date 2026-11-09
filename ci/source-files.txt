@@ -56,6 +56,7 @@ crates/cm-sdk/src/lib.rs
 crates/cm/Cargo.toml
 crates/cm/examples/native_probe.rs
 crates/cm/src/config.rs
+crates/cm/src/distribution-policy-arm64.json
 crates/cm/src/diagnostics.rs
 crates/cm/src/host_identity.rs
 crates/cm/src/lib.rs

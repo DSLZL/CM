@@ -9,8 +9,9 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from cm_platforms import linux_native
 
-TARGET = "x86_64-unknown-linux-gnu"
+TARGET = linux_native()["target"]
 REPORTS = ("runtime-sdk-dependencies.json", "runtime-adapter-wiring.json", "runtime-registry-scopes.json",
            "runtime-name-collisions.json", "opaque-handle-scopes.json", "async-abi-cancellation.json",
            "restart-and-library-lifetime.json")

@@ -10,6 +10,7 @@ import sys
 import tomllib
 
 from linux_ci import TARGET
+from cm_platforms import linux_native
 
 OWNER = "org.example.tool-concurrency"
 CAPABILITY = "core.turn_tool_concurrency.v1"
@@ -67,7 +68,7 @@ def prepare(inputs, package, frozen, logs, authors, sdk):
     shutil.copyfile(target / TARGET / cfg["build_profile"] / "libcm_tool_concurrency.so", payload)
     manifest = tomllib.loads((source / "mod.toml").read_text())
     manifest["binary"].update(size=payload.stat().st_size, sha256=host.sha(payload),
-        glibc_min=mod_manifest.native_glibc_min(payload))
+        glibc_min=mod_manifest.native_glibc_min(payload), target=TARGET, cpu=linux_native()["cpu"])
     manifest["provenance"]["revision"] = os.environ["CM_SOURCE_SHA"]
     mod_manifest.manifest(destination, manifest)
     archive = destination.with_suffix(".cmod")

@@ -68,3 +68,10 @@ Host、state、环境不匹配的已签名负例保持未验证，篡改资格�
 
 S02 首轮 [R09](https://github.com/DSLZL/CM-build-linux-x64/actions/runs/42164580638) 的 362 项、五份验收报告、外层零构建审计及收据均已通过。
 每轮增量复用结果以对应工件和收据为准；不承诺其他平台、native 沙箱、热卸载或 release-ready。
+
+
+## 新平台首发范围
+
+上述 x64 固定版本配对和运行证据继续保留。GNU Linux ARM64 目前是完整流水线候选，尚未取得产品资格；macOS/Windows 也不能继承 x64 的通过结果。
+
+按用户决定，五个新增平台首发暂不验证历史旧版 Host 升级，不额外构建历史 CLI。历史升级、旧 Host 的 ABI/能力拒绝和跨版本 exact-host 绑定检查逐项 NOT_RUN；当前 H 的安装、组合、启停/禁用、状态/事务和身份拒绝仍须通过。运行报告包含 `qualification-scope.json` 和延期原因，`upgrade-h0-h1` 行只可为 declared，不能标记 platform-verified。具体用例边界见 [CI 说明](../ci/README.md#gnu-linux-arm64-candidate)。后续补充历史升级须使用对应平台真实原生旧版输入。

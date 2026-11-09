@@ -182,8 +182,9 @@ def case_binding_abi():
 
 
 def case_binding_target():
+    from cm_platforms import foreign_linux_target
     home = install(PROFILE, ("a/normal",))
-    change(home, "compose-a", ("binary", "target"), "aarch64-unknown-linux-gnu")
+    change(home, "compose-a", ("binary", "target"), foreign_linux_target())
     return report(1, "wrong_target", reject(home))
 
 

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "configured": true,
   "repository": "DSLZL/CM-build-linux-arm64",
-  "scope": "initial-native-mechanism-preflight",
+  "scope": "native-gnu-linux-build-and-qualification",
   "files": [
     {
       "source": ".github/cm-platforms.json",
@@ -13,12 +13,56 @@
       "destination": ".github/scripts/cm_platforms.py"
     },
     {
-      "source": "ci/scripts/record_run.py",
-      "destination": ".github/scripts/record_run.py"
+      "source": "ci/worker/cache-save/action.yml",
+      "destination": ".github/actions/cache-save/action.yml"
+    },
+    {
+      "source": "ci/scripts/program_integration.py",
+      "destination": ".github/scripts/program_integration.py"
+    },
+    {
+      "source": "ci/scripts/binary_index.py",
+      "destination": ".github/scripts/binary_index.py"
+    },
+    {
+      "source": "ci/scripts/distribution_provenance.py",
+      "destination": ".github/scripts/distribution_provenance.py"
+    },
+    {
+      "source": "crates/cm/src/distribution-policy-arm64.json",
+      "destination": ".github/scripts/distribution-policy.json"
+    },
+    {
+      "source": "crates/cm/src/distribution-root.jsonl",
+      "destination": ".github/scripts/distribution-root.jsonl"
+    },
+    {
+      "source": "ci/worker/build.yml",
+      "destination": ".github/workflows/build.yml"
+    },
+    {
+      "source": "ci/worker/linux-recipe.yml",
+      "destination": ".github/workflows/linux-recipe.yml"
     },
     {
       "source": "ci/scripts/worker_policy.py",
       "destination": ".github/scripts/worker_policy.py"
+    },
+    {
+      "source": "ci/scripts/record_run.py",
+      "destination": ".github/scripts/record_run.py"
+    },
+    {
+      "source": "ci/scripts/retry.py",
+      "destination": ".github/scripts/retry.py"
+    },
+    {
+      "source": "ci/scripts/runtime_cases.py",
+      "destination": ".github/scripts/runtime_cases.py"
+    },
+    {
+      "source": "ci/scripts/build_benchmarks.py",
+      "destination": ".github/scripts/build_benchmarks.py"
     },
     {
       "source": "ci/worker/cache-authority/action.yml",

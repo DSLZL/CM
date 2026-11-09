@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from cm_platforms import linux_native
 
 REPORTS = ("prebuilt-host-package.json", "drop-in-install.json", "independent-prebuilt-launcher.json",
            "atomic-mod-installation.json", "prebuilt-backend-selection.json", "native-runtime-dependencies.json")
@@ -33,7 +34,7 @@ def prepare(inputs, package, frozen, logs):
         mod_manifest.zip_package(inputs / "mods/m02" / owner / "normal", inputs / "mods" / (owner + ".cmod"))
     sentinel = inputs / "mods/constructor-sentinel"
     sentinel.mkdir()
-    execute(root, logs, "m03-constructor-author-build", ["cc", "-shared", "-fPIC", "-march=x86-64",
+    execute(root, logs, "m03-constructor-author-build", ["cc", "-shared", "-fPIC", *linux_native()["cflags"].split(),
         str(root / "fixtures/native-loader/replacement.c"), "-o", str(sentinel / "payload.so")])
     import tomllib
     fields = tomllib.loads((inputs / "mods/m01-b/mod.toml").read_text())
@@ -56,7 +57,7 @@ def prepare(inputs, package, frozen, logs):
     mod_manifest.write(inputs / "fixture/m03-producer.json", {"status": "pass",
         "precise_unit_checks": list(checks), "host_test_log_sha256": mod_manifest.sha(log),
         "unit_binary_is_published_host": False, "host_executable_sha256": frozen["executable_sha256"],
-        "baseline": "actual GitHub-hosted ubuntu-24.04 X64 GNU runtime; no glibc 2.17 Host claim"})
+        "baseline": "actual GitHub-hosted " + linux_native()["key"] + " GNU runtime; no glibc 2.17 Host claim"})
 
 
 def self_check():

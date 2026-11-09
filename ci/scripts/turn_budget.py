@@ -11,6 +11,8 @@ import tarfile
 import tomllib
 
 from linux_ci import TARGET
+from cm_platforms import linux_native
+import runtime_cases
 
 OWNER = "org.example.turn-budget"
 CAPABILITY = "core.turn_sampling_budget.v1"
@@ -44,7 +46,7 @@ def prepare(inputs, package, frozen, logs, authors, sdk):
     from linux_ci import cargo_args, execute, load_config
     root = Path(os.environ["CM_SOURCE_DIR"])
     cfg = load_config(root)
-    if cfg["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01", "CM-S02", "CM-S03"):
+    if runtime_cases.historical_hosts() and cfg["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01", "CM-S02", "CM-S03"):
         from review_before_send import inherit_budget
         return inherit_budget(inputs, package, frozen, logs, authors, sdk)
     unit = {"manifest": "examples/mods/turn-budget/Cargo.toml", "packages": ["cm-turn-budget"], "features": []}
@@ -75,7 +77,7 @@ def prepare(inputs, package, frozen, logs, authors, sdk):
     shutil.copyfile(target / TARGET / cfg["build_profile"] / "libcm_turn_budget.so", payload)
     manifest = tomllib.loads((source / "mod.toml").read_text())
     manifest["binary"].update(size=payload.stat().st_size, sha256=host.sha(payload),
-        glibc_min=mod_manifest.native_glibc_min(payload))
+        glibc_min=mod_manifest.native_glibc_min(payload), target=TARGET, cpu=linux_native()["cpu"])
     manifest["provenance"]["revision"] = os.environ["CM_SOURCE_SHA"]
     mod_manifest.manifest(destination, manifest)
     archive = destination.with_suffix(".cmod")
@@ -106,6 +108,8 @@ def prepare(inputs, package, frozen, logs, authors, sdk):
 
 
 def restore_legacy():
+    if not runtime_cases.historical_hosts():
+        return
     import host
     import worker_policy as policy
     from linux_ci import load_config
@@ -144,6 +148,10 @@ def restore_legacy():
 
 def legacy_host(inputs):
     import host
+    if not runtime_cases.historical_hosts():
+        result = runtime_cases.deferred_check("g02a-plug-and-play/legacy-host")
+        host.write(inputs / "fixture/g02a-legacy-host.json", result)
+        return result
     directory = Path(os.environ["RUNNER_TEMP"]) / "cm-g02a-legacy-reference"
     result = host.read(directory / "legacy-host.json")
     assert result["origin"] == LEGACY_ORIGIN

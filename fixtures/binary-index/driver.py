@@ -17,6 +17,7 @@ import time
 
 sys.path.insert(0, "/fixture/ci/scripts")
 import binary_index
+from cm_platforms import linux_native
 import ci_progress
 import distribution_provenance as distribution
 import runtime_cases
@@ -37,7 +38,9 @@ def report(index, key, value):
 
 
 def case_data(case):
-    return distribution.read(Path("/fixture/fixtures/binary-index/cases.json"))["cases"][case]
+    value = distribution.read(Path("/fixture/fixtures/binary-index/cases.json"))["cases"][case]
+    assert value["target"] == "native"
+    return {**value, "target": binary_index.TARGET}
 
 
 def state(home=None):
@@ -381,7 +384,7 @@ def case_support_exact():
     libc_name, libc_version = platform.libc_ver()
     assert libc_name == "glibc" and context["image_os"] == "ubuntu24"
     claim = {"plan": preview["plan_projection"], "conditions": {"backend": "Embedded", "target": binary_index.TARGET,
-        "cpu": "x86-64", "glibc_version": libc_version, "mods": preview["plan_projection"]["candidate_contents"],
+        "cpu": linux_native()["cpu"], "glibc_version": libc_version, "mods": preview["plan_projection"]["candidate_contents"],
         "config_sha256": preview["plan_projection"]["config"]["sha256"],
         "state_contracts_sha256": preview["state_contracts_sha256"],
         "exclusions": ["native-sandbox", "other-platforms", "hot-unload", "release-readiness"]},

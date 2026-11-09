@@ -271,7 +271,7 @@ def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mod
     endpoint = "http://127.0.0.1:" + str(server.server_port)
     assert all(key.startswith("CM_") for key in (extra_env or {}))
     # The process helper transfers its environment over an observed socket; never inherit CI credentials.
-    inherited = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR") if key in os.environ}
+    inherited = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "CM_TARGET", "CM_PLATFORM") if key in os.environ}
     env = {**inherited, "CODEX_HOME": str(home), "CODEX_SQLITE_HOME": str(home),
            "HOME": str(directory / "home"), "CM_NATIVE_TRACE": str(trace),
            "CM_FIXTURE_MODE": mode, "CM_FIXTURE_EVENTS": str(directory / "mod-events.jsonl"),

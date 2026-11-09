@@ -13,6 +13,7 @@ import threading
 import time
 
 import host
+from cm_platforms import linux_native
 from linux_ci import TARGET, cargo_args, execute, load_config, source_file
 from record_run import require_hosted_linux
 
@@ -102,7 +103,7 @@ def build_fixtures(root, logs):
     native = Path(os.environ["RUNNER_TEMP"]) / "cm-native-fixtures"
     native.mkdir()
     for name, flags in (("replacement", []), ("rpath", ["-Wl,-rpath,/tmp/cm-not-allowed"])):
-        execute(root, logs, "mod-c-" + name, ["cc", "-shared", "-fPIC", "-march=x86-64", "-mtune=generic",
+        execute(root, logs, "mod-c-" + name, ["cc", "-shared", "-fPIC", *linux_native()["cflags"].split(),
                 str(source_file(root, "fixtures/native-loader/replacement.c")), *flags, "-o", str(native / (name + ".so"))])
     execute(root, logs, "mod-c-layout-build", ["cc", "-std=c11", str(source_file(root, "fixtures/native-loader/layout.c")),
                                              "-o", str(native / "layout")])
@@ -474,7 +475,7 @@ def acceptance(root, logs, report_name="acceptance.json"):
 
 def main():
     require_hosted_linux()
-    if os.environ.get("GITHUB_REPOSITORY") != "DSLZL/CM-build-linux-x64":
+    if os.environ.get("GITHUB_REPOSITORY") != "DSLZL/CM-build-" + linux_native()["key"]:
         raise RuntimeError("P02 executes only in the independent Linux x64 builder")
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     root = Path(os.environ["CM_SOURCE_DIR"]).resolve()

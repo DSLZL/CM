@@ -18,8 +18,9 @@ import tomllib
 import zipfile
 
 import ci_progress
+from cm_platforms import foreign_linux_target, linux_native
 
-TARGET = "x86_64-unknown-linux-gnu"
+TARGET = linux_native()["target"]
 CAP = "core.exec_output_limit.v1"
 CANARIES = ("M01_OWN_SECRET", "M01_OTHER_SECRET", "M01_BAD_SECRET", "CM_M05_DIAGNOSTIC_SECRET")
 REPORTS = ("binary-mod-manifest.json", "runtime-lock-determinism.json", "manifest-rejection-matrix.json",
@@ -84,7 +85,7 @@ def convert(package, *, configured=False):
         value = {"format_version": 3, "id": old["id"], "version": "1.2.3", "kind": "sdk",
             "binary": {"path": old["payload"], "size": old["payload_size"], "sha256": old["payload_sha256"],
                 "target": TARGET, "entry": "cm_mod_entry_v" + str(old["abi_major"]),
-                "glibc_min": native_glibc_min(package / old["payload"]), "cpu": "x86-64"},
+                "glibc_min": native_glibc_min(package / old["payload"]), "cpu": linux_native()["cpu"]},
             "compat": {"abi_major": old["abi_major"], "abi_minor_min": old["abi_minor"], "abi_minor_max": old["abi_minor"],
                 "host_api_min": "0.4.0", "required_capabilities": old["required_capabilities"]},
             "dependencies": [], "conflicts": [], "contributions": hooks, "resources": old.get("resources", []),
@@ -209,7 +210,7 @@ def rejection_cases(work, inputs, binary, evidence, selected=None):
         "entry": lambda m: m["binary"].update(entry="run_installer"),
         "cpu": lambda m: m["binary"].update(cpu="x86-64-v4"),
         "system": lambda m: m["binary"].update(glibc_min="99.0"),
-        "target": lambda m: m["binary"].update(target="aarch64-unknown-linux-gnu"),
+        "target": lambda m: m["binary"].update(target=foreign_linux_target()),
         "script": lambda m: m.update(postinstall="build.rs"),
         "source-only": lambda m: m.pop("binary"),
         "state-owner": lambda m: m["state"].update(owner="someone-else"),
