@@ -44,6 +44,7 @@ def prepare(inputs, package, frozen, logs, authors, sdk):
     import host
     import mod_manifest
     from linux_ci import cargo_args, execute, load_config
+    from runtime_consumer import provenance
     root = Path(os.environ["CM_SOURCE_DIR"])
     cfg = load_config(root)
     if runtime_cases.historical_hosts() and cfg["task_id"] in ("CM-G02B", "CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01", "CM-S02", "CM-S03"):
@@ -102,6 +103,7 @@ def prepare(inputs, package, frozen, logs, authors, sdk):
     assert host.sha(package / "bin/codex") == frozen["executable_sha256"]
     host.verify_sources(root, logs)
     result = {"status": "pass", "author": author, "private_core_probe": probe, "legacy_host": legacy,
+        "author_reused": False, "author_origin": {"provenance": provenance(), "author": author},
         "host_rebuilt_after_freeze": False, "cases": list(CASES)}
     host.write(inputs / "fixture/g02a-producer.json", result)
     return result
