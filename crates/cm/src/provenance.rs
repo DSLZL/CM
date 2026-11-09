@@ -354,13 +354,14 @@ fn verify_output(stdout: &[u8], bytes: &[u8], signer: &Signer) -> Result<(), Loa
         signer.attempt
     );
     let subject = loader::hash(bytes);
+    let repository_id = policy["builder_repository_id"]
+        .as_u64()
+        .expect("builder ID")
+        .to_string();
     for row in results {
         let result = &row["verificationResult"];
-        if result["signature"]["certificate"]["sourceRepositoryIdentifier"]
-            != policy["builder_repository_id"]
-                .as_u64()
-                .expect("builder ID")
-                .to_string()
+        if result["signature"]["certificate"]["sourceRepositoryIdentifier"].as_str()
+            != Some(repository_id.as_str())
             || result["verifiedTimestamps"]
                 .as_array()
                 .is_none_or(|v| v.is_empty())
@@ -559,21 +560,27 @@ mod tests {
         ] {
             assert!(verify_output(invalid, bytes, &signer()).is_err());
         }
-        let mut foreign = row.clone();
-        foreign["verificationResult"]["signature"]["certificate"]["sourceRepositoryIdentifier"] =
+        for repository_id in [
             json!(if authority.repository_id == 1430833977 {
                 "1451045850"
             } else {
                 "1430833977"
-            });
-        assert!(
-            verify_output(
-                &serde_json::to_vec(&vec![foreign]).unwrap(),
-                bytes,
-                &authority
-            )
-            .is_err()
-        );
+            }),
+            json!(authority.repository_id),
+            json!(format!("0{}", authority.repository_id)),
+        ] {
+            let mut foreign = row.clone();
+            foreign["verificationResult"]["signature"]["certificate"]["sourceRepositoryIdentifier"] =
+                repository_id;
+            assert!(
+                verify_output(
+                    &serde_json::to_vec(&vec![foreign]).unwrap(),
+                    bytes,
+                    &authority
+                )
+                .is_err()
+            );
+        }
         assert!(
             verify_output(
                 &serde_json::to_vec(&vec![row; 9]).unwrap(),
