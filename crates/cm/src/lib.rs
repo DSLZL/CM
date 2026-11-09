@@ -1,6 +1,10 @@
 //! Host-owned immutable native runtime. Libraries and sealed payloads stay pinned.
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
-compile_error!("CM only supports Linux x86_64 GNU");
+#[cfg(not(all(
+    target_os = "linux",
+    target_env = "gnu",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+)))]
+compile_error!("CM native runtime requires Linux x86_64 or AArch64 GNU");
 
 use std::cell::Cell;
 use std::fs::File;
