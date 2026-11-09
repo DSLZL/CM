@@ -226,18 +226,23 @@ def reject_native_overrides(env=None):
         raise RuntimeError("Unregistered native input override")
 
 
-def native(root, logs):
-    import distribution_provenance
+def resolve_v8(root, target=TARGET):
+    reject_native_overrides()
     host = root / HOST
     os.environ["CODEX_REPO_ROOT"] = str(host)
     sys.path.insert(0, str(host / "scripts"))
     from codex_package.targets import TARGET_SPECS
     from codex_package.v8 import resolve_codex_v8_cargo_env
 
-    reject_native_overrides()
-    v8_env = resolve_codex_v8_cargo_env(TARGET_SPECS[TARGET])
+    v8_env = resolve_codex_v8_cargo_env(TARGET_SPECS[target])
     if set(v8_env) != {"RUSTY_V8_ARCHIVE", "RUSTY_V8_SRC_BINDING_PATH"}:
         raise RuntimeError("Verified V8 archive and binding are required")
+    return v8_env
+
+
+def native(root, logs):
+    import distribution_provenance
+    v8_env = resolve_v8(root)
     versions, package_files = {}, set()
     gcc_major = subprocess.check_output(["gcc", "-dumpversion"], text=True).strip().split(".")[0]
     packages = (*NATIVE_PACKAGES, "gcc-" + gcc_major, "g++-" + gcc_major, "cpp-" + gcc_major,

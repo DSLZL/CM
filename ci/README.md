@@ -382,7 +382,7 @@ and worker `37e71a70f427ac36bd888d756b159c7ca38d0919`
 ([run 42580220275](https://github.com/DSLZL/CM-build-linux-arm64/actions/runs/42580220275)).
 That evidence covers the original source revision and system bubblewrap only.
 
-The separate `stage=packaged-helper` candidate prepares the same pinned upstream
+The separate `stage=packaged-helper` prepares the same pinned upstream
 source, reuses the production helper's fmt/clippy/test/build commands for native
 `codex-bwrap`, and runs the same minimal-rootfs observer with that exact ARM64
 binary. It records its version, ELF hash, libcap inputs, successful executable
@@ -392,7 +392,28 @@ This stage skips the ABI/loader Rust tests and fixtures; it builds no Codex CLI
 and uploads no product. The default `initial-mechanisms` stage retains those
 original probes. Both stages write no cache.
 
-The packaged-helper candidate, complete V01, production H, cache reuse and runtime
-qualification remain NOT_RUN until their own hosted evidence is reviewed. The
-platform stays disabled. The shared helper recipe and loader changes also require
-affected Linux x64 regression evidence before final integration.
+The packaged-helper mechanism passed at source `12d3abf4e79f911415013c68b13ff4084caff372`
+and worker `78bbd51f0bbafd7cd450103f7db9a646b6968738`
+([run 42588901092](https://github.com/DSLZL/CM-build-linux-arm64/actions/runs/42588901092)).
+This covers that exact helper and its isolation checks; its package declares no
+unit tests. The functional evidence is the actual version and rootfs execution.
+
+The `stage=native-inputs-terminal` candidate uses the same pinned upstream V8
+resolver as production, with the explicit ARM64 target. It verifies the trusted
+release checksum chain, records archive/binding hashes, and checks every unpacked
+archive member is a little-endian ARM64 ELF64 relocatable object. V8 download and
+archive commands have separate logs, timeouts and the existing 30-second heartbeat.
+A small native Python PTY probe uses the session/controlling-terminal setup of the
+existing TUI fixtures. It checks Unicode input, foreground process ownership,
+window size, terminal restoration on normal/error/SIGINT exit, and rejection of
+non-terminal input. It runs before source preparation and the V8 download so a
+terminal failure stops early. This is a terminal mechanism check; full Codex TUI business
+and V8 link/execution still require their actual product runs.
+
+This stage compiles no Rust, helper, fixture, schema or CLI, skips earlier isolation
+probes, uploads text only and writes no cache. The earlier exact-revision ABI,
+loader and helper results retain their original origins. The new stage, complete
+V01, production H, cache reuse and runtime qualification remain NOT_RUN until
+their own hosted evidence is reviewed. The platform stays disabled. The shared
+helper recipe and loader changes also require affected Linux x64 regression
+evidence before final integration.

@@ -264,3 +264,4 @@ docs/linux-x64-integration.md
 ci/worker-files-linux-arm64.json
 ci/worker/linux-arm64-preflight.yml
 fixtures/native-loader/isolation.c
+fixtures/native-loader/terminal.py

@@ -133,6 +133,7 @@ jobs:
           scripts.append(Path("fixtures/binary-index/driver.py"))
           scripts.append(Path("fixtures/build-benchmarks/driver.py"))
           scripts.append(Path("fixtures/program-integration/driver.py"))
+          scripts.append(Path("fixtures/native-loader/terminal.py"))
           if cfg["task_id"] == "CM-S02":
               support = json.loads(Path("fixtures/compatibility-policy/policy.json").read_text())
               matrix = json.loads(Path("schemas/support-matrix.schema.json").read_text())

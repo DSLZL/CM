@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Small native mechanism gate; never builds or qualifies a production Host."""
 import contextlib
+import gzip
 import hashlib
 import json
 import os
@@ -19,7 +20,7 @@ import record_run
 
 TARGET = "aarch64-unknown-linux-gnu"
 NAMESPACES = ("user", "mnt", "pid", "ipc", "uts", "net")
-STAGES = ("initial-mechanisms", "packaged-helper")
+STAGES = ("initial-mechanisms", "packaged-helper", "native-inputs-terminal")
 
 
 def elf(path):
@@ -74,6 +75,47 @@ def helper_execution(executions, path):
     if len(matches) != 1 or not re.fullmatch(expected, matches[0]):
         raise RuntimeError("Expected exactly one successful execution of the selected helper")
     return matches[0]
+
+
+def v8_archive_headers(text, archive, members):
+    blocks = re.split(r"(?m)^File: ", text)
+    expected = {"Class": "ELF64", "Data": "2's complement, little endian",
+        "Type": "REL (Relocatable file)", "Machine": "AArch64"}
+    if not members or blocks[0].strip() or len(blocks) != len(members) + 1:
+        raise RuntimeError("V8 archive does not contain exactly the listed ELF objects")
+    for block, member in zip(blocks[1:], members):
+        if not block.splitlines() or block.splitlines()[0] != str(archive) + "(" + member + ")":
+            raise RuntimeError("V8 archive member identity differs")
+        rows = re.findall(r"(?m)^\s+(Class|Data|Type|Machine):\s+([^\n]+?)\s*$", block)
+        if len(rows) != len(expected) or dict(rows) != expected:
+            raise RuntimeError("V8 archive contains an invalid or non-ARM64 ELF object: " + member)
+    return {"status": "pass", "object_count": len(members), "elf_headers": expected,
+        "member_names_sha256": hashlib.sha256(("\n".join(members) + "\n").encode()).hexdigest()}
+
+
+def native_inputs(root, logs, temp, run):
+    import host
+    script = ("import json, sys\nfrom pathlib import Path\n"
+        "sys.path.insert(0, str(Path(sys.argv[1]) / 'ci/scripts'))\nimport host\n"
+        "print(json.dumps(host.resolve_v8(Path(sys.argv[1]), sys.argv[2])))\n")
+    inputs = json.loads(run("v8-pinned-inputs", [sys.executable, "-B", "-c", script, root, TARGET], 600))
+    files = {key: Path(value) for key, value in inputs.items()}
+    archive, binding = files["RUSTY_V8_ARCHIVE"], files["RUSTY_V8_SRC_BINDING_PATH"]
+    assert archive.name.endswith("_" + TARGET + ".a.gz") and binding.name.endswith("_" + TARGET + ".rs")
+    verified = {key: {"name": path.name, "sha256": host.sha(path), "size": path.stat().st_size}
+        for key, path in files.items()}
+    host.write(logs / "v8-verified-inputs.json", verified)
+    unpacked = temp / "v8.a"
+    with ci_progress.stage("v8-archive-unpack"), gzip.open(archive, "rb") as source, unpacked.open("wb") as output:
+        shutil.copyfileobj(source, output)
+    members = run("v8-archive-members", ["ar", "t", unpacked]).splitlines()
+    headers = run("v8-archive-headers", ["readelf", "-W", "-h", unpacked])
+    inspected = v8_archive_headers(headers, unpacked, members)
+    assert all(host.sha(path) == verified[key]["sha256"] for key, path in files.items())
+    return {**inspected, "resolver": "pinned upstream codex_package.v8.resolve_codex_v8_cargo_env",
+        "verified_inputs": verified, "unpacked_archive_sha256": host.sha(unpacked),
+        "unpacked_archive_size": unpacked.stat().st_size, "inputs_unchanged": True,
+        "native_link_or_execution": "not_run"}
 
 
 def isolation(root, logs, temp, run, helper, label="isolation"):
@@ -177,13 +219,18 @@ def main(stage="initial-mechanisms"):
     assert root == Path(__file__).resolve().parents[2]
     record_run.record(logs)
     shutil.copyfile(Path(os.environ["RUNNER_TEMP"], "cm-worker-preflight.json"), logs / "worker-preflight.json")
-    scope = "initial-native-mechanisms" if stage == "initial-mechanisms" else "packaged-helper-mechanisms"
+    scope = {"initial-mechanisms": "initial-native-mechanisms", "packaged-helper": "packaged-helper-mechanisms",
+        "native-inputs-terminal": "native-inputs-and-terminal-mechanisms"}[stage]
     report = {"schema_version": 1, "scope": "linux-arm64-" + scope, "stage": stage, "status": "running",
         "provenance": policy, "platform_enabled": entry["enabled"], "cache_mode": "none", "cache_writes": 0,
         "production_host": "not_built", "v01": "partial", "qualification": "not_run", "release_ready": False,
         "not_run": ["packaged-helper", "complete-V01", "V02-V08", "production-Host", "full-runtime-qualification"], "gates": {}}
     if stage == "packaged-helper":
         report["not_run"][0] = "ABI-and-loader-probes-in-this-run"
+    if stage == "native-inputs-terminal":
+        report["not_run"][0] = "ABI-loader-helper-and-isolation-in-this-run"
+    else:
+        report["not_run"].append("V8-and-terminal")
     report_path = logs / "linux-arm64-preflight.json"
 
     def write():
@@ -211,7 +258,7 @@ def main(stage="initial-mechanisms"):
             for key in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CFLAGS", "CXXFLAGS", "RUSTC_WORKSPACE_WRAPPER"):
                 os.environ.pop(key, None)
             os.environ.update(CARGO_HOME=str(cargo_home), CARGO_TARGET_DIR=str(temp / "runtime-target"),
-                CARGO_INCREMENTAL="0", CARGO_BUILD_JOBS="2", RUSTC_WRAPPER="", RUSTUP_TOOLCHAIN="1.95.0")
+                CARGO_INCREMENTAL="0", CARGO_BUILD_JOBS="2", RUSTC_WRAPPER="", RUSTUP_TOOLCHAIN="1.95.0", LC_ALL="C")
             with contextlib.chdir(root):
                 rust = run("rust-toolchain", ["rustc", "-vV"])
                 assert "host: " + TARGET in rust
@@ -223,14 +270,33 @@ def main(stage="initial-mechanisms"):
                     "python_elf": elf(Path(sys.executable).resolve(strict=True)),
                     "cc_elf": elf(Path(shutil.which("cc")).resolve(strict=True)),
                     "strace": run("strace-version", ["strace", "--version"])}
-                system_isolation = isolation(root, logs, temp, run, Path("/usr/bin/bwrap"))
-                report["gates"]["isolation"] = {**system_isolation,
-                    "system_bwrap_sha256": system_isolation["helper"]["sha256"], "packaged_helper": "not_run"}
-                write()
+                if stage == "native-inputs-terminal":
+                    report["gates"]["terminal"] = json.loads(run("native-terminal", [sys.executable, "-B",
+                        root / "fixtures/native-loader/terminal.py"], 60))
+                    assert report["gates"]["terminal"]["status"] == "pass"
+                    write()
+                else:
+                    system_isolation = isolation(root, logs, temp, run, Path("/usr/bin/bwrap"))
+                    report["gates"]["isolation"] = {**system_isolation,
+                        "system_bwrap_sha256": system_isolation["helper"]["sha256"], "packaged_helper": "not_run"}
+                    write()
                 import host
                 with ci_progress.stage("prepare-pinned-source-only"):
                     host.prepare(root, logs)
                 workspace = root / host.HOST / "codex-rs/Cargo.toml"
+                if stage == "native-inputs-terminal":
+                    tool_inputs = {}
+                    for tool in ("rustc", "cargo", "ar", "readelf"):
+                        location = (run("native-" + tool + "-path", ["rustup", "which", tool]).strip()
+                            if tool in ("rustc", "cargo") else shutil.which(tool))
+                        executable = Path(location).resolve(strict=True)
+                        tool_inputs[tool] = {"path": str(executable), **elf(executable),
+                            "version": run("native-" + tool + "-version",
+                                [executable, "-Vv" if tool in ("rustc", "cargo") else "--version"])}
+                    report["gates"]["native-tools"]["verified_executables"] = tool_inputs
+                    report["gates"]["v8-inputs"] = native_inputs(root, logs, temp, run)
+                    report["status"] = "pass"
+                    return
                 if stage == "packaged-helper":
                     host.reject_native_overrides()
                     helper_target = temp / "helper-target"
@@ -326,6 +392,56 @@ def main(stage="initial-mechanisms"):
 
 def self_check():
     import host
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+    resolved = {"RUSTY_V8_ARCHIVE": "/verified/v8.a.gz", "RUSTY_V8_SRC_BINDING_PATH": "/verified/binding.rs"}
+    specs = {target: object() for target in ("x86_64-unknown-linux-gnu", TARGET)}
+    resolver = Mock(return_value=resolved)
+    modules = {"codex_package.targets": SimpleNamespace(TARGET_SPECS=specs),
+        "codex_package.v8": SimpleNamespace(resolve_codex_v8_cargo_env=resolver)}
+    with patch.dict(sys.modules, modules), patch.dict(os.environ, {}, clear=True), patch.object(sys, "path", list(sys.path)):
+        for target in specs:
+            assert host.resolve_v8(Path("/source"), target) == resolved
+            resolver.assert_called_with(specs[target])
+        assert host.resolve_v8(Path("/source")) == resolved
+        resolver.assert_called_with(specs["x86_64-unknown-linux-gnu"])
+        for invalid in ({}, {"RUSTY_V8_ARCHIVE": "/unpaired"}, {**resolved, "unexpected": "/extra"}):
+            resolver.return_value = invalid
+            try:
+                host.resolve_v8(Path("/source"), TARGET)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Incomplete or extra V8 input accepted")
+        resolver.reset_mock()
+        with patch.dict(os.environ, {"RUSTY_V8_ARCHIVE": ""}):
+            try:
+                host.resolve_v8(Path("/source"), TARGET)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("V8 resolver accepted an empty override")
+        resolver.assert_not_called()
+    archive, members = Path("/private/v8.a"), ["first.o", "second.o"]
+    headers = "".join("\nFile: " + str(archive) + "(" + member + ")\nELF Header:\n"
+        "  Class:                             ELF64\n"
+        "  Data:                              2's complement, little endian\n"
+        "  Type:                              REL (Relocatable file)\n"
+        "  Machine:                           AArch64\n" for member in members)
+    assert v8_archive_headers(headers, archive, members)["object_count"] == 2
+    for changed_text, changed_members in ((headers, []), (headers, members[:1]), (headers, list(reversed(members))),
+            ("unexpected\n" + headers, members), (headers + headers, members),
+            (headers.replace("ELF64", "ELF32"), members), (headers.replace("little endian", "big endian"), members),
+            (headers.replace("AArch64", "Advanced Micro Devices X86-64"), members),
+            (headers.replace("AArch64", "Advanced Micro Devices X86-64", 1), members),
+            (headers.replace("REL (Relocatable file)", "EXEC (Executable file)"), members),
+            (headers.replace("  Machine:", "  Missing:"), members), (headers + "  Machine: AArch64\n", members)):
+        try:
+            v8_archive_headers(changed_text, archive, changed_members)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Invalid V8 archive headers accepted")
     host.reject_native_overrides({})
     for key in ("V8_FROM_SOURCE", "RUSTY_V8_ARCHIVE", "RUSTY_V8_SRC_BINDING_PATH", "CODEX_SKIP_BWRAP_BUILD",
             "CODEX_BWRAP_SOURCE_DIR", "CODEX_BWRAP_SHA256", "PKG_CONFIG_PATH", "PKG_CONFIG_SYSROOT_DIR"):
@@ -433,4 +549,4 @@ if __name__ == "__main__":
     elif len(sys.argv) == 2:
         main(sys.argv[1])
     else:
-        raise SystemExit("Expected initial-mechanisms, packaged-helper or self-check")
+        raise SystemExit("Expected initial-mechanisms, packaged-helper, native-inputs-terminal or self-check")
