@@ -3,7 +3,7 @@
 import copy
 import json
 import os
-from cm_platforms import linux_native
+from cm_platforms import foreign_linux_target, linux_native
 from pathlib import Path
 import re
 import resource
@@ -830,7 +830,7 @@ def declaration_matrix(cases, probe, mods):
         ("capability", {"required_capabilities": ["unknown"]}, "manifest_contract"),
         ("abi-major", {"abi_major": 99}, "manifest_contract"),
         ("abi-minor", {"abi_minor": 99}, "manifest_contract"),
-        ("target", {"target": "aarch64-unknown-linux-gnu"}, "manifest_contract"),
+        ("target", {"target": foreign_linux_target()}, "manifest_contract"),
         ("reserved-mod", {"id": "core.impersonator"}, "reserved_name"),
         ("explicit-conflict", {"conflicts": ["compose-b"]}, "declared_conflict"),
         ("resource-path", {"resources": [{"path": "../secret", "size": 0, "sha256": "0" * 64}]}, "resource_path"),

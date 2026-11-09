@@ -13,7 +13,7 @@ import threading
 import time
 
 import host
-from cm_platforms import linux_native
+from cm_platforms import foreign_linux_target, linux_native
 from linux_ci import TARGET, cargo_args, execute, load_config, source_file
 from record_run import require_hosted_linux
 
@@ -165,7 +165,7 @@ def child_case(directory, command, home, mode="", action="load", expected=0, ext
 def startup_rejections(cases, binary, library, native):
     results = []
     for name, changes in (
-        ("target", {"target": "aarch64-unknown-linux-gnu"}), ("hash", {"payload_sha256": "0" * 64}),
+        ("target", {"target": foreign_linux_target()}), ("hash", {"payload_sha256": "0" * 64}),
         ("size", {"payload_size": 1}), ("major", {"abi_major": 2}), ("minor", {"abi_minor": 1}),
         ("capability", {"required_capabilities": ["unpublished.capability"]}),
         ("duplicate-capability", {"required_capabilities": [CAPABILITY, CAPABILITY]}),
@@ -190,7 +190,7 @@ def startup_rejections(cases, binary, library, native):
         payload = package / "payload.so"
         if name == "elf-architecture":
             data = bytearray(payload.read_bytes())
-            data[18:20] = (183).to_bytes(2, "little")
+            data[18:20] = linux_native(foreign_linux_target())["machine"].to_bytes(2, "little")
             payload.write_bytes(data)
         elif name == "elf-truncated":
             payload.write_bytes(b"\x7fELF")
