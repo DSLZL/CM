@@ -617,6 +617,33 @@ def self_check():
         with patch.object(sys.modules[__name__], "sha", wraps=sha) as hashes:
             assert bind_host_executables(calls * 3, root) == bound
             assert hashes.call_count == len(copies) + 1, "Repeated executions rehashed identical final paths"
+        import runtime_cases
+        metadata = read(root / "rootfs/inputs/producer.json")
+        with patch.dict(os.environ, {"CM_TARGET": "aarch64-unknown-linux-gnu"}):
+            write(root / "rootfs/inputs/producer.json", {**metadata,
+                "g02a": {"legacy_host": runtime_cases.deferred_check("g02a-plug-and-play/legacy-host")},
+                "review": {"reference": runtime_cases.deferred_check("review-plug-and-play/legacy-host")}})
+            assert bind_host_executables(calls, root) == bound
+            for name in ("/inputs/host/g02a-legacy/codex", "/inputs/host/review-legacy/codex"):
+                actual = root / ("rootfs" + name)
+                actual.parent.mkdir()
+                actual.write_bytes(data)
+                try:
+                    bind_host_executables(['1 execve("' + name + '", ["codex", "cm", "--home", "/profile/legacy", "install", "/inputs/mod.cmod"], 0x1) = 0'], root)
+                except AssertionError:
+                    pass
+                else:
+                    raise AssertionError("Deferred historical Host execution accepted")
+                actual.unlink()
+                actual.parent.rmdir()
+            with patch.dict(os.environ, {"CM_TARGET": "x86_64-unknown-linux-gnu"}):
+                try:
+                    bind_host_executables(calls, root)
+                except AssertionError:
+                    pass
+                else:
+                    raise AssertionError("Linux x64 historical audit was deferred")
+        write(root / "rootfs/inputs/producer.json", metadata)
         legacy = "/inputs/host/g02a-legacy/codex"
         old = root / ("rootfs" + legacy)
         old.parent.mkdir(parents=True)
@@ -1080,6 +1107,7 @@ def redact_trace(text, observer):
 
 
 def bind_host_executables(executions, root):
+    import runtime_cases
     primary = root / "rootfs/inputs/host/bin/codex"
     expected = sha(primary)
     producer = read(root / "rootfs/inputs/producer.json")
@@ -1096,10 +1124,17 @@ def bind_host_executables(executions, root):
     }
     if producer.get("g02a"):
         legacy = producer["g02a"]["legacy_host"]
-        assert legacy["path"] == "/inputs/host/g02a-legacy/codex"
-        rejected[legacy["path"]] = legacy["host"]["executable_sha256"]
+        if legacy.get("status") == "not_run":
+            assert legacy == runtime_cases.deferred_check("g02a-plug-and-play/legacy-host")
+        else:
+            assert legacy["path"] == "/inputs/host/g02a-legacy/codex"
+            rejected[legacy["path"]] = legacy["host"]["executable_sha256"]
     if producer.get("review"):
-        rejected["/inputs/host/review-legacy/codex"] = producer["review"]["reference"]["host"]["executable_sha256"]
+        reference = producer["review"]["reference"]
+        if reference.get("status") == "not_run":
+            assert reference == runtime_cases.deferred_check("review-plug-and-play/legacy-host")
+        else:
+            rejected["/inputs/host/review-legacy/codex"] = reference["host"]["executable_sha256"]
     if producer.get("upgrade"):
         rejected["/inputs/upgrade-baseline/host/bin/codex"] = producer["upgrade"]["baseline"]["pin"]["executable_sha256"]
     del data
@@ -1110,6 +1145,7 @@ def bind_host_executables(executions, root):
             continue
         path = Path(match[1])
         if str(path) in ("/inputs/host/g02a-legacy/codex", "/inputs/host/review-legacy/codex"):
+            assert str(path) in rejected, "Historical Host outside this platform's qualification scope"
             install = re.search(r', \["[^"]+", "cm", "--home", "[^"]+", "install"(?:,|\])', line)
             hook_binding = (producer.get("hooks") and str(path) == "/inputs/host/g02a-legacy/codex"
                 and re.search(r', \["[^"]+", "cm", "--home", "/profile/g01/binding-other-host", "doctor"\]', line))
