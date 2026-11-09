@@ -14,6 +14,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ci/scripts"))
 import ci_progress
+from cm_platforms import linux_native
 
 _INPUT_ROOT = None
 _INPUT_DIGESTS = {}
@@ -193,7 +194,7 @@ def cli_arguments(binary, cwd, endpoint, sandboxed=False):
 def run_case(root, directory, binary, home, mod_loaded, scenario="parallel", mode="",
              extra_env=None, command_prefix=(), expected_releases=1, restrictive=None,
              sandboxed=False, long_output=False, requested_limit=None, cm_options=(), on_handler=None):
-    assert os.uname().sysname == "Linux" and os.uname().machine == "x86_64"
+    assert os.uname().sysname == "Linux" and os.uname().machine == linux_native()["machine_name"]
     restrictive = mod_loaded if restrictive is None else restrictive
     directory.mkdir(parents=True)
     trace = directory / "core-trace.jsonl"

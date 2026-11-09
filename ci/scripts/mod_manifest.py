@@ -463,7 +463,7 @@ EVIDENCE = Path("/evidence/m01")
 
 
 def case_setup():
-    assert os.uname().sysname == "Linux" and os.uname().machine == "x86_64"
+    assert os.uname().sysname == "Linux" and os.uname().machine == linux_native()["machine_name"]
     WORK.mkdir(parents=True)
     EVIDENCE.mkdir(parents=True)
     inputs = Path("/inputs")
