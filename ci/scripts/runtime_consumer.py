@@ -1313,6 +1313,19 @@ def check_distribution_verifier_binding(source):
             .replace('fcntl(7,', 'fcntl(7</memfd:cm-distribution-bundle>(deleted),')
             .replace(' (deleted)>', '>(deleted)') for line in calls]
         assert bind_distribution_verifiers([*actual, execution], Path(temporary)) == {execution}
+        for directory in ("AT_FDCWD", "AT_FDCWD</work>"):
+            arm_alias = calls[-1].replace('symlink(', 'symlinkat(').replace(
+                '", "/proc/2/fd/10/bundle.jsonl"', '", ' + directory + ', "/proc/2/fd/10/bundle.jsonl"')
+            assert bind_distribution_verifiers([*actual[:-1], arm_alias, execution], Path(temporary)) == {execution}
+            for invalid in (arm_alias.replace(directory, "99</unbound>"),
+                    arm_alias.replace('/proc/2/fd/8', '/proc/2/fd/9'),
+                    arm_alias.replace('/proc/2/fd/8', '/proc/3/fd/8')):
+                try:
+                    bind_distribution_verifiers([*actual[:-1], invalid, execution], Path(temporary))
+                except AssertionError:
+                    pass
+                else:
+                    raise AssertionError("Unbound ARM verifier bundle escaped the outer audit")
         lineage = ['11 clone3({flags=CLONE_VM|CLONE_THREAD}, 88) = 12',
             '12 clone(child_stack=NULL, flags=CLONE_VM|CLONE_VFORK|SIGCHLD) = 13']
         missing = '13 execve("/memfd:cm-distribution-verifier", ["/memfd:cm-distribution-verifier", "send-telemetry"], 0x1) = -1 ENOENT (No such file or directory)'
@@ -1391,7 +1404,8 @@ def bind_distribution_verifiers(calls, consumer_root):
         for kind in ("verifier", "bundle")}
     aliases = set()
     for line in calls:
-        alias = re.search(r'symlink\("/proc/(\d+)/fd/(\d+)", "(/proc/\d+/fd/\d+/bundle[.]jsonl)"\) = 0', line)
+        alias_line = re.sub(r'\bsymlinkat\(("[^"\n]+"), AT_FDCWD(?:<[^>]*>)?, ', r'symlink(\1, ', line)
+        alias = re.search(r'symlink\("/proc/(\d+)/fd/(\d+)", "(/proc/\d+/fd/\d+/bundle[.]jsonl)"\) = 0', alias_line)
         if alias and (alias[1], alias[2]) in descriptors["bundle"]:
             pid = line.split(None, 1)[0]
             assert inner.get(pid, pid) == alias[1]
@@ -1528,7 +1542,7 @@ def observe(directory, evidence, *, consumer_root=None, result_paths=None):
         path.write_text(text, encoding="utf-8")
         assert not re.search(r'\b(?:sendto|recvfrom)\([^\n]*?, "(?!<payload redacted>)', text)
         calls = observer.complete_syscalls(text.splitlines())
-        verifier_calls.extend(line for line in calls if re.match(r'\d+\s+(?:execve|memfd_create|fcntl|openat|getpid|symlink|clone|clone3|fork|vfork)\(', line))
+        verifier_calls.extend(line for line in calls if re.match(r'\d+\s+(?:execve|memfd_create|fcntl|openat|getpid|symlink(?:at)?|clone|clone3|fork|vfork)\(', line))
         process_calls.extend(line for line in calls if re.match(r'\d+\s+(?:execve|clone|clone3|fork|vfork|getpid|gettid)\(', line))
         bwrap_executions.update(observer.bound_bwrap_executions(calls,
             ("/inputs/host/codex-resources/bwrap", "/work/m03/process/独立 Host/codex-resources/bwrap",

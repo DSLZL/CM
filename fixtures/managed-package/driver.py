@@ -178,6 +178,7 @@ def tui_mcp_listener(pid):
 def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=None):
     directory = EVIDENCE / name
     directory.mkdir(parents=True)
+    binary_sha256 = sha(binary) if tui or mutate else None
     provider = sdk.Provider(tool=tool)
     env = sdk.environment(home, directory, mode="async" if mutate else "handles")
     env["PATH"] = str(WORK / "global") + ":" + env["PATH"]
@@ -234,7 +235,7 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
             reader.start()
             sdk.core.await_barrier(lambda: any(row["event"] == "backend-selected" for row in
                 sdk.rows(directory / "native.jsonl")), process, "actual TUI Embedded InProcess start")
-            observed = identity(process, sha(binary))
+            observed = identity(process, binary_sha256)
             os.write(master, expected_input.encode())
             sdk.core.await_barrier(lambda: tui_text_visible(output, expected_input), process, "TUI rendered complete input")
             # Start the upstream 120 ms paste window after input was processed, not when the PTY write returned.
@@ -246,13 +247,14 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
             stderr = (directory / "stderr.log").open("w")
             process = subprocess.Popen(command, env=env, cwd=directory, stdin=subprocess.DEVNULL,
                 stdout=stdout, stderr=stderr, close_fds=True, start_new_session=True)
+            if mutate:
+                observed = identity(process, binary_sha256)
         sdk.core.await_barrier(lambda: any(row["event"] == "ready" for row in
             sdk.rows(directory / "native.jsonl")), process, "managed generation Ready")
         initial = state(home)
         if mutate:
             sdk.core.await_barrier(lambda: any(row["event"] == "worker-entered" for row in
                 sdk.rows(directory / "events.jsonl")), process, "live managed native worker")
-            observed = identity(process, sha(binary))
             mutate()
             assert state(home)[0] != initial[0], "Writer did not actually publish the next generation"
             (directory / "release").touch()
@@ -275,6 +277,7 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
         native = sdk.rows(directory / "native.jsonl")
         ready = next(row["detail"] for row in native if row["event"] == "ready")
         assert ready["plan"]["host"]["executable_sha256"] == sha(binary)
+        assert binary_sha256 is None or ready["plan"]["host"]["executable_sha256"] == binary_sha256
         assert set(ready["plan"]["mods"]) == set(initial[1]["enabled"])
         assert any(row["event"] == "stopped" for row in native), "Normal exit did not drain"
         if tui:

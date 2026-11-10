@@ -382,7 +382,8 @@ def case_support_exact():
     context = distribution.read(Path("/fixture/context.json"))
     import platform
     libc_name, libc_version = platform.libc_ver()
-    assert libc_name == "glibc" and context["image_os"] == "ubuntu24"
+    expected_image = {"linux-x64": "ubuntu24", "linux-arm64": "ubuntu24-arm64"}[linux_native()["key"]]
+    assert libc_name == "glibc" and context["image_os"] == expected_image
     claim = {"plan": preview["plan_projection"], "conditions": {"backend": "Embedded", "target": binary_index.TARGET,
         "cpu": linux_native()["cpu"], "glibc_version": libc_version, "mods": preview["plan_projection"]["candidate_contents"],
         "config_sha256": preview["plan_projection"]["config"]["sha256"],
