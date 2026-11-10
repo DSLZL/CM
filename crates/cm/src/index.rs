@@ -1121,7 +1121,10 @@ async fn support(
         || consumer.attempt != qualification.signer.attempt
         || consumer.source_sha != qualification.source.sha
         || consumer.worker_sha != qualification.signer.workflow_sha
-        || consumer.image_os != "ubuntu24"
+        || !matches!(
+            (loader::CPU, consumer.image_os.as_str()),
+            ("x86-64", "ubuntu24") | ("armv8-a", "ubuntu24-arm64")
+        )
         || !text(&consumer.image_version, 64)
         || !consumer.report.valid(16 * 1024 * 1024)
         || !consumer.audit.valid(16 * 1024 * 1024)
