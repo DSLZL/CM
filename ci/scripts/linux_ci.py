@@ -194,10 +194,12 @@ def build_commands(unit, cfg):
     clippy = cargo_args(unit, "clippy", cfg, cfg["clippy_profile"])
     if unit["id"] == "host":
         clippy += ["--package", "codex-app-server", "--package", "codex-core", "--package", "codex-tui"]
+    # Daemon tests spawn several CLIs with bounded startup probes on small hosted runners.
     return {
         "fmt": fmt + ["--", "--check"],
         "clippy": clippy + ["--all-targets", "--", "-D", "warnings"],
-        "test": cargo_args(unit, "test", cfg, cfg["test_profile"]),
+        "test": cargo_args(unit, "test", cfg, cfg["test_profile"])
+                + (["--", "--test-threads=1"] if unit["id"] == "host" else []),
         "build": cargo_args(unit, "build", cfg, cfg["build_profile"]),
     }
 

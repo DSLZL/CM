@@ -190,7 +190,7 @@ class IdentityTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 host.verify_build_cache(cache, self.sealed)
             (cache / "unexpected").unlink()
-            for change in ("origin", "failed-check", "missing-check", "wrong-command", "malformed-phase"):
+            for change in ("origin", "failed-check", "missing-check", "wrong-command", "parallel-test", "malformed-phase"):
                 candidate = copy.deepcopy(receipt)
                 if change == "origin":
                     candidate["origin"]["source_repository"] = "untrusted/source"
@@ -198,6 +198,10 @@ class IdentityTests(unittest.TestCase):
                     candidate["quality"][0]["return_code"] = 1
                 elif change == "wrong-command":
                     candidate["quality"][0]["command"].append("--unchecked-option")
+                elif change == "parallel-test":
+                    event = next(event for event in candidate["quality"] if event["phase"] == "host-test")
+                    self.assertEqual(event["command"][-2:], ["--", "--test-threads=1"])
+                    del event["command"][-2:]
                 elif change == "malformed-phase":
                     candidate["quality"][0]["phase"] = []
                 else:
