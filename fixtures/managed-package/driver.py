@@ -236,7 +236,8 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
             sdk.core.await_barrier(lambda: any(row["event"] == "backend-selected" for row in
                 sdk.rows(directory / "native.jsonl")), process, "actual TUI Embedded InProcess start")
             observed = identity(process, binary_sha256)
-            os.write(master, expected_input.encode())
+            sdk.core.await_barrier(lambda: b"\x1b[?2004h" in output, process, "actual TUI bracketed paste enabled")
+            os.write(master, b"\x1b[200~" + expected_input.encode() + b"\x1b[201~")
             sdk.core.await_barrier(lambda: tui_text_visible(output, expected_input), process, "TUI rendered complete input")
             # Start the upstream 120 ms paste window after input was processed, not when the PTY write returned.
             time.sleep(0.2)
@@ -255,9 +256,12 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
         if mutate:
             sdk.core.await_barrier(lambda: any(row["event"] == "worker-entered" for row in
                 sdk.rows(directory / "events.jsonl")), process, "live managed native worker")
-            mutate()
-            assert state(home)[0] != initial[0], "Writer did not actually publish the next generation"
-            (directory / "release").touch()
+            # Hold the live generation at the provider, outside the native worker's 45-second deadline.
+            with provider.condition:
+                (directory / "release").touch()
+                mutate()
+                assert process.poll() is None, "Managed generation exited during live mutations"
+                assert state(home)[0] != initial[0], "Writer did not actually publish the next generation"
         sdk.core.await_barrier(lambda: any(request["outputs"] for request in provider.requests) if tool
             else bool(provider.requests), process, "actual model/native round trip")
         if tui:
@@ -302,6 +306,8 @@ def business(name, home, sdk, *, binary=BINARY, tui=False, tool=True, mutate=Non
         if stderr:
             stderr.close()
         if process and not (directory / "result.json").exists():
+            if tui:
+                print("Managed TUI output tail:", repr(bytes(output[-8192:])), file=sys.stderr)
             write(directory / "result.json", {"command": command, "provider_endpoint": provider.endpoint,
                 "return_code": process.returncode, "error": repr(sys.exc_info()[1]),
                 "provider_requests": provider.requests, "provider_errors": provider.errors,
