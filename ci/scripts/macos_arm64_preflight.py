@@ -107,7 +107,7 @@ def snapshot_result(text):
 
 def seatbelt(probe, marker, work, port):
     literal = lambda value: "(literal " + json.dumps(str(value)) + ")"
-    return "\n".join(["(version 1)", "(deny default)",
+    return "\n".join(["(version 1)", "(deny default)", "(debug deny)",
         "(allow process-exec " + literal(probe) + ")",
         "(allow process-fork)", "(allow signal (target same-sandbox))",
         # libSystem checks whether a container is expected before main.
@@ -259,7 +259,9 @@ def main():
             except Exception as exc:
                 report["isolation"] = {"status": "failed", "error": str(exc)}
                 try:
-                    run("seatbelt-system-denials", ["/usr/bin/log", "show", "--last", "1m", "--style", "compact",
+                    run("seatbelt-system-dyld-profile", ["/bin/cat",
+                        "/System/Library/Sandbox/Profiles/dyld-support.sb"], codes=(0, 1))
+                    run("seatbelt-system-denials", ["/usr/bin/log", "show", "--last", "1m", "--info", "--debug", "--style", "compact",
                         "--predicate", 'process == "native-probe" OR eventMessage CONTAINS "native-probe"'], 30)
                 except Exception as diagnostic:
                     report["isolation"]["diagnostic_error"] = str(diagnostic)
