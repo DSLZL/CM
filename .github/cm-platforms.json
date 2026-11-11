@@ -30,7 +30,7 @@
     },
     "macos-arm64": {
       "repository": "DSLZL/CM-build-macos-arm64",
-      "runner": "macos-26",
+      "runner": "macos-15",
       "runner_os": "macOS",
       "runner_arch": "ARM64",
       "target": "aarch64-apple-darwin",
