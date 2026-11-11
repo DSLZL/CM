@@ -20,9 +20,6 @@ import cm_platforms
 from cm_platforms import linux_native
 import stat
 
-TARGET = cm_platforms.linux_native()["target"]
-
-
 def checked(value, pattern, label):
     if not isinstance(value, str) or not re.fullmatch(pattern, value) or "REPLACE" in value:
         raise RuntimeError("Missing or invalid " + label)
@@ -293,10 +290,10 @@ def preflight(*, mechanism_only=False):
     source, worker, sha, workflow_sha, request = identities(enabled=not mechanism_only)
     entry = cm_platforms.worker(enabled=not mechanism_only)
     kind, origin = build_request()
-    if mechanism_only and (entry["key"] != "linux-arm64" or os.environ.get("GITHUB_JOB") != "native-preflight"
+    if mechanism_only and (entry["key"] not in {"linux-arm64", "macos-arm64"} or os.environ.get("GITHUB_JOB") != "native-preflight"
             or kind != "qualification" or origin is not None
             or os.environ.get("CM_CACHE_MODE") != "none" or os.environ.get("ACTIONS_CACHE_MODE") != "none"):
-        raise RuntimeError("Only the cache-none Linux ARM64 mechanism preflight may inspect a disabled target")
+        raise RuntimeError("Only the reviewed cache-none native mechanism preflights may inspect a disabled target")
     # These APIs run before any requested CM source is checked out or executed.
     source_info = api("repos/" + source)
     worker_info = api("repos/" + worker)
@@ -349,8 +346,14 @@ def native_preflight():
 
 
 def native_preflight_self_check():
+    for key in ("linux-arm64", "macos-arm64"):
+        check_native_preflight_authority(key)
+    print("CM native mechanism authority self-check passed; product routing still requires an enabled exact native worker", flush=True)
+
+
+def check_native_preflight_authority(key):
     from unittest.mock import patch
-    entry = cm_platforms.select("linux-arm64")
+    entry = cm_platforms.select(key)
     source, worker, sha, workflow_sha, request = "DSLZL/CM", entry["repository"], "a" * 40, "b" * 40, "mechanism-check"
     env = {"GITHUB_JOB": "native-preflight", "GITHUB_REF": "refs/heads/main", "CM_CACHE_MODE": "none",
         "ACTIONS_CACHE_MODE": "none", "CM_BUILD_KIND": "qualification", "CM_HOST_ORIGIN": ""}
@@ -387,14 +390,14 @@ def native_preflight_self_check():
                     pass
                 else:
                     raise AssertionError("Changed mechanism preflight origin accepted")
-        with patch.object(cm_platforms, "worker", return_value=cm_platforms.select("linux-x64")):
-            try:
-                native_preflight()
-            except RuntimeError:
-                pass
-            else:
-                raise AssertionError("Mechanism exception escaped its reviewed ARM64 target")
-    print("CM ARM64 mechanism authority self-check passed; product routing requires an enabled exact native worker", flush=True)
+        for wrong in set(cm_platforms.load()["platforms"]) - {"linux-arm64", "macos-arm64"}:
+            with patch.object(cm_platforms, "worker", return_value=cm_platforms.select(wrong)):
+                try:
+                    native_preflight()
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError("Mechanism exception escaped its reviewed native targets")
 
 
 def benchmark_capacity(cache, pending_bytes=None, *, usage_floor=0):

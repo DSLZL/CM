@@ -266,3 +266,7 @@ ci/worker-files-linux-arm64.json
 ci/worker/linux-arm64-preflight.yml
 fixtures/native-loader/isolation.c
 fixtures/native-loader/terminal.py
+ci/scripts/macos_arm64_preflight.py
+ci/worker-files-macos-arm64.json
+ci/worker/macos-arm64-preflight.yml
+fixtures/native-loader/macos-preflight.c

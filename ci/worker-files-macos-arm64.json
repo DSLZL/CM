@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "configured": true,
+  "repository": "DSLZL/CM-build-macos-arm64",
+  "scope": "native-macos-arm64-mechanism-preflight-only",
+  "files": [
+    {
+      "source": ".github/cm-platforms.json",
+      "destination": ".github/cm-platforms.json"
+    },
+    {
+      "source": "ci/scripts/cm_platforms.py",
+      "destination": ".github/scripts/cm_platforms.py"
+    },
+    {
+      "source": "ci/scripts/worker_policy.py",
+      "destination": ".github/scripts/worker_policy.py"
+    },
+    {
+      "source": "ci/scripts/record_run.py",
+      "destination": ".github/scripts/record_run.py"
+    },
+    {
+      "source": "ci/worker/cache-authority/action.yml",
+      "destination": ".github/actions/cache-authority/action.yml"
+    },
+    {
+      "source": "ci/worker/cache-authority/index.js",
+      "destination": ".github/actions/cache-authority/index.js"
+    },
+    {
+      "source": "ci/worker/macos-arm64-preflight.yml",
+      "destination": ".github/workflows/native-preflight.yml"
+    }
+  ]
+}

@@ -51,8 +51,9 @@ def record(output):
         entry = cm_platforms.select()
     else:
         entry = require_hosted_worker(enabled=role != "platform_preflight")
-        if role == "platform_preflight" and (entry["key"] != "linux-arm64" or os.environ.get("GITHUB_JOB") != "native-preflight"):
-            raise RuntimeError("Disabled targets are restricted to the reviewed ARM64 mechanism preflight")
+        if role == "platform_preflight" and (entry["key"] not in {"linux-arm64", "macos-arm64"}
+                or os.environ.get("GITHUB_JOB") != "native-preflight"):
+            raise RuntimeError("Disabled targets are restricted to the reviewed native mechanism preflights")
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     source_root = os.environ.get("CM_SOURCE_DIR", os.environ["GITHUB_WORKSPACE"])
@@ -159,28 +160,38 @@ def self_check():
             patch("cm_platforms.__file__", str(Path(directory) / "runtime-inputs/cm_platforms.py")), \
             patch("platform.system", return_value="Linux"), patch("platform.machine", return_value="x86_64"):
         assert require_hosted_worker()["key"] == "linux-x64"
-    entry = cm_platforms.select("linux-arm64")
-    env = {"CM_EXECUTION_ROLE": "platform_preflight", "GITHUB_JOB": "native-preflight",
-        "GITHUB_REPOSITORY": entry["repository"], "CM_BUILDER_REPOSITORY": entry["repository"],
-        "CM_SOURCE_REPOSITORY": "DSLZL/CM", "CM_SOURCE_SHA": "a" * 40, "GITHUB_WORKFLOW_SHA": "b" * 40,
-        "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_WORKFLOW_REF": "reviewed",
-        "CM_CACHE_MODE": "none", "ACTIONS_CACHE_MODE": "none", "GITHUB_WORKSPACE": "/unused"}
-    with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, env, clear=True), \
-            patch(__name__ + ".require_hosted_worker", return_value=entry) as guard, \
-            patch("subprocess.check_output", return_value="a" * 40):
-        record(directory)
-        guard.assert_called_with(enabled=False)
-        value = json.loads(Path(directory, "run-metadata.json").read_text())["ci"]
-        assert value["execution_role"] == "platform_preflight" and value["cache_repository"] is None
-        for changes in ({"GITHUB_JOB": "build-write"}, {"CM_CACHE_MODE": "read"}, {"ACTIONS_CACHE_MODE": "write"},
-                {"CM_BUILDER_REPOSITORY": "other/repo"}, {"CM_SOURCE_SHA": "c" * 40}):
-            with patch.dict(os.environ, changes):
-                try:
-                    record(directory)
-                except RuntimeError:
-                    pass
-                else:
-                    raise AssertionError("Invalid native mechanism metadata authority accepted")
+    for key in ("linux-arm64", "macos-arm64"):
+        entry = cm_platforms.select(key)
+        env = {"CM_EXECUTION_ROLE": "platform_preflight", "GITHUB_JOB": "native-preflight",
+            "GITHUB_REPOSITORY": entry["repository"], "CM_BUILDER_REPOSITORY": entry["repository"],
+            "CM_SOURCE_REPOSITORY": "DSLZL/CM", "CM_SOURCE_SHA": "a" * 40, "GITHUB_WORKFLOW_SHA": "b" * 40,
+            "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_WORKFLOW_REF": "reviewed",
+            "CM_CACHE_MODE": "none", "ACTIONS_CACHE_MODE": "none", "GITHUB_WORKSPACE": "/unused"}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, env, clear=True), \
+                patch(__name__ + ".require_hosted_worker", return_value=entry) as guard, \
+                patch("subprocess.check_output", return_value="a" * 40):
+            record(directory)
+            guard.assert_called_with(enabled=False)
+            value = json.loads(Path(directory, "run-metadata.json").read_text())["ci"]
+            assert value["execution_role"] == "platform_preflight" and value["cache_repository"] is None
+            assert value["target"] == entry["target"] and value["runner_os"] == entry["runner_os"]
+            for changes in ({"GITHUB_JOB": "build-write"}, {"CM_CACHE_MODE": "read"}, {"ACTIONS_CACHE_MODE": "write"},
+                    {"CM_BUILDER_REPOSITORY": "other/repo"}, {"CM_SOURCE_SHA": "c" * 40}):
+                with patch.dict(os.environ, changes):
+                    try:
+                        record(directory)
+                    except RuntimeError:
+                        pass
+                    else:
+                        raise AssertionError("Invalid native mechanism metadata authority accepted")
+            for wrong in set(cm_platforms.load()["platforms"]) - {"linux-arm64", "macos-arm64"}:
+                with patch(__name__ + ".require_hosted_worker", return_value=cm_platforms.select(wrong)):
+                    try:
+                        record(directory)
+                    except RuntimeError:
+                        pass
+                    else:
+                        raise AssertionError("Mechanism metadata exception escaped its reviewed targets")
 
 
 if __name__ == "__main__":

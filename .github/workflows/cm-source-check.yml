@@ -90,6 +90,25 @@ jobs:
           arm_recipe = Path("ci/worker/linux-arm64-preflight.yml").read_text()
           assert "runs-on: ubuntu-24.04-arm" in arm_recipe and "cache-mode: none" in arm_recipe
           assert not any(value in arm_recipe for value in ("actions/cache/", "cache-save", "secrets.", "attestations: write", "id-token: write"))
+          mac_worker = json.loads(Path("ci/worker-files-macos-arm64.json").read_text())
+          assert mac_worker["repository"] == "DSLZL/CM-build-macos-arm64"
+          assert mac_worker["scope"] == "native-macos-arm64-mechanism-preflight-only"
+          assert mac_worker["files"] == [
+              {"source": source, "destination": destination} for source, destination in (
+                  (".github/cm-platforms.json", ".github/cm-platforms.json"),
+                  ("ci/scripts/cm_platforms.py", ".github/scripts/cm_platforms.py"),
+                  ("ci/scripts/worker_policy.py", ".github/scripts/worker_policy.py"),
+                  ("ci/scripts/record_run.py", ".github/scripts/record_run.py"),
+                  ("ci/worker/cache-authority/action.yml", ".github/actions/cache-authority/action.yml"),
+                  ("ci/worker/cache-authority/index.js", ".github/actions/cache-authority/index.js"),
+                  ("ci/worker/macos-arm64-preflight.yml", ".github/workflows/native-preflight.yml"))]
+          assert all(row["source"] in paths for row in mac_worker["files"])
+          mac_recipe = Path("ci/worker/macos-arm64-preflight.yml").read_text()
+          assert "runs-on: macos-26" in mac_recipe and "timeout-minutes: 15" in mac_recipe
+          assert mac_recipe.count("cache-mode: none") == 2 and "CM_CACHE_MODE: none" in mac_recipe
+          assert "macos_arm64_preflight.py" in mac_recipe and "cancel-in-progress: false" in mac_recipe
+          assert not any(value in mac_recipe for value in ("actions/cache/", "cache-save", "secrets.",
+              "attestations: write", "id-token: write", "cargo ", "rustup ", "sudo "))
           cfg = json.loads(Path(".github/cm-ci.json").read_text())
           if cfg["task_id"] == "CM-G05":
               baseline = json.loads(Path("ci/g05-baseline.json").read_text())
@@ -160,6 +179,8 @@ jobs:
           worker_policy.native_preflight_self_check()
           import linux_arm64_preflight
           linux_arm64_preflight.self_check()
+          import macos_arm64_preflight
+          macos_arm64_preflight.self_check()
           assert cm_platforms.select("linux-arm64")["enabled"]
           assert all(not row["enabled"] for key, row in cm_platforms.load()["platforms"].items()
               if key.startswith(("macos-", "windows-")))

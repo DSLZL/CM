@@ -317,6 +317,8 @@ def product_inputs(root, revision):
     administrative = {"ci/scripts/retry.py", "ci/scripts/worker_policy.py", "ci/scripts/record_run.py",
                       "ci/scripts/dispatch_build.py", "ci/scripts/ci_progress.py", "ci/scripts/mod_contract.py",
                       "ci/source-files.txt", "ci/worker-files.json", "ci/worker-files-linux-arm64.json", ".github/cm-routing.json",
+                      "ci/worker-files-macos-arm64.json", "ci/scripts/macos_arm64_preflight.py",
+                      "fixtures/native-loader/macos-preflight.c",
                       "ci/scripts/runtime_cases.py", "ci/scripts/acceptance_cache.py",
                       ".github/cm-build-routing.json", ".github/cm-platforms.json", "ci/scripts/cm_platforms.py",
                       *SUPPORT_RUNTIME_FILES, *INDEX_RUNTIME_FILES,
