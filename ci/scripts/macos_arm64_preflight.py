@@ -234,6 +234,11 @@ def main():
                     "protected_inputs_unchanged": True, "full_consumer_audit": "not_run"}
             except Exception as exc:
                 report["isolation"] = {"status": "failed", "error": str(exc)}
+                try:
+                    run("seatbelt-system-denials", ["/usr/bin/log", "show", "--last", "1m", "--style", "compact",
+                        "--predicate", 'process == "native-probe" OR eventMessage CONTAINS "native-probe"'], 30)
+                except Exception as diagnostic:
+                    report["isolation"]["diagnostic_error"] = str(diagnostic)
             report["status"] = "failed"
     except Exception as exc:
         report["status"], report["error"] = "failed", str(exc)
