@@ -144,7 +144,8 @@ def main():
                 raise RuntimeError("Missing exact macOS 26 hosted image identity")
             source = root / "fixtures/native-loader/macos-preflight.c"
             probe, payload = temp / "native-probe", temp / "sentinel.dylib"
-            compile_flags = ["-arch", "arm64", "-mmacosx-version-min=26.0", "-std=c11", "-Wall",
+            compile_flags = ["-isysroot", report["environment"]["sdk_path"],
+                "-arch", "arm64", "-mmacosx-version-min=26.0", "-std=c11", "-Wall",
                 "-Wextra", "-Werror", "-Wno-deprecated-declarations", "-D_DARWIN_C_SOURCE", "-O2"]
             run("compile-native-probe", [clang, *compile_flags, source, "-o", probe], 120)
             run("compile-sentinel-dylib", [clang, *compile_flags, "-DCM_PAYLOAD", "-dynamiclib",
