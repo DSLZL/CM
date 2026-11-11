@@ -46,7 +46,8 @@ def case_versions():
     assert set(value["dimensions"]) == {"artifact", "host_api", "abi", "capability", "manifest", "protocol", "state", "target", "hook"}
     schema = mod_manifest.read(Path("/fixture/schemas/support-matrix.schema.json"))
     assert schema["properties"]["task_id"] == {"const": "CM-S02"}
-    assert False, "CM-MP-LA V05 controlled single-case failure"
+    identity = mod_manifest.read(INPUTS / "host/cm-host.json")
+    assert value["support_line"] == identity["inputs"]["target"], "Version policy differs from the actual Host target"
     return report(0, "independent_version_dimensions", value)
 
 
