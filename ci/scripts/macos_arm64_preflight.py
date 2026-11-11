@@ -87,6 +87,8 @@ def seatbelt(probe, marker, work, port):
     return "\n".join(["(version 1)", "(deny default)",
         "(allow process-exec " + literal(probe) + ")",
         "(allow process-fork)", "(allow signal (target same-sandbox))",
+        # libSystem checks whether a container is expected before main.
+        '(allow system-mac-syscall (require-all (mac-policy-name "Sandbox") (mac-syscall-number 67)))',
         "(allow file-read-metadata)",
         "(allow file-read* file-map-executable (subpath \"/usr/lib\") (subpath \"/System/Library\"))",
         "(allow file-read* file-map-executable " + literal(probe) + ")",
@@ -122,7 +124,7 @@ def main():
             stream.write(json.dumps({"stage": label, "command": command, "timeout_seconds": timeout}) + "\n")
         result = ci_progress.run(logs, label, command, timeout)
         if result.returncode not in codes:
-            raise RuntimeError(label + " failed; see " + label + ".log")
+            raise RuntimeError(label + " failed (return code " + str(result.returncode) + "); see " + label + ".log")
         return (logs / (label + ".log")).read_text(errors="replace")
 
     try:
@@ -198,9 +200,14 @@ def main():
                     text = seatbelt(probe, marker, work, provider.getsockname()[1])
                     profile.write_text(text)
                     (logs / "seatbelt-profile.sb.txt").write_text(text)
-                    result = json.loads(run("seatbelt-native-parent-and-child", ["/usr/bin/env", "-i",
+                    sandbox = ["/usr/bin/env", "-i",
                         "PATH=/usr/bin:/bin", "HOME=" + str(work), "/usr/bin/sandbox-exec", "-f", profile,
-                        probe, "isolation", marker, work, *denied_files, clang, alias,
+                        probe]
+                    if json.loads(run("seatbelt-native-startup", [*sandbox, "startup"])) != {
+                            "status": "pass", "gate": "seatbelt-startup"}:
+                        raise RuntimeError("Sandboxed native process did not reach main")
+                    result = json.loads(run("seatbelt-native-parent-and-child", [*sandbox,
+                        "isolation", marker, work, *denied_files, clang, alias,
                         provider.getsockname()[1], outside.getsockname()[1]]))
                     hits = []
                     for connection in (provider, outside):
