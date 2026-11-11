@@ -105,6 +105,23 @@ def snapshot_result(text):
     return value
 
 
+def executable_map_result(text):
+    value = json.loads(text)
+    if (not isinstance(value, dict) or value.get("status") != "unqualified"
+            or value.get("gate") != "executable-map" or value.get("frozen_loading_qualified") is not False
+            or value.get("native_executed") is not False
+            or any(type(value.get(key)) is not bool for key in ("mapped", "object_changed"))
+            or any(type(value.get(key)) is not int or value[key] < 0 for key in ("map_errno", "write_errno"))
+            or type(value.get("retained_writer_bytes")) is not int or value["retained_writer_bytes"] not in (-1, 0, 1)):
+        raise RuntimeError("Executable mapping diagnostic cannot qualify frozen loading")
+    if (value["mapped"] != (value["map_errno"] == 0)
+            or (not value["mapped"] and (value["retained_writer_bytes"] != 0 or value["write_errno"] != 0))
+            or (value["retained_writer_bytes"] == -1) != (value["write_errno"] > 0)
+            or value["object_changed"] != (value["retained_writer_bytes"] == 1)):
+        raise RuntimeError("Inconsistent executable mapping diagnostic")
+    return value
+
+
 def seatbelt(probe, marker, work, port):
     literal = lambda value: "(literal " + json.dumps(str(value)) + ")"
     cryptexes = (
@@ -210,6 +227,15 @@ def main():
                 report["same_byte"] = snapshot_result(run("anonymous-directory-and-retained-writer",
                     [*clean, "snapshot", temp], codes=(2,)))
                 report["same_byte"]["controls"] = {"wrong_hash": wrong, "ordinary_dlopen": positive}
+                mapped_payload = temp / "mapped-candidate.dylib"
+                mapped_payload.write_bytes(payload.read_bytes())
+                if hashlib.sha256(mapped_payload.read_bytes()).hexdigest() != report["inputs"]["payload"]["sha256"]:
+                    raise RuntimeError("Executable mapping candidate differs from verified payload")
+                marker.unlink()
+                report["same_byte"]["executable_map"] = executable_map_result(run("executable-map-retained-writer",
+                    [*clean, "executable-map", mapped_payload], codes=(2,)))
+                if marker.exists() or hashlib.sha256(payload.read_bytes()).hexdigest() != report["inputs"]["payload"]["sha256"]:
+                    raise RuntimeError("Mapping diagnostic executed a constructor or changed the original payload")
             except Exception as exc:
                 report["same_byte"] = {"status": "failed", "error": str(exc), "frozen_loading_qualified": False}
             try:
@@ -383,6 +409,21 @@ def self_check():
             pass
         else:
             raise AssertionError("Malformed mechanism evidence was accepted")
+    mapped = {"status": "unqualified", "gate": "executable-map", "mapped": True, "map_errno": 0,
+        "retained_writer_bytes": 1, "write_errno": 0, "object_changed": True,
+        "frozen_loading_qualified": False, "native_executed": False}
+    for changes in ({}, {"retained_writer_bytes": -1, "write_errno": errno.EPERM, "object_changed": False},
+            {"mapped": False, "map_errno": errno.EPERM, "retained_writer_bytes": 0, "object_changed": False}):
+        assert executable_map_result(json.dumps({**mapped, **changes})) == {**mapped, **changes}
+    for changes in ({"status": "pass"}, {"frozen_loading_qualified": True}, {"native_executed": True},
+            {"mapped": False}, {"map_errno": errno.EPERM}, {"object_changed": False},
+            {"retained_writer_bytes": -1}, {"retained_writer_bytes": True}, {"write_errno": errno.EPERM}):
+        try:
+            executable_map_result(json.dumps({**mapped, **changes}))
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Executable mapping evidence was inconsistent or misrepresented as frozen loading")
     # Darwin-only probe inputs must not rebuild either qualified Linux Host.
     import retry
     module = Path(cm_platforms.__file__).read_text()

@@ -122,6 +122,62 @@ static int snapshot_probe(const char *root) {
     return 2;
 }
 
+static int executable_map_probe(const char *path) {
+    struct stat source, viewed;
+    int writer = open(path, O_RDWR | O_NOFOLLOW | O_CLOEXEC);
+    int reader = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    require(writer >= 0 && reader >= 0 && fstat(writer, &source) == 0 &&
+        fstat(reader, &viewed) == 0 && S_ISREG(source.st_mode) &&
+        source.st_dev == viewed.st_dev && source.st_ino == viewed.st_ino &&
+        source.st_size > 0 && source.st_size <= 32 * 1024 * 1024, "mapped diagnostic object");
+    unsigned char before, after;
+    require(pread(reader, &before, 1, 0) == 1, "mapped diagnostic initial byte");
+    unsigned char replacement = before ^ 0xff;
+    int barrier[2], receipt[2];
+    require(pipe(barrier) == 0 && pipe(receipt) == 0, "mapped diagnostic barriers");
+    struct { ssize_t bytes; int error; } outcome = {0, 0};
+    pid_t child = fork();
+    require(child >= 0, "retained writer fork");
+    if (child == 0) {
+        require(close(reader) == 0 && close(barrier[1]) == 0 && close(receipt[0]) == 0,
+            "writer descriptor boundaries");
+        char signal;
+        require(read(barrier[0], &signal, 1) == 1, "writer waits for mapping");
+        if (signal == 'w') {
+            outcome.bytes = pwrite(writer, &replacement, 1, 0);
+            outcome.error = outcome.bytes < 0 ? errno : 0;
+        } else {
+            require(signal == 's', "unavailable mapping skips write");
+        }
+        require(write(receipt[1], &outcome, sizeof(outcome)) == (ssize_t)sizeof(outcome) &&
+            close(writer) == 0 && close(barrier[0]) == 0 && close(receipt[1]) == 0,
+            "writer result and cleanup");
+        _exit(0);
+    }
+    require(close(writer) == 0 && close(barrier[0]) == 0 && close(receipt[1]) == 0,
+        "reader descriptor boundaries");
+    size_t size = (size_t)source.st_size;
+    /* A diagnostic mapping only; never parse, relocate or execute its bytes. */
+    void *mapping = mmap(NULL, size, PROT_READ | PROT_EXEC, MAP_PRIVATE, reader, 0);
+    int map_error = mapping == MAP_FAILED ? errno : 0;
+    require(write(barrier[1], mapping == MAP_FAILED ? "s" : "w", 1) == 1 &&
+        close(barrier[1]) == 0, "release writer after mapping");
+    require(read(receipt[0], &outcome, sizeof(outcome)) == (ssize_t)sizeof(outcome) && close(receipt[0]) == 0,
+        "mapped writer result");
+    int status;
+    require(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+        "mapped writer completed");
+    require(pread(reader, &after, 1, 0) == 1 && close(reader) == 0, "mapped object readback");
+    if (mapping != MAP_FAILED)
+        require(munmap(mapping, size) == 0, "diagnostic unmap");
+    printf("{\"status\":\"unqualified\",\"gate\":\"executable-map\",\"mapped\":%s,\"map_errno\":%d,"
+        "\"retained_writer_bytes\":%ld,\"write_errno\":%d,\"object_changed\":%s,"
+        "\"frozen_loading_qualified\":false,\"native_executed\":false}\n",
+        mapping == MAP_FAILED ? "false" : "true", map_error, (long)outcome.bytes, outcome.error,
+        before != after ? "true" : "false");
+    return 2;
+}
+
 static void denied_read(const char *path) {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     int code = errno;
@@ -202,6 +258,8 @@ int main(int argc, char **argv) {
         return load_control(argv[2], argv[3], argv[4]);
     if (argc == 3 && strcmp(argv[1], "snapshot") == 0)
         return snapshot_probe(argv[2]);
+    if (argc == 3 && strcmp(argv[1], "executable-map") == 0)
+        return executable_map_probe(argv[2]);
     if (argc == 11 && strcmp(argv[1], "isolation") == 0) {
         isolation_checks(argv);
         pid_t child = fork();
