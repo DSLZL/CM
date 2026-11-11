@@ -8,6 +8,7 @@ import socket
 import struct
 import sys
 import tempfile
+import time
 
 import ci_progress
 import cm_platforms
@@ -41,13 +42,17 @@ def macho(data, kind):
     if (magic != 0xfeedfacf or cpu != 0x100000c or filetype != kind or not count
             or command_bytes > len(data) - 32 or count > command_bytes // 8):
         raise RuntimeError("Probe must be a bounded thin native ARM64 Mach-O of the expected kind")
-    offset, dependencies = 32, []
+    offset, dependencies, image_uuid = 32, [], None
     for _ in range(count):
         if offset + 8 > 32 + command_bytes:
             raise RuntimeError("Truncated Mach-O load command")
         command, size = struct.unpack_from("<II", data, offset)
         if size < 8 or size % 8 or offset + size > 32 + command_bytes:
             raise RuntimeError("Invalid Mach-O load command")
+        if command == 0x1b:
+            if size != 24 or image_uuid is not None:
+                raise RuntimeError("Invalid or duplicate Mach-O UUID")
+            image_uuid = data[offset + 8:offset + 24].hex()
         if command in (0xc, 0x18 | 0x80000000, 0x1f | 0x80000000, 0x23 | 0x80000000):
             if size < 24:
                 raise RuntimeError("Truncated dylib load command")
@@ -62,10 +67,28 @@ def macho(data, kind):
                 raise RuntimeError("Probe depends on a non-system dylib")
             dependencies.append(name)
         offset += size
-    if offset != 32 + command_bytes:
+    if offset != 32 + command_bytes or image_uuid is None:
         raise RuntimeError("Mach-O command inventory is incomplete")
     return {"format": "macho64", "cpu": cpu, "subtype": subtype, "filetype": filetype,
-        "dependencies": dependencies, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        "dependencies": dependencies, "uuid": image_uuid,
+        "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def crash_matches(data, image_uuid):
+    if len(data) > 1024 * 1024:
+        return False
+    try:
+        text = data.decode("utf-8")
+        header, offset = json.JSONDecoder().raw_decode(text)
+        body = json.loads(text[offset:].strip())
+    except (UnicodeError, ValueError):
+        return False
+    return (isinstance(header, dict) and header.get("bug_type") == "309"
+        and isinstance(body, dict) and body.get("procName") == "native-probe"
+        and isinstance(body.get("usedImages"), list)
+        and any(isinstance(image, dict) and image.get("name") == "native-probe"
+            and isinstance(image.get("uuid"), str) and image["uuid"].replace("-", "").lower() == image_uuid
+            for image in body["usedImages"]))
 
 
 def snapshot_result(text):
@@ -117,6 +140,7 @@ def main():
         "request_id": os.environ["CM_REQUEST_ID"], "cache_mode": "none", "cache_writes": 0,
         "product_build": "not_run", "rust_v8_terminal": "not_run", "qualification": "not_run",
         "release_ready": False, "same_byte": {"status": "not_run"}, "isolation": {"status": "not_run"}}
+    started_at = time.time()
 
     def run(label, command, timeout=60, codes=(0,)):
         command = [str(value) for value in command]
@@ -242,17 +266,23 @@ def main():
                 report["isolation"]["crash_report"] = "not_observed"
                 try:
                     crashes = Path.home() / "Library/Logs/DiagnosticReports"
-                    for crash in crashes.glob("*native-probe*.ips"):
-                        with crash.open("rb") as stream:
-                            data = stream.read(1024 * 1024 + 1)
-                        if len(data) > 1024 * 1024:
-                            continue
-                        text = data.decode("utf-8")
-                        if str(probe) in text.replace("\\/", "/"):
-                            name = "seatbelt-native-crash-report.log"
-                            (logs / name).write_bytes(data)
-                            report["isolation"]["crash_report"] = name
-                            break
+                    deadline = time.monotonic() + 10
+                    while time.monotonic() < deadline and report["isolation"]["crash_report"] == "not_observed":
+                        for crash in crashes.glob("*native-probe*.ips"):
+                            try:
+                                if crash.stat().st_mtime < started_at:
+                                    continue
+                                with crash.open("rb") as stream:
+                                    data = stream.read(1024 * 1024 + 1)
+                            except OSError:
+                                continue
+                            if crash_matches(data, report["inputs"]["probe"]["uuid"]):
+                                name = "seatbelt-native-crash-report.log"
+                                (logs / name).write_bytes(data)
+                                report["isolation"]["crash_report"] = name
+                                break
+                        if report["isolation"]["crash_report"] == "not_observed":
+                            time.sleep(0.25)
                 except (OSError, UnicodeError) as diagnostic:
                     report["isolation"]["crash_report_error"] = str(diagnostic)
             report["status"] = "failed"
@@ -298,19 +328,28 @@ def self_check():
         else:
             raise AssertionError("Darwin mechanism environment accepted " + field)
     thin = struct.pack("<8I", 0xfeedfacf, 0x100000c, 0, 6, 1, 24, 0, 0) + struct.pack("<6I", 0x1b, 24, 0, 0, 0, 0)
-    assert macho(thin, 6)["cpu"] == 0x100000c
+    assert macho(thin, 6)["cpu"] == 0x100000c and macho(thin, 6)["uuid"] == "0" * 32
+    duplicate_uuid = thin[:16] + struct.pack("<II", 2, 48) + thin[24:] + thin[32:]
     dependency = b"/tmp/foreign.dylib\0"
     command_size = (24 + len(dependency) + 7) & ~7
     command = (struct.pack("<6I", 0xc, command_size, 24, 0, 0, 0) + dependency).ljust(command_size, b"\0")
     external = thin[:20] + struct.pack("<I", command_size) + thin[24:32] + command
     for data in (thin[:31], b"\0" * len(thin), thin[:4] + struct.pack("<I", 0x1000007) + thin[8:],
-            thin[:36] + struct.pack("<I", 32) + thin[40:], thin[:-1], external):
+            thin[:36] + struct.pack("<I", 32) + thin[40:], thin[:-1], external, duplicate_uuid):
         try:
             macho(data, 6)
         except RuntimeError:
             pass
         else:
             raise AssertionError("Invalid or foreign Mach-O accepted")
+    image_uuid = "0123456789abcdef" * 2
+    crash = (json.dumps({"bug_type": "309"}) + "\n" + json.dumps({"procName": "native-probe",
+        "procPath": "/Users/USER/*/native-probe", "usedImages": [
+            {"name": "native-probe", "uuid": "01234567-89ab-cdef-0123-456789abcdef"}]})).encode()
+    assert crash_matches(crash, image_uuid)
+    for data, expected_uuid in ((crash, "a" * 32), (crash[:-1], image_uuid), (b"\xff", image_uuid),
+            (b"{}", image_uuid), (b"x" * (1024 * 1024 + 1), image_uuid)):
+        assert not crash_matches(data, expected_uuid)
     result = {"status": "failed", "gate": "same-byte-snapshot", "retained_writer_control": "pass",
         "frozen_loading_qualified": False, "native_executed": False, "post_rmdir_create": False,
         "create_errno": errno.ENOENT, "adversarial_directory_reopen": False, "reopen_errno": 0}
