@@ -239,6 +239,22 @@ def main():
                         "--predicate", 'process == "native-probe" OR eventMessage CONTAINS "native-probe"'], 30)
                 except Exception as diagnostic:
                     report["isolation"]["diagnostic_error"] = str(diagnostic)
+                report["isolation"]["crash_report"] = "not_observed"
+                try:
+                    crashes = Path.home() / "Library/Logs/DiagnosticReports"
+                    for crash in crashes.glob("*native-probe*.ips"):
+                        with crash.open("rb") as stream:
+                            data = stream.read(1024 * 1024 + 1)
+                        if len(data) > 1024 * 1024:
+                            continue
+                        text = data.decode("utf-8")
+                        if str(probe) in text.replace("\\/", "/"):
+                            name = "seatbelt-native-crash-report.log"
+                            (logs / name).write_bytes(data)
+                            report["isolation"]["crash_report"] = name
+                            break
+                except (OSError, UnicodeError) as diagnostic:
+                    report["isolation"]["crash_report_error"] = str(diagnostic)
             report["status"] = "failed"
     except Exception as exc:
         report["status"], report["error"] = "failed", str(exc)
