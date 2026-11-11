@@ -107,13 +107,25 @@ def snapshot_result(text):
 
 def seatbelt(probe, marker, work, port):
     literal = lambda value: "(literal " + json.dumps(str(value)) + ")"
+    cryptexes = (
+        "/System/Volumes/Preboot/Cryptexes/App/System",
+        "/System/Volumes/Preboot/Cryptexes/Incoming/OS",
+        "/System/Volumes/Preboot/Cryptexes/OS",
+        "/System/Cryptexes/App",
+        "/System/Cryptexes/OS",
+    )
     return "\n".join(["(version 1)", "(deny default)", "(debug deny)",
         "(allow process-exec " + literal(probe) + ")",
         "(allow process-fork)", "(allow signal (target same-sandbox))",
         # libSystem checks whether a container is expected before main.
         '(allow system-mac-syscall (require-all (mac-policy-name "Sandbox") (mac-syscall-number 67)))',
         "(allow file-read-metadata)",
-        "(allow file-read* file-map-executable (subpath \"/usr/lib\") (subpath \"/System/Library\"))",
+        # dyld opens the root and native Cryptex directories before main.
+        '(allow file-read* (literal "/"))',
+        '(allow file-read* file-map-executable (subpath "/usr/lib") (subpath "/System/Library") '
+        + " ".join("(subpath " + json.dumps(path) + ")" for path in cryptexes) + ")",
+        "(allow file-read* "
+        + " ".join("(path-ancestors " + json.dumps(path) + ")" for path in cryptexes) + ")",
         "(allow file-read* file-map-executable " + literal(probe) + ")",
         "(allow file-read-data " + literal(marker) + ")",
         "(allow file-read* file-write* (subpath " + json.dumps(str(work)) + "))",
