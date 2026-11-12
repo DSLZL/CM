@@ -109,6 +109,21 @@ jobs:
           assert "macos_arm64_preflight.py" in mac_recipe and "cancel-in-progress: false" in mac_recipe
           assert not any(value in mac_recipe for value in ("actions/cache/", "cache-save", "secrets.",
               "attestations: write", "id-token: write", "cargo ", "rustup ", "sudo "))
+          win_worker = json.loads(Path("ci/worker-files-windows-x64.json").read_text())
+          assert win_worker["repository"] == "DSLZL/CM-build-windows-x64"
+          assert win_worker["scope"] == "native-windows-x64-loader-terminal-preflight-only"
+          assert win_worker["files"] == [
+              {"source": row["source"] if row["source"] != "ci/worker/macos-arm64-preflight.yml"
+                  else "ci/worker/windows-x64-preflight.yml", "destination": row["destination"]}
+              for row in mac_worker["files"]]
+          assert all(row["source"] in paths for row in win_worker["files"])
+          win_recipe = Path("ci/worker/windows-x64-preflight.yml").read_text()
+          assert "runs-on: windows-2025" in win_recipe and "timeout-minutes: 15" in win_recipe
+          assert win_recipe.count("cache-mode: none") == 2 and "CM_CACHE_MODE: none" in win_recipe
+          assert "windows_x64_preflight.py" in win_recipe and "cancel-in-progress: false" in win_recipe
+          assert "-arch=x64 -host_arch=x64" in win_recipe and "shell: pwsh" in win_recipe
+          assert not any(value in win_recipe for value in ("actions/cache/", "cache-save", "secrets.",
+              "attestations: write", "id-token: write", "cargo ", "rustup ", "netsh ", "New-NetFirewallRule"))
           cfg = json.loads(Path(".github/cm-ci.json").read_text())
           if cfg["task_id"] == "CM-G05":
               baseline = json.loads(Path("ci/g05-baseline.json").read_text())
@@ -181,6 +196,8 @@ jobs:
           linux_arm64_preflight.self_check()
           import macos_arm64_preflight
           macos_arm64_preflight.self_check()
+          import windows_x64_preflight
+          windows_x64_preflight.self_check()
           assert cm_platforms.select("linux-arm64")["enabled"]
           assert all(not row["enabled"] for key, row in cm_platforms.load()["platforms"].items()
               if key.startswith(("macos-", "windows-")))

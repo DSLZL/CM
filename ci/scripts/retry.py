@@ -319,6 +319,8 @@ def product_inputs(root, revision):
                       "ci/source-files.txt", "ci/worker-files.json", "ci/worker-files-linux-arm64.json", ".github/cm-routing.json",
                       "ci/worker-files-macos-arm64.json", "ci/scripts/macos_arm64_preflight.py",
                       "fixtures/native-loader/macos-preflight.c",
+                      "ci/worker-files-windows-x64.json", "ci/scripts/windows_x64_preflight.py",
+                      "fixtures/native-loader/windows-preflight.c",
                       "ci/scripts/runtime_cases.py", "ci/scripts/acceptance_cache.py",
                       ".github/cm-build-routing.json", ".github/cm-platforms.json", "ci/scripts/cm_platforms.py",
                       *SUPPORT_RUNTIME_FILES, *INDEX_RUNTIME_FILES,

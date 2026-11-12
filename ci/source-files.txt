@@ -270,3 +270,7 @@ ci/scripts/macos_arm64_preflight.py
 ci/worker-files-macos-arm64.json
 ci/worker/macos-arm64-preflight.yml
 fixtures/native-loader/macos-preflight.c
+ci/scripts/windows_x64_preflight.py
+ci/worker-files-windows-x64.json
+ci/worker/windows-x64-preflight.yml
+fixtures/native-loader/windows-preflight.c
