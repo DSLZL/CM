@@ -26,7 +26,7 @@ static BOOL profile_created;
 static const char request[] = "GET /controlled HTTP/1.0\r\n\r\n";
 static const char response[] = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nOK";
 static const wchar_t *environment_names[] = {
-    L"APPDATA", L"LOCALAPPDATA", L"SystemDrive", L"SystemRoot", L"TEMP", L"TMP", L"USERPROFILE"
+    L"APPDATA", L"LOCALAPPDATA", L"SystemDrive", L"SystemRoot", L"TEMP", L"TMP", L"USERPROFILE", L"windir"
 };
 
 static void cleanup(void) {
@@ -248,7 +248,8 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         DWORD space = (DWORD)(ARRAYSIZE(environment) - used - 1);
         if (!space) fail("child-env-value-bound", ERROR_INVALID_DATA);
         // AppContainer creation redirects profile/temp variables; never inherit the runner's full environment.
-        DWORD length = !wcscmp(environment_names[i], L"SystemRoot") ? GetWindowsDirectoryW(environment + used, space) :
+        DWORD length = (!wcscmp(environment_names[i], L"SystemRoot") || !wcscmp(environment_names[i], L"windir")) ?
+            GetWindowsDirectoryW(environment + used, space) :
             GetEnvironmentVariableW(environment_names[i], environment + used, space);
         if (!length || length >= space) fail("child-env-value", length ? ERROR_INSUFFICIENT_BUFFER : GetLastError());
         used += (size_t)length + 1;
@@ -326,7 +327,9 @@ int wmain(int argc, wchar_t **argv) {
     if (report_pipe) check_child_environment();
     WSADATA winsock;
     int error = WSAStartup(MAKEWORD(2, 2), &winsock);
-    if (error) fail("winsock-startup", (DWORD)error);
+    if (error) fail(!report_pipe ? "winsock-startup-outside" :
+        !wcscmp(argv[1], L"control") ? "winsock-startup-control" :
+        !wcscmp(argv[1], L"provider") ? "winsock-startup-provider" : "winsock-startup-client", (DWORD)error);
     if (report_pipe) {
         if (!wcscmp(argv[1], L"control")) {
             if (read_marker(L"all-packages.txt") || read_marker(L"private-input.txt"))

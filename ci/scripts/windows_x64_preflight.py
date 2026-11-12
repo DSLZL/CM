@@ -96,7 +96,7 @@ def mutation_record(text):
 def lpac_network_record(text):
     return exact_record(text, {"status": "pass", "gate": "lpac-internal-provider-network-control",
         "outside_token_checks": 3, "capability_count": 0, "ordinary_file_positive": True,
-        "environment_allowlist_count": 7, "environment_canary_not_inherited": True,
+        "environment_allowlist_count": 8, "environment_canary_not_inherited": True,
         "lpac_opt_out_file_denied": True, "private_file_positive": True, "provider_http_positive": True,
         "outside_listener_positive": True, "outside_connect_error": 10013, "outside_unexpected_accepts": 0,
         "profile_deleted": True, "full_isolation": "not_run", "product": "not_run"})
@@ -395,14 +395,14 @@ def self_check():
         else:
             raise AssertionError("Incomplete ConPTY observation accepted")
     lpac = {"status": "pass", "gate": "lpac-internal-provider-network-control", "outside_token_checks": 3,
-        "environment_allowlist_count": 7, "environment_canary_not_inherited": True,
+        "environment_allowlist_count": 8, "environment_canary_not_inherited": True,
         "capability_count": 0, "ordinary_file_positive": True, "lpac_opt_out_file_denied": True,
         "private_file_positive": True, "provider_http_positive": True, "outside_listener_positive": True,
         "outside_connect_error": 10013, "outside_unexpected_accepts": 0, "profile_deleted": True,
         "full_isolation": "not_run", "product": "not_run"}
     assert lpac_network_record(json.dumps(lpac)) == lpac
     changed = [{**lpac, key: value} for key, value in (("outside_token_checks", True), ("capability_count", 1),
-        ("environment_allowlist_count", True), ("environment_allowlist_count", 0),
+        ("environment_allowlist_count", True), ("environment_allowlist_count", 0), ("environment_allowlist_count", 7),
         ("outside_connect_error", 10061), ("outside_connect_error", 10060), ("outside_unexpected_accepts", 1),
         ("profile_deleted", False), ("full_isolation", "pass"), ("product", "pass"), ("extra", True))]
     changed += [{**lpac, key: False} for key, value in lpac.items() if type(value) is bool]
