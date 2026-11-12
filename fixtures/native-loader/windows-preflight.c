@@ -228,9 +228,13 @@ static int terminal_child(void) {
         || !GetConsoleScreenBufferInfo(output, &info) || info.dwSize.X != 96 || info.dwSize.Y != 28) return 2;
     puts("CM_READY:96x28"); fflush(stdout);
     int resized = 0, confirmed = 0;
-    ULONGLONG deadline = GetTickCount64() + 10000;
+    /* Report the child's deadline before the parent's ten-second exit wait. */
+    ULONGLONG deadline = GetTickCount64() + 8000;
     while (!resized || !confirmed) {
-        if (GetTickCount64() >= deadline || WaitForSingleObject(input, 1000) == WAIT_FAILED) return 2;
+        if (GetTickCount64() >= deadline || WaitForSingleObject(input, 1000) == WAIT_FAILED) {
+            printf("CM_CHILD_TIMEOUT:resize=%d,key=%d\n", resized, confirmed); fflush(stdout);
+            return 2;
+        }
         if (WaitForSingleObject(input, 0) != WAIT_OBJECT_0) continue;
         INPUT_RECORD records[16];
         DWORD count;
@@ -242,6 +246,9 @@ static int terminal_child(void) {
             if (records[i].EventType == KEY_EVENT && records[i].Event.KeyEvent.bKeyDown
                 && records[i].Event.KeyEvent.uChar.UnicodeChar == L'Y') confirmed = 1;
         }
+        if (!GetConsoleScreenBufferInfo(output, &info)) return 2;
+        printf("CM_INPUT:resize=%d,key=%d,size=%dx%d\n", resized, confirmed, info.dwSize.X, info.dwSize.Y);
+        fflush(stdout);
     }
     if (!GetConsoleScreenBufferInfo(output, &info) || info.dwSize.X != 120 || info.dwSize.Y != 40) return 2;
     puts("CM_DONE:120x40:Y"); fflush(stdout);
@@ -257,6 +264,8 @@ static int terminal(void) {
     HANDLE job = NULL;
     int ok = 0, attributes_ready = 0;
     DWORD exit_code = 999;
+    DWORD ready_wait = WAIT_FAILED, child_wait = WAIT_FAILED;
+    const char *phase = "setup";
     SIZE_T size = 0;
     COORD initial = {96, 28}, resized = {120, 40};
     if (!CreatePipe(&in_read, &in_write, NULL, 0) || !CreatePipe(&out_read, &out_write, NULL, 0)) goto done;
@@ -285,11 +294,18 @@ static int terminal(void) {
     if (!CreateProcessW(executable, command, NULL, NULL, FALSE, EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED,
         NULL, NULL, &startup.StartupInfo, &process)) goto done;
     if (!AssignProcessToJobObject(job, process.hProcess) || ResumeThread(process.hThread) == (DWORD)-1) goto done;
-    if (WaitForSingleObject(d.ready, 10000) != WAIT_OBJECT_0 || FAILED(ResizePseudoConsole(console, resized))) goto done;
+    phase = "wait-ready";
+    ready_wait = WaitForSingleObject(d.ready, 10000);
+    if (ready_wait != WAIT_OBJECT_0) goto done;
+    phase = "resize";
+    if (FAILED(ResizePseudoConsole(console, resized))) goto done;
+    phase = "write-input";
     DWORD written;
     if (!WriteFile(in_write, "Y", 1, &written, NULL) || written != 1) goto done;
-    if (WaitForSingleObject(process.hProcess, 10000) != WAIT_OBJECT_0
-        || !GetExitCodeProcess(process.hProcess, &exit_code) || exit_code != 0) goto done;
+    phase = "wait-child-exit";
+    child_wait = WaitForSingleObject(process.hProcess, 10000);
+    if (child_wait != WAIT_OBJECT_0 || !GetExitCodeProcess(process.hProcess, &exit_code) || exit_code != 0) goto done;
+    phase = "drain-output";
     ok = 1;
 done:
     if (process.hProcess && !ok) TerminateProcess(process.hProcess, 2);
@@ -309,6 +325,12 @@ done:
         CloseHandle(thread);
     }
     ok = ok && !d.overflow && d.error == ERROR_BROKEN_PIPE && strstr(d.text, "CM_DONE:120x40:Y") != NULL;
+    if (!ok) {
+        fprintf(stderr, "ConPTY failure phase=%s ready_wait=%lu child_wait=%lu child_exit=%lu output_hex=",
+            phase, ready_wait, child_wait, exit_code);
+        for (DWORD i = 0; i < d.used; ++i) fprintf(stderr, "%02x", (unsigned int)(unsigned char)d.text[i]);
+        fputc('\n', stderr);
+    }
     if (out_read) CloseHandle(out_read);
     if (in_read) CloseHandle(in_read);
     if (out_write) CloseHandle(out_write);
