@@ -348,7 +348,8 @@ def self_check():
     rows = b"100644 blob aaaa\tci/scripts/cm_platforms.py\x00"
     additions = b"".join(b"100644 blob bbbb\t" + path.encode() + b"\x00" for path in (
         "ci/worker-files-windows-x64.json", "ci/scripts/windows_x64_preflight.py",
-        "fixtures/native-loader/windows-preflight.c"))
+        "fixtures/native-loader/windows-preflight.c", "ci/scripts/windows_isolation_preflight.py",
+        "fixtures/native-loader/windows-isolation-probe.rs"))
     with patch.object(retry, "source", side_effect=lambda root, revision, path:
             module if path == "ci/scripts/cm_platforms.py" else recipe):
         for target in ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"):

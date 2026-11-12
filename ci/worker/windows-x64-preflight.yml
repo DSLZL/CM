@@ -1,4 +1,4 @@
-name: CM Windows x64 loader and terminal preflight
+name: CM Windows x64 mechanism preflight
 
 on:
   workflow_dispatch:
@@ -8,9 +8,17 @@ on:
         required: true
         type: string
       request_id:
-        description: Unique reviewed V01a request
+        description: Unique reviewed mechanism request
         required: true
         type: string
+      stage:
+        description: Reviewed bounded mechanism gate
+        required: true
+        default: loader-terminal
+        type: choice
+        options:
+          - loader-terminal
+          - isolation-availability
 
 permissions:
   contents: read
@@ -41,6 +49,7 @@ jobs:
       CM_BUILD_KIND: qualification
       CM_HOST_ORIGIN: ""
       CM_CACHE_MODE: none
+      CM_PREFLIGHT_STAGE: ${{ inputs.stage }}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUTF8: "1"
     steps:
@@ -83,6 +92,7 @@ jobs:
 
       - name: Select installed native x64 MSVC and Windows SDK
         run: |
+          if ($env:CM_PREFLIGHT_STAGE -notin @('loader-terminal', 'isolation-availability')) { throw 'Unknown mechanism stage' }
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
           $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ($LASTEXITCODE -ne 0 -or @($installation).Count -ne 1) { throw 'Missing unique native MSVC installation' }
@@ -103,7 +113,12 @@ jobs:
         run: python -B cm-source/ci/scripts/record_run.py "$env:CM_CI_LOG_DIR"
 
       - name: Run bounded fixed-handle loader and ConPTY controls
+        if: env.CM_PREFLIGHT_STAGE == 'loader-terminal'
         run: python -B cm-source/ci/scripts/windows_x64_preflight.py
+
+      - name: Probe native PSEC availability before product compilation
+        if: env.CM_PREFLIGHT_STAGE == 'isolation-availability'
+        run: python -B cm-source/ci/scripts/windows_isolation_preflight.py
 
       - name: Record final native job status
         if: always() && steps.source.outcome == 'success'

@@ -111,7 +111,7 @@ jobs:
               "attestations: write", "id-token: write", "cargo ", "rustup ", "sudo "))
           win_worker = json.loads(Path("ci/worker-files-windows-x64.json").read_text())
           assert win_worker["repository"] == "DSLZL/CM-build-windows-x64"
-          assert win_worker["scope"] == "native-windows-x64-loader-terminal-preflight-only"
+          assert win_worker["scope"] == "native-windows-x64-mechanism-preflight-only"
           assert win_worker["files"] == [
               {"source": row["source"] if row["source"] != "ci/worker/macos-arm64-preflight.yml"
                   else "ci/worker/windows-x64-preflight.yml", "destination": row["destination"]}
@@ -121,6 +121,10 @@ jobs:
           assert "runs-on: windows-2025" in win_recipe and "timeout-minutes: 15" in win_recipe
           assert win_recipe.count("cache-mode: none") == 2 and "CM_CACHE_MODE: none" in win_recipe
           assert "windows_x64_preflight.py" in win_recipe and "cancel-in-progress: false" in win_recipe
+          assert "windows_isolation_preflight.py" in win_recipe and "default: loader-terminal" in win_recipe
+          assert "if: env.CM_PREFLIGHT_STAGE == 'loader-terminal'" in win_recipe
+          assert "if: env.CM_PREFLIGHT_STAGE == 'isolation-availability'" in win_recipe
+          assert "-notin @('loader-terminal', 'isolation-availability')" in win_recipe
           assert "-arch=x64 -host_arch=x64" in win_recipe and "shell: pwsh" in win_recipe
           assert not any(value in win_recipe for value in ("actions/cache/", "cache-save", "secrets.",
               "attestations: write", "id-token: write", "cargo ", "rustup ", "netsh ", "New-NetFirewallRule"))
@@ -198,6 +202,8 @@ jobs:
           macos_arm64_preflight.self_check()
           import windows_x64_preflight
           windows_x64_preflight.self_check()
+          import windows_isolation_preflight
+          windows_isolation_preflight.self_check()
           assert cm_platforms.select("linux-arm64")["enabled"]
           assert all(not row["enabled"] for key, row in cm_platforms.load()["platforms"].items()
               if key.startswith(("macos-", "windows-")))
@@ -261,8 +267,12 @@ jobs:
           import os
           from pathlib import Path
           import re
+          import sys
           import tomllib
           import urllib.request
+
+          sys.path.insert(0, "ci/scripts")
+          from windows_isolation_preflight import SDK_REV
 
           cfg = json.loads(Path(".github/cm-ci.json").read_text(encoding="utf-8"))
           pins = cfg["upstream"]
@@ -295,7 +305,11 @@ jobs:
               if relative.endswith("rust-toolchain.toml"):
                   assert tomllib.loads(data.decode())["toolchain"]["channel"] == cfg["rust_toolchain"]
               if relative.endswith("/Cargo.toml"):
-                  assert tomllib.loads(data.decode())["workspace"]["members"], "Real workspace members required"
+                  workspace = tomllib.loads(data.decode())["workspace"]
+                  assert workspace["members"], "Real workspace members required"
+                  for package in ("appcontainer_common", "learning_mode_windows", "wxc_common"):
+                      dependency = workspace["dependencies"][package]
+                      assert dependency["git"] == "https://github.com/microsoft/mxc" and dependency["rev"] == SDK_REV
               if relative.endswith("/extensions.rs"):
                   assert "thread_extensions" in data.decode(), "Pinned composition source is missing"
           logs = Path(os.environ["CM_CI_LOG_DIR"])

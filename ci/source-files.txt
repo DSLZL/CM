@@ -274,3 +274,5 @@ ci/scripts/windows_x64_preflight.py
 ci/worker-files-windows-x64.json
 ci/worker/windows-x64-preflight.yml
 fixtures/native-loader/windows-preflight.c
+ci/scripts/windows_isolation_preflight.py
+fixtures/native-loader/windows-isolation-probe.rs

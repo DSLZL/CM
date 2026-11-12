@@ -2,7 +2,7 @@
   "schema_version": 1,
   "configured": true,
   "repository": "DSLZL/CM-build-windows-x64",
-  "scope": "native-windows-x64-loader-terminal-preflight-only",
+  "scope": "native-windows-x64-mechanism-preflight-only",
   "files": [
     {"source": ".github/cm-platforms.json", "destination": ".github/cm-platforms.json"},
     {"source": "ci/scripts/cm_platforms.py", "destination": ".github/scripts/cm_platforms.py"},
