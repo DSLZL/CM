@@ -297,6 +297,8 @@ static int terminal(void) {
     if (!UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
         console, sizeof(console), NULL, NULL)) goto done;
     startup.StartupInfo.cb = sizeof(startup);
+    /* Null std handles keep the launcher's redirected pipes/files out of ConPTY. */
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     wchar_t executable[4096], command[8192];
     DWORD n = GetModuleFileNameW(NULL, executable, 4096);
     if (!n || n >= 4096 || swprintf_s(command, 8192, L"\"%ls\" terminal-child", executable) < 0) goto done;
