@@ -70,14 +70,15 @@ def diagnose_exports():
     # Export presence after a failed gate cannot establish callable availability.
     names = (*EXPORTS, "Experimental_CreateProcessInSandbox", "Experimental_QuerySandboxSupport")
     value = {"diagnostic_only": True, "dll_loaded": False, "exports": dict.fromkeys(names),
-             "winerror": None, "callable_availability": "not_run"}
+             "winerror": None, "error": None, "callable_availability": "not_run"}
     try:
         model = ctypes.WinDLL("processmodel.dll", winmode=0x800, use_last_error=True)
         value["dll_loaded"] = True
         for name in names:
             value["exports"][name] = hasattr(model, name)
     except OSError as error:
-        value["winerror"] = error.winerror
+        value["winerror"] = getattr(error, "winerror", None)
+        value["error"] = {"type": type(error).__name__, "errno": error.errno, "message": str(error)}
     return value
 
 
@@ -236,7 +237,8 @@ def self_check():
         diagnostics = diagnose_exports()
         load.assert_called_once_with("processmodel.dll", winmode=0x800, use_last_error=True)
         assert diagnostics == {"diagnostic_only": True, "dll_loaded": True,
-            "exports": dict.fromkeys(names, True), "winerror": None, "callable_availability": "not_run"}
+            "exports": dict.fromkeys(names, True), "winerror": None, "error": None,
+            "callable_availability": "not_run"}
         for name in names:
             getattr(diagnostic_model, name).assert_not_called()
     with patch.object(ctypes, "WinDLL", return_value=SimpleNamespace(**{names[0]: Mock()}), create=True):
@@ -250,6 +252,13 @@ def self_check():
             assert not diagnostics["dll_loaded"] and diagnostics["winerror"] == code
             assert diagnostics["exports"] == dict.fromkeys(names)
             assert diagnostics["diagnostic_only"] and diagnostics["callable_availability"] == "not_run"
+            assert diagnostics["error"] == {"type": "OSError", "errno": None, "message": "controlled missing DLL"}
+    with patch.object(ctypes, "WinDLL", side_effect=FileNotFoundError("controlled missing module"), create=True):
+        diagnostics = diagnose_exports()
+        assert not diagnostics["dll_loaded"] and diagnostics["winerror"] is None
+        assert diagnostics["exports"] == dict.fromkeys(names)
+        assert diagnostics["error"] == {"type": "FileNotFoundError", "errno": None,
+                                        "message": "controlled missing module"}
     good_probe = {"gate": "native-psec-availability", "usable": True, "deny_paths": True, "full_isolation": "not_run"}
     probe_record(json.dumps(good_probe))
     for change in ({"usable": False}, {"deny_paths": False}, {"usable": 1},
