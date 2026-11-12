@@ -321,6 +321,7 @@ def product_inputs(root, revision):
                       "fixtures/native-loader/macos-preflight.c",
                       "ci/worker-files-windows-x64.json", "ci/scripts/windows_x64_preflight.py",
                       "fixtures/native-loader/windows-preflight.c",
+                      "fixtures/native-loader/windows-lpac-network.c",
                       "ci/scripts/windows_isolation_preflight.py", "fixtures/native-loader/windows-isolation-probe.rs",
                       "ci/scripts/runtime_cases.py", "ci/scripts/acceptance_cache.py",
                       ".github/cm-build-routing.json", ".github/cm-platforms.json", "ci/scripts/cm_platforms.py",

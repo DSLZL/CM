@@ -124,7 +124,9 @@ jobs:
           assert "windows_isolation_preflight.py" in win_recipe and "default: loader-terminal" in win_recipe
           assert "if: env.CM_PREFLIGHT_STAGE == 'loader-terminal'" in win_recipe
           assert "if: env.CM_PREFLIGHT_STAGE == 'isolation-availability'" in win_recipe
-          assert "-notin @('loader-terminal', 'isolation-availability')" in win_recipe
+          assert "if: env.CM_PREFLIGHT_STAGE == 'lpac-network'" in win_recipe
+          assert "-notin @('loader-terminal', 'isolation-availability', 'lpac-network')" in win_recipe
+          assert "fixtures/native-loader/windows-lpac-network.c" in paths
           assert "-arch=x64 -host_arch=x64" in win_recipe and "shell: pwsh" in win_recipe
           assert not any(value in win_recipe for value in ("actions/cache/", "cache-save", "secrets.",
               "attestations: write", "id-token: write", "cargo ", "rustup ", "netsh ", "New-NetFirewallRule"))

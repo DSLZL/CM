@@ -276,3 +276,4 @@ ci/worker/windows-x64-preflight.yml
 fixtures/native-loader/windows-preflight.c
 ci/scripts/windows_isolation_preflight.py
 fixtures/native-loader/windows-isolation-probe.rs
+fixtures/native-loader/windows-lpac-network.c

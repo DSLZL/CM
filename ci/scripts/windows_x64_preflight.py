@@ -93,10 +93,22 @@ def mutation_record(text):
     return exact_record(text, {**{key: value[key] for key in errors}, "native_executed": False})
 
 
+def lpac_network_record(text):
+    return exact_record(text, {"status": "pass", "gate": "lpac-internal-provider-network-control",
+        "outside_token_checks": 3, "capability_count": 0, "ordinary_file_positive": True,
+        "lpac_opt_out_file_denied": True, "private_file_positive": True, "provider_http_positive": True,
+        "outside_listener_positive": True, "outside_connect_error": 10013, "outside_unexpected_accepts": 0,
+        "profile_deleted": True, "full_isolation": "not_run", "product": "not_run"})
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     entry = record_run.require_hosted_worker(enabled=False)
     authority(json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text()), entry, os.environ)
+    mechanism = os.environ.get("CM_PREFLIGHT_STAGE", "loader-terminal")
+    if mechanism not in ("loader-terminal", "lpac-network"):
+        raise RuntimeError("Unknown Windows native mechanism stage")
+    lpac = mechanism == "lpac-network"
     if Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
         raise RuntimeError("Mechanism source must be the exact recorded source checkout")
     logs = Path(os.environ["CM_CI_LOG_DIR"]).resolve()
@@ -104,7 +116,8 @@ def main():
         raise RuntimeError("Fixture text evidence must stay in runner temporary storage")
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
-    report = {"schema_version": 1, "status": "running", "scope": "V01a-loader-terminal-fixtures-only",
+    report = {"schema_version": 1, "status": "running",
+        "scope": "V01c-lpac-network-fixture-only" if lpac else "V01a-loader-terminal-fixtures-only",
         "platform": KEY, "target": TARGET, "source_sha": os.environ["CM_SOURCE_SHA"],
         "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"], "run_id": int(os.environ["GITHUB_RUN_ID"]),
         "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]), "request_id": os.environ["CM_REQUEST_ID"],
@@ -176,11 +189,19 @@ def main():
                 raise RuntimeError("Missing MSVC/SDK/hosted image identity")
             report["environment"] = {"os": platform.platform(), "python": platform.python_version(),
                 "cl": str(cl), **sdk, "image_os": os.environ["ImageOS"], "image_version": os.environ["ImageVersion"]}
-            source = root / "fixtures/native-loader/windows-preflight.c"
+            source = root / "fixtures/native-loader" / ("windows-lpac-network.c" if lpac else "windows-preflight.c")
             probe, payload = temp / "native-probe.exe", temp / "sentinel.dll"
             flags = ["/nologo", "/Bv", "/std:c11", "/W4", "/WX", "/O2", "/MT", "/utf-8", "/TC"]
+            libraries = ["bcrypt.lib", *(["userenv.lib", "advapi32.lib", "ws2_32.lib"] if lpac else [])]
             run("compile-native-probe", [cl, *flags, source, "/Fo" + str(temp / "probe.obj"),
-                "/Fe" + str(probe), "/link", "bcrypt.lib", "/INCREMENTAL:NO"], 120)
+                "/Fe" + str(probe), "/link", *libraries, "/INCREMENTAL:NO"], 120)
+            if lpac:
+                report["inputs"] = {"probe": pe_fixture(probe.read_bytes(), False)}
+                run("probe-dependencies", [cl.with_name("dumpbin.exe"), "/nologo", "/dependents", probe])
+                _, text = run("lpac-internal-provider-network-control", [probe, "run"], 120)
+                report["controls"]["lpac_network"] = lpac_network_record(text)
+                report["status"] = "passed_bounded_network_controls_only"
+                return
             run("compile-sentinel-dll", [cl, *flags, "/DCM_PAYLOAD", "/LD", source,
                 "/Fo" + str(temp / "payload.obj"), "/Fe" + str(payload), "/link",
                 "/IMPLIB:" + str(temp / "sentinel.lib"), "/INCREMENTAL:NO"], 120)
@@ -263,7 +284,8 @@ def main():
         report["status"] = "failed"
         raise
     finally:
-        (logs / "windows-x64-mechanisms.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        name = "windows-x64-lpac-network.json" if lpac else "windows-x64-mechanisms.json"
+        (logs / name).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print("Windows V01a fixture controls passed; isolation, full dependency closure and product qualification remain NOT_RUN", flush=True)
 
 
@@ -349,7 +371,7 @@ def self_check():
     additions = b"".join(b"100644 blob bbbb\t" + path.encode() + b"\x00" for path in (
         "ci/worker-files-windows-x64.json", "ci/scripts/windows_x64_preflight.py",
         "fixtures/native-loader/windows-preflight.c", "ci/scripts/windows_isolation_preflight.py",
-        "fixtures/native-loader/windows-isolation-probe.rs"))
+        "fixtures/native-loader/windows-isolation-probe.rs", "fixtures/native-loader/windows-lpac-network.c"))
     with patch.object(retry, "source", side_effect=lambda root, revision, path:
             module if path == "ci/scripts/cm_platforms.py" else recipe):
         for target in ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"):
@@ -371,6 +393,24 @@ def self_check():
             pass
         else:
             raise AssertionError("Incomplete ConPTY observation accepted")
+    lpac = {"status": "pass", "gate": "lpac-internal-provider-network-control", "outside_token_checks": 3,
+        "capability_count": 0, "ordinary_file_positive": True, "lpac_opt_out_file_denied": True,
+        "private_file_positive": True, "provider_http_positive": True, "outside_listener_positive": True,
+        "outside_connect_error": 10013, "outside_unexpected_accepts": 0, "profile_deleted": True,
+        "full_isolation": "not_run", "product": "not_run"}
+    assert lpac_network_record(json.dumps(lpac)) == lpac
+    changed = [{**lpac, key: value} for key, value in (("outside_token_checks", True), ("capability_count", 1),
+        ("outside_connect_error", 10061), ("outside_connect_error", 10060), ("outside_unexpected_accepts", 1),
+        ("profile_deleted", False), ("full_isolation", "pass"), ("product", "pass"), ("extra", True))]
+    changed += [{**lpac, key: False} for key, value in lpac.items() if type(value) is bool]
+    changed += [{key: value for key, value in lpac.items() if key != "provider_http_positive"}]
+    for raw in [json.dumps(value) for value in changed] + ["[]", " " * 8193]:
+        try:
+            lpac_network_record(raw)
+        except (RuntimeError, ValueError):
+            pass
+        else:
+            raise AssertionError("Incomplete or overclaimed LPAC network observation accepted")
     print("Windows preflight authority, PE fixture and bounded native records self-check passed", flush=True)
 
 
