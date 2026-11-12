@@ -223,9 +223,22 @@ static DWORD WINAPI drain_output(LPVOID argument) {
 
 static int terminal_child(void) {
     HANDLE input = GetStdHandle(STD_INPUT_HANDLE), output = GetStdHandle(STD_OUTPUT_HANDLE);
-    CONSOLE_SCREEN_BUFFER_INFO info;
-    if (!SetConsoleMode(input, ENABLE_PROCESSED_INPUT | ENABLE_WINDOW_INPUT)
-        || !GetConsoleScreenBufferInfo(output, &info) || info.dwSize.X != 96 || info.dwSize.Y != 28) return 2;
+    CONSOLE_SCREEN_BUFFER_INFO info = {0};
+    BOOL mode_ok = SetConsoleMode(input, ENABLE_PROCESSED_INPUT | ENABLE_WINDOW_INPUT);
+    DWORD mode_error = mode_ok ? 0 : GetLastError();
+    BOOL size_ok = GetConsoleScreenBufferInfo(output, &info);
+    DWORD size_error = size_ok ? 0 : GetLastError();
+    wchar_t path[4096];
+    DWORD length = GetEnvironmentVariableW(L"CM_CI_LOG_DIR", path, 4096);
+    if (!length || length >= 4096 || wcscat_s(path, 4096, L"\\conpty-child-state.txt")) return 2;
+    FILE *state = NULL;
+    if (_wfopen_s(&state, path, L"a") || !state) return 2;
+    fprintf(state, "input_type=%lu output_type=%lu mode_ok=%d mode_error=%lu size_ok=%d size_error=%lu buffer=%dx%d window=%dx%d\n",
+        GetFileType(input), GetFileType(output), mode_ok, mode_error, size_ok, size_error,
+        info.dwSize.X, info.dwSize.Y, info.srWindow.Right - info.srWindow.Left + 1,
+        info.srWindow.Bottom - info.srWindow.Top + 1);
+    if (fclose(state)) return 2;
+    if (!mode_ok || !size_ok || info.dwSize.X != 96 || info.dwSize.Y != 28) return 2;
     puts("CM_READY:96x28"); fflush(stdout);
     int resized = 0, confirmed = 0;
     /* Report the child's deadline before the parent's ten-second exit wait. */
@@ -295,7 +308,8 @@ static int terminal(void) {
         NULL, NULL, &startup.StartupInfo, &process)) goto done;
     if (!AssignProcessToJobObject(job, process.hProcess) || ResumeThread(process.hThread) == (DWORD)-1) goto done;
     phase = "wait-ready";
-    ready_wait = WaitForSingleObject(d.ready, 10000);
+    HANDLE ready_or_exit[] = {d.ready, process.hProcess};
+    ready_wait = WaitForMultipleObjects(2, ready_or_exit, FALSE, 10000);
     if (ready_wait != WAIT_OBJECT_0) goto done;
     phase = "resize";
     if (FAILED(ResizePseudoConsole(console, resized))) goto done;
@@ -308,7 +322,10 @@ static int terminal(void) {
     phase = "drain-output";
     ok = 1;
 done:
-    if (process.hProcess && !ok) TerminateProcess(process.hProcess, 2);
+    if (process.hProcess && !ok) {
+        if (!GetExitCodeProcess(process.hProcess, &exit_code)) exit_code = 999;
+        if (exit_code == STILL_ACTIVE) TerminateProcess(process.hProcess, 2);
+    }
     if (in_write) CloseHandle(in_write);
     /* Drain stays active across ClosePseudoConsole on pre/post-26100 systems. */
     if (console) ClosePseudoConsole(console);
