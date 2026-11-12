@@ -25,6 +25,9 @@ static TOKEN_USER *owner;
 static BOOL profile_created;
 static const char request[] = "GET /controlled HTTP/1.0\r\n\r\n";
 static const char response[] = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+static const wchar_t *environment_names[] = {
+    L"APPDATA", L"LOCALAPPDATA", L"SystemDrive", L"SystemRoot", L"TEMP", L"TMP", L"USERPROFILE"
+};
 
 static void cleanup(void) {
     if (job) { CloseHandle(job); job = NULL; }
@@ -73,6 +76,28 @@ static void *token_info(HANDLE token, TOKEN_INFORMATION_CLASS kind) {
     if (!data) fail("token-memory", ERROR_OUTOFMEMORY);
     if (!GetTokenInformation(token, kind, data, size, &size)) fail("token-query", GetLastError());
     return data;
+}
+
+static void check_child_environment(void) {
+    BOOL seen[ARRAYSIZE(environment_names)] = {0};
+    LPWCH block = GetEnvironmentStringsW();
+    if (!block) fail("child-env-read", GetLastError());
+    for (LPWCH entry = block; *entry; entry += wcslen(entry) + 1) {
+        const wchar_t *separator = wcschr(entry, L'=');
+        BOOL found = FALSE;
+        for (size_t i = 0; separator && i < ARRAYSIZE(environment_names); ++i) {
+            size_t size = wcslen(environment_names[i]);
+            if ((size_t)(separator - entry) == size && !_wcsnicmp(entry, environment_names[i], size)) {
+                if (seen[i] || !separator[1]) fail("child-env-duplicate-or-empty", ERROR_INVALID_DATA);
+                seen[i] = found = TRUE;
+                break;
+            }
+        }
+        if (!found) fail("child-env-unexpected-name", ERROR_INVALID_DATA);
+    }
+    FreeEnvironmentStringsW(block);
+    for (size_t i = 0; i < ARRAYSIZE(seen); ++i)
+        if (!seen[i]) fail("child-env-missing-name", ERROR_ENVVAR_NOT_FOUND);
 }
 
 static void private_acl(wchar_t *path, PSID allowed, DWORD access) {
@@ -210,14 +235,25 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
     STARTUPINFOEXW startup = {0};
     SIZE_T size = 0;
     DWORD policy = PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT;
-    wchar_t command[1024], environment[MAX_PATH + 32], windows[MAX_PATH];
+    wchar_t command[1024], environment[4096];
     if (!CreatePipe(&child->reader, &writer, &security, 0) ||
             !SetHandleInformation(child->reader, HANDLE_FLAG_INHERIT, 0)) fail("report-pipe", GetLastError());
-    DWORD length = GetWindowsDirectoryW(windows, ARRAYSIZE(windows));
-    if (!length || length >= ARRAYSIZE(windows)) fail("system-root", GetLastError());
-    int count = _snwprintf_s(environment, ARRAYSIZE(environment), _TRUNCATE, L"SystemRoot=%ls", windows);
-    if (count < 0 || (size_t)count + 1 >= ARRAYSIZE(environment)) fail("child-env", ERROR_INVALID_DATA);
-    environment[count + 1] = L'\0';
+    size_t used = 0;
+    for (size_t i = 0; i < ARRAYSIZE(environment_names); ++i) {
+        if (ARRAYSIZE(environment) - used <= wcslen(environment_names[i]) + 2)
+            fail("child-env-name-bound", ERROR_INSUFFICIENT_BUFFER);
+        int count = swprintf_s(environment + used, ARRAYSIZE(environment) - used, L"%ls=", environment_names[i]);
+        if (count < 0) fail("child-env-name-bound", ERROR_INVALID_DATA);
+        used += (size_t)count;
+        DWORD space = (DWORD)(ARRAYSIZE(environment) - used - 1);
+        if (!space) fail("child-env-value-bound", ERROR_INVALID_DATA);
+        // AppContainer creation redirects profile/temp variables; never inherit the runner's full environment.
+        DWORD length = !wcscmp(environment_names[i], L"SystemRoot") ? GetWindowsDirectoryW(environment + used, space) :
+            GetEnvironmentVariableW(environment_names[i], environment + used, space);
+        if (!length || length >= space) fail("child-env-value", length ? ERROR_INSUFFICIENT_BUFFER : GetLastError());
+        used += (size_t)length + 1;
+    }
+    environment[used] = L'\0';
     if (_snwprintf_s(command, ARRAYSIZE(command), _TRUNCATE, L"\"%ls\" %ls %llu %u %u", executable, role,
             (unsigned long long)(UINT_PTR)writer, (unsigned int)provider, (unsigned int)canary) < 0)
         fail("child-command", ERROR_INVALID_DATA);
@@ -287,6 +323,7 @@ int wmain(int argc, wchar_t **argv) {
         report_pipe = (HANDLE)(UINT_PTR)wcstoull(argv[2], &end, 10);
         if (!report_pipe || !end || *end) fail("report-argument", ERROR_INVALID_DATA);
     } else if (argc != 2 || wcscmp(argv[1], L"run")) fail("arguments", ERROR_INVALID_PARAMETER);
+    if (report_pipe) check_child_environment();
     WSADATA winsock;
     int error = WSAStartup(MAKEWORD(2, 2), &winsock);
     if (error) fail("winsock-startup", (DWORD)error);
@@ -344,6 +381,7 @@ int wmain(int argc, wchar_t **argv) {
     DWORD *container = token_info(token, TokenIsAppContainer);
     if (*container) fail("outside-launcher-token", ERROR_INVALID_DATA);
     free(container); CloseHandle(token);
+    if (!SetEnvironmentVariableW(L"CM_LPAC_ENV_CANARY", L"must-not-inherit")) fail("outside-env-canary", GetLastError());
     unsigned char random[16];
     if (BCryptGenRandom(NULL, random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG))
         fail("fresh-profile-name", ERROR_GEN_FAILURE);
@@ -389,10 +427,11 @@ int wmain(int argc, wchar_t **argv) {
     if (FAILED(result)) fail("owned-profile-delete", (DWORD)result);
     profile_created = FALSE;
     cleanup(); WSACleanup();
-    puts("{\"status\":\"pass\",\"gate\":\"lpac-internal-provider-network-control\","
+    printf("{\"status\":\"pass\",\"gate\":\"lpac-internal-provider-network-control\","
          "\"outside_token_checks\":3,\"capability_count\":0,\"ordinary_file_positive\":true,"
+         "\"environment_allowlist_count\":%zu,\"environment_canary_not_inherited\":true,"
          "\"lpac_opt_out_file_denied\":true,\"private_file_positive\":true,\"provider_http_positive\":true,"
          "\"outside_listener_positive\":true,\"outside_connect_error\":10013,\"outside_unexpected_accepts\":0,"
-         "\"profile_deleted\":true,\"full_isolation\":\"not_run\",\"product\":\"not_run\"}");
+         "\"profile_deleted\":true,\"full_isolation\":\"not_run\",\"product\":\"not_run\"}\n", ARRAYSIZE(environment_names));
     return 0;
 }
