@@ -66,6 +66,21 @@ def probe_record(text):
                                "deny_paths": True, "full_isolation": "not_run"})
 
 
+def diagnose_exports():
+    # Export presence after a failed gate cannot establish callable availability.
+    names = (*EXPORTS, "Experimental_CreateProcessInSandbox", "Experimental_QuerySandboxSupport")
+    value = {"diagnostic_only": True, "dll_loaded": False, "exports": dict.fromkeys(names),
+             "winerror": None, "callable_availability": "not_run"}
+    try:
+        model = ctypes.WinDLL("processmodel.dll", winmode=0x800, use_last_error=True)
+        value["dll_loaded"] = True
+        for name in names:
+            value["exports"][name] = hasattr(model, name)
+    except OSError as error:
+        value["winerror"] = error.winerror
+    return value
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     entry = record_run.require_hosted_worker(enabled=False)
@@ -105,6 +120,9 @@ def main():
             print("PSEC API surface: " + json.dumps(report["surface"], sort_keys=True), flush=True)
             if not surface_ready(report["surface"]):
                 report["blocked_at"] = "api-surface-or-deny-path-support"
+                report["export_diagnostics"] = diagnose_exports()
+                print("Diagnostic exports (not callable availability): " +
+                      json.dumps(report["export_diagnostics"], sort_keys=True), flush=True)
                 raise RuntimeError("Native PSEC prerequisites unavailable; no SDK or CLI compilation")
         with tempfile.TemporaryDirectory(prefix="cm-wx-isolation-", dir=os.environ["RUNNER_TEMP"]) as directory:
             temp = Path(directory).resolve()
@@ -212,6 +230,26 @@ def self_check():
     with patch.object(ctypes, "WinDLL", side_effect=missing_dll, create=True):
         failed = native_surface()
         assert not surface_ready(failed) and failed["winerror"] == 126
+    names = (*EXPORTS, "Experimental_CreateProcessInSandbox", "Experimental_QuerySandboxSupport")
+    diagnostic_model = SimpleNamespace(**{name: Mock() for name in names})
+    with patch.object(ctypes, "WinDLL", return_value=diagnostic_model, create=True) as load:
+        diagnostics = diagnose_exports()
+        load.assert_called_once_with("processmodel.dll", winmode=0x800, use_last_error=True)
+        assert diagnostics == {"diagnostic_only": True, "dll_loaded": True,
+            "exports": dict.fromkeys(names, True), "winerror": None, "callable_availability": "not_run"}
+        for name in names:
+            getattr(diagnostic_model, name).assert_not_called()
+    with patch.object(ctypes, "WinDLL", return_value=SimpleNamespace(**{names[0]: Mock()}), create=True):
+        diagnostics = diagnose_exports()
+        assert diagnostics["dll_loaded"] and diagnostics["winerror"] is None
+        assert diagnostics["exports"] == {name: name == names[0] for name in names}
+    for code in (126, 193):
+        missing_dll.winerror = code
+        with patch.object(ctypes, "WinDLL", side_effect=missing_dll, create=True):
+            diagnostics = diagnose_exports()
+            assert not diagnostics["dll_loaded"] and diagnostics["winerror"] == code
+            assert diagnostics["exports"] == dict.fromkeys(names)
+            assert diagnostics["diagnostic_only"] and diagnostics["callable_availability"] == "not_run"
     good_probe = {"gate": "native-psec-availability", "usable": True, "deny_paths": True, "full_isolation": "not_run"}
     probe_record(json.dumps(good_probe))
     for change in ({"usable": False}, {"deny_paths": False}, {"usable": 1},
