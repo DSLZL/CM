@@ -117,8 +117,8 @@ static void fail(const char *gate, DWORD error) {
         if (restricted_network && !strcmp(gate, "provider-socket") && error == WSAEACCES)
             socket_access_diagnostic();
         if (socket_share) {
-            shared_peer_diagnostic(shared_source, "parent-source");
-            shared_peer_diagnostic(shared_peer, "parent-accepted");
+            shared_peer_diagnostic(shared_source, "parent-retained");
+            shared_peer_diagnostic(shared_peer, "parent-shared");
         }
         cleanup();
     }
@@ -789,12 +789,16 @@ int wmain(int argc, wchar_t **argv) {
     if (socket_share) {
         unsigned short port = 0;
         SOCKET server = listener(&port, FALSE);
-        shared_source = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (shared_source == INVALID_SOCKET) fail("socket-share-source", (DWORD)WSAGetLastError());
-        error = connect_bounded(shared_source, port);
+        shared_peer = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (shared_peer == INVALID_SOCKET) fail("socket-share-source", (DWORD)WSAGetLastError());
+        error = connect_bounded(shared_peer, port);
         if (error) fail("socket-share-connect", (DWORD)error);
-        shared_peer = accept(server, NULL, NULL);
-        if (shared_peer == INVALID_SOCKET) fail("socket-share-accept", (DWORD)WSAGetLastError());
+        shared_source = accept(server, NULL, NULL);
+        if (shared_source == INVALID_SOCKET) fail("socket-share-accept", (DWORD)WSAGetLastError());
+        DWORD timeout = 3000;
+        if (setsockopt(shared_source, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout)) ||
+                setsockopt(shared_source, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout)))
+            fail("socket-share-retained-timeout", (DWORD)WSAGetLastError());
         if (closesocket(server)) fail("socket-share-listener-close", (DWORD)WSAGetLastError());
         SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
         if (!CreatePipe(&socket_info_reader, &socket_info_writer, &security, 0) ||
