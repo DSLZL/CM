@@ -410,17 +410,6 @@ def main():
                                     ("bcrypt", "bcryptprimitives", "KERNEL32", "KernelBase", "ntdll",
                                         "USERENV", "ADVAPI32", "WS2_32"))):
                             run(name + "-permissions", [system / "icacls.exe", path])
-                        if installer_stage:
-                            report["winsock_registry_diagnostic_return_codes"] = {}
-                            for name, suffix in (("parameters", ""), ("protocol", r"\Protocol_Catalog9"),
-                                    ("namespace", r"\NameSpace_Catalog5")):
-                                path = r"Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\WinSock2\Parameters" + suffix
-                                code, _ = run("winsock-" + name + "-registry-permissions", [
-                                    system / "WindowsPowerShell/v1.0/powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
-                                    "-Command", "$ErrorActionPreference='Stop'; Import-Module ($PSHOME + "
-                                    r"'\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'); "
-                                    "(Get-Acl -LiteralPath '" + path + "').Sddl"], codes=(0, 1))
-                                report["winsock_registry_diagnostic_return_codes"][name] = code
                     args = [candidate, mode, source_canary, cache_canary, cl]
                 _, text = run(label, args, 120)
                 report["controls"][key] = parse(text)

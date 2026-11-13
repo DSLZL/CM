@@ -172,7 +172,7 @@ static void check_delayed_imports(void) {
 }
 #endif
 
-static void startup_diagnostics(void) {
+static void startup_diagnostics(BOOL outside) {
     const wchar_t *keys[] = {
         L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters",
         L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\Protocol_Catalog9",
@@ -181,10 +181,28 @@ static void startup_diagnostics(void) {
     const wchar_t *libraries[] = {L"mswsock.dll", L"nsi.dll", L"dnsapi.dll", L"nlaapi.dll", L"winrnr.dll"};
     for (size_t i = 0; i < ARRAYSIZE(keys); ++i) {
         HKEY key = NULL;
-        LSTATUS error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, keys[i], 0, KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS, &key);
+        LSTATUS error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, keys[i], 0,
+            outside ? KEY_READ : KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS, &key);
+        if (outside) {
+            PSECURITY_DESCRIPTOR descriptor = NULL;
+            wchar_t *text = NULL;
+            DWORD length = 0, query_error = (DWORD)error;
+            if (!query_error) query_error = GetSecurityInfo(key, SE_REGISTRY_KEY, DACL_SECURITY_INFORMATION,
+                NULL, NULL, NULL, NULL, &descriptor);
+            if (!query_error && (!descriptor || !IsValidSecurityDescriptor(descriptor)))
+                query_error = ERROR_INVALID_SECURITY_DESCR;
+            if (!query_error && !ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, SDDL_REVISION_1,
+                    DACL_SECURITY_INFORMATION, &text, &length)) query_error = GetLastError();
+            if (!query_error && (!text || !length || length > 8192 || wcsnlen_s(text, length) >= length))
+                query_error = ERROR_INVALID_DATA;
+            if (query_error) fprintf(stderr, "Outside registry DACL: %s; error=%lu\n", startup_gates[i], query_error);
+            else fprintf(stderr, "Outside registry DACL: %s; sddl=%ls\n", startup_gates[i], text);
+            LocalFree(text); LocalFree(descriptor);
+        }
         if (key && RegCloseKey(key)) fail("wsa-diagnostic-key-close", ERROR_INVALID_HANDLE);
-        message(11, (DWORD)error, startup_gates[i]);
+        if (!outside) message(11, (DWORD)error, startup_gates[i]);
     }
+    if (outside) return;
     for (size_t i = 0; i < ARRAYSIZE(libraries); ++i) {
         HMODULE library = LoadLibraryExW(libraries[i], NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
         DWORD error = library ? ERROR_SUCCESS : GetLastError();
@@ -839,6 +857,7 @@ int wmain(int argc, wchar_t **argv) {
 #if defined(CM_DELAY_DIAGNOSTIC)
     if (restricted_code_files || installer_files) check_delayed_imports();
 #endif
+    if (installer_files && !report_pipe) startup_diagnostics(TRUE);
     if (installer_files && report_pipe && !wcscmp(argv[1], L"client")) {
         check_file_controls(TRUE);
         message(9, file_path_checks, "file-path-checks");
@@ -846,7 +865,7 @@ int wmain(int argc, wchar_t **argv) {
     }
     WSADATA winsock;
     int error = WSAStartup(MAKEWORD(2, 2), &winsock);
-    if (error && installer_files && report_pipe) startup_diagnostics();
+    if (error && installer_files && report_pipe) startup_diagnostics(FALSE);
     if (error) fail(!report_pipe ? "winsock-startup-outside" :
         socket_share ? "winsock-startup-socket-share" : socket_policy >= 0 ? "winsock-startup-socket" :
         !wcscmp(argv[1], L"control") ? "winsock-startup-control" :
