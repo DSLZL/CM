@@ -31,6 +31,7 @@ static BOOL profile_created;
 static BOOL registry_mode;
 static BOOL restricted_mode;
 static BOOL restricted_network;
+static BOOL ordinary_restricted;
 static BOOL socket_share;
 static BOOL socket_transfer;
 static int socket_policy = -1;
@@ -463,7 +464,7 @@ static void inspect(Child *child, BOOL lpac, const wchar_t *role) {
             !(capabilities->Groups[0].Attributes & SE_GROUP_ENABLED) ||
             (capabilities->Groups[0].Attributes & SE_GROUP_USE_FOR_DENY_ONLY)))
         fail("outside-registry-capability", ERROR_INVALID_DATA);
-    if (lpac && restricted_mode)
+    if (restricted_mode && (lpac || (ordinary_restricted && wcscmp(role, L"control"))))
         inspect_restrictions(token, socket_share ? "socket-share" :
             socket_policy >= 0 ? "socket" : !wcscmp(role, L"provider") ? "provider" : "client");
     free(container); free(identity); free(capabilities); free(user); free(integrity);
@@ -499,7 +500,8 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         used += (size_t)length + 1;
     }
     environment[used] = L'\0';
-    const wchar_t *mode = peer_policy >= 0 ? peer_modes[peer_policy] : socket_transfer ? L"shared-transfer" :
+    const wchar_t *mode = ordinary_restricted ? L"restricted-appcontainer-network" :
+        peer_policy >= 0 ? peer_modes[peer_policy] : socket_transfer ? L"shared-transfer" :
         socket_share ? L"socket-share" : socket_policy >= 0 ? socket_modes[socket_policy] :
         restricted_network ? L"restricted-network" : restricted_mode ? L"registry-restricted" :
             registry_mode ? L"registry-read" : L"";
@@ -534,12 +536,13 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
     startup.StartupInfo.cb = sizeof(startup);
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
-    BOOL created = lpac && restricted_mode ?
+    BOOL restricted_child = restricted_mode && (lpac || (ordinary_restricted && wcscmp(role, L"control")));
+    BOOL created = restricted_child ?
         CreateProcessAsUserW(restricted_base, executable, command, NULL, NULL, TRUE, flags,
             environment, root, &startup.StartupInfo, &child->process) :
         CreateProcessW(executable, command, NULL, NULL, TRUE, flags,
             environment, root, &startup.StartupInfo, &child->process);
-    if (!created) fail(lpac && restricted_mode ?
+    if (!created) fail(restricted_child ?
         (socket_share ? "socket-share-restricted-create" : socket_policy >= 0 ? "socket-restricted-create" :
             !wcscmp(role, L"provider") ? "provider-restricted-create" : "client-restricted-create") :
         "child-create", GetLastError());
@@ -592,6 +595,7 @@ int wmain(int argc, wchar_t **argv) {
     if (!separator) fail("root-path", ERROR_INVALID_DATA);
     *separator = L'\0';
     const wchar_t *mode = argc == 6 || argc == 7 ? argv[5] : argc == 2 ? argv[1] : NULL;
+    ordinary_restricted = mode && !wcscmp(mode, L"restricted-appcontainer-network");
     socket_transfer = mode && !wcscmp(mode, L"shared-transfer");
     socket_share = socket_transfer || (mode && !wcscmp(mode, L"socket-share"));
     for (size_t i = 0; mode && i < ARRAYSIZE(socket_modes); ++i)
@@ -602,10 +606,10 @@ int wmain(int argc, wchar_t **argv) {
         if ((argc == 7) != socket_share) fail("socket-share-arguments", ERROR_INVALID_PARAMETER);
         if (argc >= 6) {
             if (wcscmp(argv[5], L"registry-read") && wcscmp(argv[5], L"registry-restricted") &&
-                    wcscmp(argv[5], L"restricted-network") && socket_policy < 0 && !socket_share)
+                    wcscmp(argv[5], L"restricted-network") && !ordinary_restricted && socket_policy < 0 && !socket_share)
                 fail("child-mode", ERROR_INVALID_PARAMETER);
             registry_mode = TRUE;
-            restricted_network = !wcscmp(argv[5], L"restricted-network");
+            restricted_network = ordinary_restricted || !wcscmp(argv[5], L"restricted-network");
             restricted_mode = (socket_share && peer_policy < 0) || peer_policy == 3 ||
                 socket_policy == 2 || restricted_network || !wcscmp(argv[5], L"registry-restricted");
         }
@@ -623,9 +627,9 @@ int wmain(int argc, wchar_t **argv) {
     } else {
         if (argc != 2 || (wcscmp(argv[1], L"run") && wcscmp(argv[1], L"registry-read") &&
                 wcscmp(argv[1], L"registry-restricted") && wcscmp(argv[1], L"restricted-network") &&
-                socket_policy < 0 && !socket_share))
+                !ordinary_restricted && socket_policy < 0 && !socket_share))
             fail("arguments", ERROR_INVALID_PARAMETER);
-        restricted_network = !wcscmp(argv[1], L"restricted-network");
+        restricted_network = ordinary_restricted || !wcscmp(argv[1], L"restricted-network");
         restricted_mode = (socket_share && peer_policy < 0) || peer_policy == 3 ||
             socket_policy == 2 || restricted_network || !wcscmp(argv[1], L"registry-restricted");
         registry_mode = peer_policy >= 0 || socket_policy >= 0 || restricted_mode || !wcscmp(argv[1], L"registry-read");
@@ -795,7 +799,7 @@ int wmain(int argc, wchar_t **argv) {
             access = open_host_environment(KEY_SET_VALUE);
             if (access != ERROR_SUCCESS) fail("outside-host-env-write-handle", (DWORD)access);
         }
-        derive_registry_capability();
+        if (!ordinary_restricted) derive_registry_capability();
     }
     if (!SetEnvironmentVariableW(L"CM_LPAC_ENV_CANARY", L"must-not-inherit")) fail("outside-env-canary", GetLastError());
     unsigned char random[16];
@@ -899,10 +903,10 @@ int wmain(int argc, wchar_t **argv) {
         if (accepted == INVALID_SOCKET) fail("outside-baseline-accept", (DWORD)WSAGetLastError());
         closesocket(accepted); closesocket(baseline);
         finished(spawn(0, L"control", FALSE, 0, 0));
-        Child *provider = spawn(1, L"provider", TRUE, 0, 0);
+        Child *provider = spawn(1, L"provider", !ordinary_restricted, 0, 0);
         DWORD port = receive(provider, 1);
         if (!port || port > 65535) fail("provider-port", ERROR_INVALID_DATA);
-        finished(spawn(2, L"client", TRUE, (unsigned short)port, canary_port));
+        finished(spawn(2, L"client", !ordinary_restricted, (unsigned short)port, canary_port));
         finished(provider);
         fd_set readable;
         struct timeval now = {0, 0};
@@ -966,17 +970,22 @@ int wmain(int argc, wchar_t **argv) {
             "\"restricting_sid_count\":3,\"restricting_sid_policy\":\"world-users-private-nt\","
             "\"private_sid_group_absence_checked\":true,\"private_sid_file_grants\":%lu,"
             "\"private_sid_default_dacl_checked\":true,"
-            "\"privilege_allowlist_checked\":true,\"capability_count\":1,\"capability\":\"registryRead\","
+            "\"privilege_allowlist_checked\":true,\"capability_count\":%u%s,"
             "\"ordinary_file_positive\":true,\"environment_allowlist_count\":%zu,"
-            "\"environment_canary_not_inherited\":true,\"lpac_opt_out_file_denied\":true,"
+            "\"environment_canary_not_inherited\":true,\"%s\":true,"
             "\"private_file_positive\":true,\"child_winsock_startup_checks\":3,"
             "\"host_registry_baseline\":true,\"host_environment_read_error\":5,"
             "\"host_environment_write_open_error\":5,\"profile_deleted\":true,"
-            "\"network\":\"%s\",\"full_isolation\":\"not_run\",\"product\":\"not_run\"%s}\n",
-            restricted_network ? "lpac-restricted-network-control" : "lpac-restricted-registry-control",
-            private_sid_file_grants, ARRAYSIZE(environment_names), restricted_network ? "pass" : "not_run",
+            "\"network\":\"%s\",\"full_isolation\":\"not_run\",\"product\":\"not_run\"%s%s}\n",
+            ordinary_restricted ? "restricted-appcontainer-network-control" :
+                restricted_network ? "lpac-restricted-network-control" : "lpac-restricted-registry-control",
+            private_sid_file_grants, ordinary_restricted ? 0u : 1u,
+            ordinary_restricted ? "" : ",\"capability\":\"registryRead\"",
+            ARRAYSIZE(environment_names), ordinary_restricted ? "all_packages_file_denied" : "lpac_opt_out_file_denied",
+            restricted_network ? "pass" : "not_run",
             restricted_network ? ",\"provider_http_positive\":true,\"outside_listener_positive\":true,"
-                "\"outside_connect_error\":10013,\"outside_unexpected_accepts\":0" : "");
+                "\"outside_connect_error\":10013,\"outside_unexpected_accepts\":0" : "",
+            ordinary_restricted ? ",\"all_application_packages_opt_out\":false" : "");
         return 0;
     }
     printf("{\"status\":\"pass\",\"gate\":\"%s\","

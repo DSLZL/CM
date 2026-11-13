@@ -27,6 +27,7 @@ on:
           - lpac-socket-share
           - lpac-shared-peer-observation
           - lpac-shared-transfer
+          - restricted-appcontainer-network
 
 permissions:
   contents: read
@@ -100,7 +101,7 @@ jobs:
 
       - name: Select installed native x64 MSVC and Windows SDK
         run: |
-          if ($env:CM_PREFLIGHT_STAGE -notin @('loader-terminal', 'isolation-availability', 'lpac-network', 'lpac-registry-read', 'lpac-registry-restricted', 'lpac-restricted-network', 'lpac-socket-availability', 'lpac-socket-share', 'lpac-shared-peer-observation', 'lpac-shared-transfer')) { throw 'Unknown mechanism stage' }
+          if ($env:CM_PREFLIGHT_STAGE -notin @('loader-terminal', 'isolation-availability', 'lpac-network', 'lpac-registry-read', 'lpac-registry-restricted', 'lpac-restricted-network', 'lpac-socket-availability', 'lpac-socket-share', 'lpac-shared-peer-observation', 'lpac-shared-transfer', 'restricted-appcontainer-network')) { throw 'Unknown mechanism stage' }
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
           $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ($LASTEXITCODE -ne 0 -or @($installation).Count -ne 1) { throw 'Missing unique native MSVC installation' }
@@ -151,6 +152,9 @@ jobs:
         run: python -B cm-source/ci/scripts/windows_x64_preflight.py
       - name: Probe PID-bound shared socket HTTP transfer with restricted LPAC
         if: env.CM_PREFLIGHT_STAGE == 'lpac-shared-transfer'
+        run: python -B cm-source/ci/scripts/windows_x64_preflight.py
+      - name: Probe restricted zero-capability AppContainer provider and outside denial
+        if: env.CM_PREFLIGHT_STAGE == 'restricted-appcontainer-network'
         run: python -B cm-source/ci/scripts/windows_x64_preflight.py
 
       - name: Record final native job status

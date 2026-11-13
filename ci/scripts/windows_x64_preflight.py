@@ -114,7 +114,7 @@ def lpac_registry_record(text):
         "profile_deleted": True, "full_isolation": "not_run", "product": "not_run"})
 
 
-def lpac_restricted_record(text, *, network=False):
+def lpac_restricted_expected(*, network=False):
     expected = {"status": "pass", "gate": "lpac-restricted-registry-control",
         "outside_token_checks": 3, "outside_restricted_token_checks": 2,
         "restricting_sid_count": 3, "restricting_sid_policy": "world-users-private-nt",
@@ -129,6 +129,18 @@ def lpac_restricted_record(text, *, network=False):
     if network:
         expected.update(gate="lpac-restricted-network-control", network="pass", provider_http_positive=True,
             outside_listener_positive=True, outside_connect_error=10013, outside_unexpected_accepts=0)
+    return expected
+
+
+def lpac_restricted_record(text, *, network=False):
+    return exact_record(text, lpac_restricted_expected(network=network))
+
+
+def restricted_appcontainer_record(text):
+    expected = lpac_restricted_expected(network=True)
+    expected.update(gate="restricted-appcontainer-network-control", capability_count=0,
+        all_packages_file_denied=expected.pop("lpac_opt_out_file_denied"), all_application_packages_opt_out=False)
+    del expected["capability"]
     return exact_record(text, expected)
 
 
@@ -205,13 +217,14 @@ def main():
     mechanism = os.environ.get("CM_PREFLIGHT_STAGE", "loader-terminal")
     if mechanism not in ("loader-terminal", "lpac-network", "lpac-registry-read", "lpac-registry-restricted",
             "lpac-restricted-network", "lpac-socket-availability", "lpac-socket-share", "lpac-shared-peer-observation",
-            "lpac-shared-transfer"):
+            "lpac-shared-transfer", "restricted-appcontainer-network"):
         raise RuntimeError("Unknown Windows native mechanism stage")
     socket_stage = mechanism == "lpac-socket-availability"
     socket_share_stage = mechanism == "lpac-socket-share"
     peer_stage = mechanism == "lpac-shared-peer-observation"
     transfer_stage = mechanism == "lpac-shared-transfer"
-    restricted_network = mechanism == "lpac-restricted-network"
+    ordinary_stage = mechanism == "restricted-appcontainer-network"
+    restricted_network = ordinary_stage or mechanism == "lpac-restricted-network"
     restricted = transfer_stage or socket_share_stage or restricted_network or mechanism == "lpac-registry-restricted"
     registry = restricted or mechanism == "lpac-registry-read"
     lpac = peer_stage or socket_stage or registry or mechanism == "lpac-network"
@@ -223,7 +236,8 @@ def main():
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
     report = {"schema_version": 1, "status": "running",
-        "scope": "V01k-shared-channel-transfer-only" if transfer_stage else
+        "scope": "V01l-restricted-appcontainer-network-only" if ordinary_stage else
+            "V01k-shared-channel-transfer-only" if transfer_stage else
             "V01j-shared-peer-observations-only" if peer_stage else
             "V01i-shared-socket-fixture-only" if socket_share_stage else
             "V01h-socket-availability-fixture-only" if socket_stage else
@@ -334,6 +348,8 @@ def main():
                         "lpac_socket_share", lpac_socket_share_record),
                     "lpac-shared-transfer": ("lpac-shared-transfer-control", "shared-transfer",
                         "lpac_shared_transfer", lpac_shared_transfer_record),
+                    "restricted-appcontainer-network": ("restricted-appcontainer-network-control",
+                        "restricted-appcontainer-network", "restricted_appcontainer_network", restricted_appcontainer_record),
                 }[mechanism]
                 _, text = run(label, [probe, mode], 120)
                 report["controls"][key] = parse(text)
@@ -424,7 +440,8 @@ def main():
         report["status"] = "failed"
         raise
     finally:
-        name = ("windows-x64-lpac-shared-transfer.json" if transfer_stage else
+        name = ("windows-x64-restricted-appcontainer-network.json" if ordinary_stage else
+            "windows-x64-lpac-shared-transfer.json" if transfer_stage else
             "windows-x64-lpac-shared-peer-observation.json" if peer_stage else
             "windows-x64-lpac-socket-share.json" if socket_share_stage else
             "windows-x64-lpac-socket-availability.json" if socket_stage else
@@ -657,8 +674,36 @@ def self_check():
             pass
         else:
             raise AssertionError("Restricted network observation accepted as another mode")
+    ordinary = {**network, "gate": "restricted-appcontainer-network-control", "capability_count": 0,
+        "all_packages_file_denied": True, "all_application_packages_opt_out": False}
+    del ordinary["capability"], ordinary["lpac_opt_out_file_denied"]
+    assert restricted_appcontainer_record(json.dumps(ordinary)) == ordinary
+    changed = [{key: value for key, value in ordinary.items() if key != omitted} for omitted in ordinary]
+    for key, value in ordinary.items():
+        if type(value) is bool:
+            changed += [{**ordinary, key: item} for item in (not value, int(value))]
+        elif type(value) is int:
+            changed += [{**ordinary, key: item} for item in (True, float(value), str(value), value + 1)]
+    changed += [{**ordinary, key: value} for key, value in (("capability", "registryRead"),
+        ("gate", "lpac-restricted-network-control"), ("network", "not_run"),
+        ("full_isolation", "pass"), ("product", "pass"), ("extra", True))]
+    for raw in [json.dumps(value) for value in (*changed, lpac, registry, restricted, network)] + ["[]", " " * 8193]:
+        try:
+            restricted_appcontainer_record(raw)
+        except (RuntimeError, ValueError):
+            pass
+        else:
+            raise AssertionError("Incomplete or overclaimed restricted AppContainer observation accepted")
+    for parse in (lpac_network_record, lpac_registry_record, lpac_restricted_record,
+            lambda text: lpac_restricted_record(text, network=True), lpac_socket_share_record, lpac_shared_transfer_record):
+        try:
+            parse(json.dumps(ordinary))
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Restricted AppContainer observation accepted as an older mode")
     old_parsers = (lpac_network_record, lpac_registry_record, lpac_restricted_record,
-        lambda text: lpac_restricted_record(text, network=True))
+        lambda text: lpac_restricted_record(text, network=True), restricted_appcontainer_record)
     for mode in SOCKET_MODES:
         for error in (0, 10013):
             observed = {"status": "observed", "gate": "lpac-socket-availability-control",
