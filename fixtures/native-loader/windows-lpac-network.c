@@ -28,6 +28,7 @@ static TOKEN_USER *owner;
 static BOOL profile_created;
 static BOOL registry_mode;
 static BOOL restricted_mode;
+static BOOL restricted_network;
 static const char request[] = "GET /controlled HTTP/1.0\r\n\r\n";
 static const char response[] = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nOK";
 static const wchar_t *environment_names[] = {
@@ -439,7 +440,8 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
     environment[used] = L'\0';
     if (_snwprintf_s(command, ARRAYSIZE(command), _TRUNCATE, L"\"%ls\" %ls %llu %u %u%ls", executable, role,
             (unsigned long long)(UINT_PTR)writer, (unsigned int)provider, (unsigned int)canary,
-            restricted_mode ? L" registry-restricted" : registry_mode ? L" registry-read" : L"") < 0)
+            restricted_network ? L" restricted-network" : restricted_mode ? L" registry-restricted" :
+                registry_mode ? L" registry-read" : L"") < 0)
         fail("child-command", ERROR_INVALID_DATA);
     DWORD attributes = lpac ? 3 : 2;
     InitializeProcThreadAttributeList(NULL, attributes, 0, &size);
@@ -516,19 +518,22 @@ int wmain(int argc, wchar_t **argv) {
     *separator = L'\0';
     if (argc == 5 || argc == 6) {
         if (argc == 6) {
-            if (wcscmp(argv[5], L"registry-read") && wcscmp(argv[5], L"registry-restricted"))
+            if (wcscmp(argv[5], L"registry-read") && wcscmp(argv[5], L"registry-restricted") &&
+                    wcscmp(argv[5], L"restricted-network"))
                 fail("child-mode", ERROR_INVALID_PARAMETER);
             registry_mode = TRUE;
-            restricted_mode = !wcscmp(argv[5], L"registry-restricted");
+            restricted_network = !wcscmp(argv[5], L"restricted-network");
+            restricted_mode = restricted_network || !wcscmp(argv[5], L"registry-restricted");
         }
         wchar_t *end = NULL;
         report_pipe = (HANDLE)(UINT_PTR)wcstoull(argv[2], &end, 10);
         if (!report_pipe || !end || *end) fail("report-argument", ERROR_INVALID_DATA);
     } else {
         if (argc != 2 || (wcscmp(argv[1], L"run") && wcscmp(argv[1], L"registry-read") &&
-                wcscmp(argv[1], L"registry-restricted")))
+                wcscmp(argv[1], L"registry-restricted") && wcscmp(argv[1], L"restricted-network")))
             fail("arguments", ERROR_INVALID_PARAMETER);
-        restricted_mode = !wcscmp(argv[1], L"registry-restricted");
+        restricted_network = !wcscmp(argv[1], L"restricted-network");
+        restricted_mode = restricted_network || !wcscmp(argv[1], L"registry-restricted");
         registry_mode = restricted_mode || !wcscmp(argv[1], L"registry-read");
     }
     if (report_pipe) check_child_environment();
@@ -550,7 +555,13 @@ int wmain(int argc, wchar_t **argv) {
         if (restricted_mode && (!wcscmp(argv[1], L"provider") || !wcscmp(argv[1], L"client"))) {
             if (read_marker(L"private-input.txt") || read_marker(L"all-packages.txt") != ERROR_ACCESS_DENIED)
                 fail(!wcscmp(argv[1], L"provider") ? "provider-restricted-file" : "client-restricted-file", ERROR_INVALID_DATA);
-        } else if (!wcscmp(argv[1], L"control")) {
+            if (!restricted_network) {
+                message(3, 0, "complete");
+                WSACleanup();
+                return 0;
+            }
+        }
+        if (!wcscmp(argv[1], L"control")) {
             if (read_marker(L"all-packages.txt") || read_marker(L"private-input.txt"))
                 fail("ordinary-container-file-positive", ERROR_ACCESS_DENIED);
         } else if (!wcscmp(argv[1], L"provider")) {
@@ -636,7 +647,7 @@ int wmain(int argc, wchar_t **argv) {
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
         fail("kill-on-close-job", GetLastError());
-    if (restricted_mode) {
+    if (restricted_mode && !restricted_network) {
         finished(spawn(0, L"control", FALSE, 0, 0));
         finished(spawn(1, L"provider", TRUE, 0, 0));
         finished(spawn(2, L"client", TRUE, 0, 0));
@@ -665,7 +676,7 @@ int wmain(int argc, wchar_t **argv) {
     profile_created = FALSE;
     cleanup(); WSACleanup();
     if (restricted_mode) {
-        printf("{\"status\":\"pass\",\"gate\":\"lpac-restricted-registry-control\","
+        printf("{\"status\":\"pass\",\"gate\":\"%s\","
             "\"outside_token_checks\":3,\"outside_restricted_token_checks\":2,"
             "\"restricting_sid_count\":3,\"restricting_sid_policy\":\"world-users-private-nt\","
             "\"private_sid_group_absence_checked\":true,\"private_sid_file_grants\":%lu,"
@@ -676,8 +687,11 @@ int wmain(int argc, wchar_t **argv) {
             "\"private_file_positive\":true,\"child_winsock_startup_checks\":3,"
             "\"host_registry_baseline\":true,\"host_environment_read_error\":5,"
             "\"host_environment_write_open_error\":5,\"profile_deleted\":true,"
-            "\"network\":\"not_run\",\"full_isolation\":\"not_run\",\"product\":\"not_run\"}\n",
-            private_sid_file_grants, ARRAYSIZE(environment_names));
+            "\"network\":\"%s\",\"full_isolation\":\"not_run\",\"product\":\"not_run\"%s}\n",
+            restricted_network ? "lpac-restricted-network-control" : "lpac-restricted-registry-control",
+            private_sid_file_grants, ARRAYSIZE(environment_names), restricted_network ? "pass" : "not_run",
+            restricted_network ? ",\"provider_http_positive\":true,\"outside_listener_positive\":true,"
+                "\"outside_connect_error\":10013,\"outside_unexpected_accepts\":0" : "");
         return 0;
     }
     printf("{\"status\":\"pass\",\"gate\":\"%s\","
