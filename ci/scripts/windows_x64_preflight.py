@@ -316,9 +316,29 @@ $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Diagnostics\Microsoft.PowerShell.Diagnostics.psd1') -ErrorAction Stop
 if($TargetIds -notmatch '^[1-9][0-9]{0,9}(,[1-9][0-9]{0,9}){0,2}$'){throw 'Invalid child IDs'}
 $ids=@($TargetIds.Split(',')|ForEach-Object{[long]$_})
-$selected=@(Get-WinEvent -Path $Trace -Oldest -MaxEvents 20000 -ErrorAction Stop |
-    Where-Object{$ids -contains [long]$_.ProcessId}|Select-Object -First 193)
-$events=@($selected|Select-Object -First 192|ForEach-Object{
+function Select-ChildEvents($Events,$ChildIds){
+    foreach($childId in $ChildIds){
+        $Events|Where-Object{[long]$_.ProcessId -eq $childId}|Select-Object -Last 64
+    }
+}
+$sample=@(0..399|ForEach-Object{[pscustomobject]@{ProcessId=1;Sequence=$_}})+
+    @(0..79|ForEach-Object{[pscustomobject]@{ProcessId=2;Sequence=$_}})+
+    @([pscustomobject]@{ProcessId=3;Sequence=0})
+$check=@(Select-ChildEvents $sample @(1,2,9))
+if($check.Count -ne 128 -or $check[0].Sequence -ne 336 -or $check[63].Sequence -ne 399 -or
+    $check[64].Sequence -ne 16 -or $check[-1].Sequence -ne 79 -or
+    @($check|Where-Object ProcessId -eq 3).Count -ne 0 -or
+    @(Select-ChildEvents @() @(1)).Count -ne 0 -or @(Select-ChildEvents $sample @(3)).Count -ne 1){
+    throw 'Child trace tail selection self-check failed'
+}
+$scanned=@(Get-WinEvent -Path $Trace -Oldest -MaxEvents 20000 -ErrorAction Stop)
+$matched=@($scanned|Where-Object{$ids -contains [long]$_.ProcessId})
+$selected=@(Select-ChildEvents $matched $ids)
+$counts=@(foreach($childId in $ids){
+    $count=@($matched|Where-Object{[long]$_.ProcessId -eq $childId}).Count
+    [pscustomobject]@{pid=$childId;matched_count=$count;selected_count=[Math]::Min(64,$count);truncated=($count -gt 64)}
+})
+$events=@($selected|ForEach-Object{
     $event=$_; $xml=[xml]$event.ToXml(); $fields=@{}; $names=@()
     foreach($item in $xml.Event.EventData.Data){
         $name=[string]$item.Name
@@ -329,7 +349,9 @@ $events=@($selected|Select-Object -First 192|ForEach-Object{
     }
     [pscustomobject]@{pid=$event.ProcessId;id=$event.Id;opcode=$event.Opcode;field_names=$names;fields=$fields}
 })
-$result=[pscustomobject]@{diagnostic_only=$true;child_pids=$ids;scan_limit=20000;selected_limit=192;truncated=($selected.Count -gt 192);events=$events}
+$result=[pscustomobject]@{diagnostic_only=$true;child_pids=$ids;scan_limit=20000;scan_limit_reached=($scanned.Count -eq 20000);
+    selected_limit=192;per_child_limit=64;child_event_counts=$counts;selection_self_check='pass';
+    truncated=(@($counts|Where-Object truncated).Count -gt 0);events=$events}
 $text=$result|ConvertTo-Json -Depth 8 -Compress
 $utf8=New-Object Text.UTF8Encoding($false)
 if($utf8.GetByteCount($text) -gt 524288){throw 'Oversized filtered trace'}
