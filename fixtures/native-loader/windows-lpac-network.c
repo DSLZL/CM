@@ -3,6 +3,7 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <aclapi.h>
+#include <sddl.h>
 #include <bcrypt.h>
 #include <userenv.h>
 #include <stdint.h>
@@ -21,8 +22,10 @@ static HANDLE job, report_pipe;
 static Child children[3];
 static wchar_t profile[64], executable[MAX_PATH], root[MAX_PATH];
 static PSID package_sid;
+static PSID registry_sid;
 static TOKEN_USER *owner;
 static BOOL profile_created;
+static BOOL registry_mode;
 static const char request[] = "GET /controlled HTTP/1.0\r\n\r\n";
 static const char response[] = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nOK";
 static const wchar_t *environment_names[] = {
@@ -47,6 +50,7 @@ static void cleanup(void) {
         if (FAILED(result)) fprintf(stderr, "Owned profile cleanup failed; error=%lu\n", (DWORD)result);
     }
     if (package_sid) FreeSid(package_sid);
+    LocalFree(registry_sid); registry_sid = NULL;
     free(owner);
 }
 
@@ -76,6 +80,45 @@ static void *token_info(HANDLE token, TOKEN_INFORMATION_CLASS kind) {
     if (!data) fail("token-memory", ERROR_OUTOFMEMORY);
     if (!GetTokenInformation(token, kind, data, size, &size)) fail("token-query", GetLastError());
     return data;
+}
+
+static void derive_registry_capability(void) {
+    PSID *groups = NULL, *capabilities = NULL;
+    DWORD group_count = 0, count = 0;
+    BOOL derived = DeriveCapabilitySidsFromName(L"registryRead", &groups, &group_count, &capabilities, &count);
+    DWORD error = derived ? ERROR_INVALID_DATA : GetLastError();
+    if (derived && capabilities && count == 1 && IsValidSid(capabilities[0])) {
+        registry_sid = capabilities[0];
+        capabilities[0] = NULL;
+    }
+    if (groups) {
+        for (DWORD i = 0; i < group_count; ++i) LocalFree(groups[i]);
+        LocalFree(groups);
+    }
+    if (capabilities) {
+        for (DWORD i = 0; i < count; ++i) LocalFree(capabilities[i]);
+        LocalFree(capabilities);
+    }
+    if (!registry_sid) fail("derive-registry-read", error);
+}
+
+static LSTATUS open_host_environment(REGSAM access) {
+    HANDLE token = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) fail("registry-user-token", GetLastError());
+    TOKEN_USER *user = token_info(token, TokenUser);
+    LPWSTR sid = NULL;
+    if (!ConvertSidToStringSidW(user->User.Sid, &sid)) fail("registry-user-sid", GetLastError());
+    wchar_t path[256];
+    if (_snwprintf_s(path, ARRAYSIZE(path), _TRUNCATE, L"%ls\\Environment", sid) < 0)
+        fail("registry-key-path", ERROR_INVALID_DATA);
+    LocalFree(sid); free(user); CloseHandle(token);
+    HKEY key = NULL;
+    LSTATUS result = RegOpenKeyExW(HKEY_USERS, path, 0, access, &key);
+    if (result == ERROR_SUCCESS) {
+        LSTATUS closed = RegCloseKey(key);
+        if (closed != ERROR_SUCCESS) fail("registry-key-close", (DWORD)closed);
+    }
+    return result;
 }
 
 static void check_child_environment(void) {
@@ -209,21 +252,27 @@ static void exchange(SOCKET sock, const char *sent, size_t sent_size, const char
     if (memcmp(buffer, expected, size)) fail("http-response", ERROR_INVALID_DATA);
 }
 
-static void inspect(Child *child) {
+static void inspect(Child *child, BOOL lpac) {
     HANDLE token = NULL;
     BOOL member = FALSE;
     if (!OpenProcessToken(child->process.hProcess, TOKEN_QUERY, &token)) fail("child-token", GetLastError());
     DWORD *container = token_info(token, TokenIsAppContainer);
     TOKEN_APPCONTAINER_INFORMATION *identity = token_info(token, TokenAppContainerSid);
     TOKEN_GROUPS *capabilities = token_info(token, TokenCapabilities);
+    TOKEN_USER *user = token_info(token, TokenUser);
     TOKEN_MANDATORY_LABEL *integrity = token_info(token, TokenIntegrityLevel);
     DWORD level = *GetSidSubAuthority(integrity->Label.Sid,
         (DWORD)(*GetSidSubAuthorityCount(integrity->Label.Sid) - 1));
     if (*container != 1 || !identity->TokenAppContainer || !EqualSid(identity->TokenAppContainer, package_sid) ||
-            capabilities->GroupCount != 0 || level != SECURITY_MANDATORY_LOW_RID ||
+            capabilities->GroupCount != (DWORD)(lpac && registry_mode ? 1 : 0) ||
+            !EqualSid(user->User.Sid, owner->User.Sid) || level != SECURITY_MANDATORY_LOW_RID ||
             !IsProcessInJob(child->process.hProcess, job, &member) || !member)
         fail("outside-token-or-job", ERROR_INVALID_DATA);
-    free(container); free(identity); free(capabilities); free(integrity);
+    if (lpac && registry_mode && (!EqualSid(capabilities->Groups[0].Sid, registry_sid) ||
+            !(capabilities->Groups[0].Attributes & SE_GROUP_ENABLED) ||
+            (capabilities->Groups[0].Attributes & SE_GROUP_USE_FOR_DENY_ONLY)))
+        fail("outside-registry-capability", ERROR_INVALID_DATA);
+    free(container); free(identity); free(capabilities); free(user); free(integrity);
     CloseHandle(token);
 }
 
@@ -232,6 +281,7 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
     HANDLE writer = NULL;
     SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
     SECURITY_CAPABILITIES capabilities = {0};
+    SID_AND_ATTRIBUTES registry = {registry_sid, SE_GROUP_ENABLED};
     STARTUPINFOEXW startup = {0};
     SIZE_T size = 0;
     DWORD policy = PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT;
@@ -255,8 +305,9 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         used += (size_t)length + 1;
     }
     environment[used] = L'\0';
-    if (_snwprintf_s(command, ARRAYSIZE(command), _TRUNCATE, L"\"%ls\" %ls %llu %u %u", executable, role,
-            (unsigned long long)(UINT_PTR)writer, (unsigned int)provider, (unsigned int)canary) < 0)
+    if (_snwprintf_s(command, ARRAYSIZE(command), _TRUNCATE, L"\"%ls\" %ls %llu %u %u%ls", executable, role,
+            (unsigned long long)(UINT_PTR)writer, (unsigned int)provider, (unsigned int)canary,
+            registry_mode ? L" registry-read" : L"") < 0)
         fail("child-command", ERROR_INVALID_DATA);
     DWORD attributes = lpac ? 3 : 2;
     InitializeProcThreadAttributeList(NULL, attributes, 0, &size);
@@ -264,6 +315,10 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
     if (!startup.lpAttributeList || !InitializeProcThreadAttributeList(startup.lpAttributeList, attributes, 0, &size))
         fail("child-attributes", GetLastError());
     capabilities.AppContainerSid = package_sid;
+    if (lpac && registry_mode) {
+        capabilities.Capabilities = &registry;
+        capabilities.CapabilityCount = 1;
+    }
     if (!UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
             &capabilities, sizeof(capabilities), NULL, NULL) ||
             !UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
@@ -280,7 +335,7 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
     free(startup.lpAttributeList);
     CloseHandle(writer);
     if (!AssignProcessToJobObject(job, child->process.hProcess)) fail("child-job", GetLastError());
-    inspect(child);
+    inspect(child, lpac);
     if (ResumeThread(child->process.hThread) == (DWORD)-1) fail("child-resume", GetLastError());
     CloseHandle(child->process.hThread); child->process.hThread = NULL;
     return child;
@@ -319,11 +374,19 @@ int wmain(int argc, wchar_t **argv) {
     wchar_t *separator = wcsrchr(root, L'\\');
     if (!separator) fail("root-path", ERROR_INVALID_DATA);
     *separator = L'\0';
-    if (argc == 5) {
+    if (argc == 5 || argc == 6) {
+        if (argc == 6) {
+            if (wcscmp(argv[5], L"registry-read")) fail("child-mode", ERROR_INVALID_PARAMETER);
+            registry_mode = TRUE;
+        }
         wchar_t *end = NULL;
         report_pipe = (HANDLE)(UINT_PTR)wcstoull(argv[2], &end, 10);
         if (!report_pipe || !end || *end) fail("report-argument", ERROR_INVALID_DATA);
-    } else if (argc != 2 || wcscmp(argv[1], L"run")) fail("arguments", ERROR_INVALID_PARAMETER);
+    } else {
+        if (argc != 2 || (wcscmp(argv[1], L"run") && wcscmp(argv[1], L"registry-read")))
+            fail("arguments", ERROR_INVALID_PARAMETER);
+        registry_mode = !wcscmp(argv[1], L"registry-read");
+    }
     if (report_pipe) check_child_environment();
     WSADATA winsock;
     int error = WSAStartup(MAKEWORD(2, 2), &winsock);
@@ -360,6 +423,12 @@ int wmain(int argc, wchar_t **argv) {
             }
             closesocket(connection); closesocket(server);
         } else if (!wcscmp(argv[1], L"client")) {
+            if (registry_mode) {
+                LSTATUS access = open_host_environment(KEY_QUERY_VALUE);
+                if (access != ERROR_ACCESS_DENIED) fail("host-env-read-handle", (DWORD)access);
+                access = open_host_environment(KEY_SET_VALUE);
+                if (access != ERROR_ACCESS_DENIED) fail("host-env-write-handle", (DWORD)access);
+            }
             if (read_marker(L"private-input.txt") || read_marker(L"all-packages.txt") != ERROR_ACCESS_DENIED)
                 fail("lpac-opt-out-file-control", ERROR_INVALID_DATA);
             unsigned long provider = wcstoul(argv[3], NULL, 10), canary = wcstoul(argv[4], NULL, 10);
@@ -384,6 +453,13 @@ int wmain(int argc, wchar_t **argv) {
     DWORD *container = token_info(token, TokenIsAppContainer);
     if (*container) fail("outside-launcher-token", ERROR_INVALID_DATA);
     free(container); CloseHandle(token);
+    if (registry_mode) {
+        LSTATUS access = open_host_environment(KEY_QUERY_VALUE);
+        if (access != ERROR_SUCCESS) fail("outside-host-env-read-handle", (DWORD)access);
+        access = open_host_environment(KEY_SET_VALUE);
+        if (access != ERROR_SUCCESS) fail("outside-host-env-write-handle", (DWORD)access);
+        derive_registry_capability();
+    }
     if (!SetEnvironmentVariableW(L"CM_LPAC_ENV_CANARY", L"must-not-inherit")) fail("outside-env-canary", GetLastError());
     unsigned char random[16];
     if (BCryptGenRandom(NULL, random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG))
@@ -430,11 +506,15 @@ int wmain(int argc, wchar_t **argv) {
     if (FAILED(result)) fail("owned-profile-delete", (DWORD)result);
     profile_created = FALSE;
     cleanup(); WSACleanup();
-    printf("{\"status\":\"pass\",\"gate\":\"lpac-internal-provider-network-control\","
-         "\"outside_token_checks\":3,\"capability_count\":0,\"ordinary_file_positive\":true,"
+    printf("{\"status\":\"pass\",\"gate\":\"%s\","
+         "\"outside_token_checks\":3,\"capability_count\":%u,\"ordinary_file_positive\":true,"
          "\"environment_allowlist_count\":%zu,\"environment_canary_not_inherited\":true,"
          "\"lpac_opt_out_file_denied\":true,\"private_file_positive\":true,\"provider_http_positive\":true,"
          "\"outside_listener_positive\":true,\"outside_connect_error\":10013,\"outside_unexpected_accepts\":0,"
-         "\"profile_deleted\":true,\"full_isolation\":\"not_run\",\"product\":\"not_run\"}\n", ARRAYSIZE(environment_names));
+         "\"profile_deleted\":true,\"full_isolation\":\"not_run\",\"product\":\"not_run\"%s}\n",
+         registry_mode ? "lpac-registry-read-network-control" : "lpac-internal-provider-network-control",
+         registry_mode ? 1u : 0u, ARRAYSIZE(environment_names), registry_mode ?
+         ",\"capability\":\"registryRead\",\"host_registry_baseline\":true,"
+         "\"host_environment_read_error\":5,\"host_environment_write_open_error\":5" : "");
     return 0;
 }

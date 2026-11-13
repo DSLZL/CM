@@ -102,14 +102,25 @@ def lpac_network_record(text):
         "profile_deleted": True, "full_isolation": "not_run", "product": "not_run"})
 
 
+def lpac_registry_record(text):
+    return exact_record(text, {"status": "pass", "gate": "lpac-registry-read-network-control", "outside_token_checks": 3,
+        "capability_count": 1, "capability": "registryRead", "ordinary_file_positive": True,
+        "environment_allowlist_count": 8, "environment_canary_not_inherited": True,
+        "lpac_opt_out_file_denied": True, "private_file_positive": True, "provider_http_positive": True,
+        "outside_listener_positive": True, "outside_connect_error": 10013, "outside_unexpected_accepts": 0,
+        "host_registry_baseline": True, "host_environment_read_error": 5, "host_environment_write_open_error": 5,
+        "profile_deleted": True, "full_isolation": "not_run", "product": "not_run"})
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     entry = record_run.require_hosted_worker(enabled=False)
     authority(json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text()), entry, os.environ)
     mechanism = os.environ.get("CM_PREFLIGHT_STAGE", "loader-terminal")
-    if mechanism not in ("loader-terminal", "lpac-network"):
+    if mechanism not in ("loader-terminal", "lpac-network", "lpac-registry-read"):
         raise RuntimeError("Unknown Windows native mechanism stage")
-    lpac = mechanism == "lpac-network"
+    registry = mechanism == "lpac-registry-read"
+    lpac = mechanism in ("lpac-network", "lpac-registry-read")
     if Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
         raise RuntimeError("Mechanism source must be the exact recorded source checkout")
     logs = Path(os.environ["CM_CI_LOG_DIR"]).resolve()
@@ -118,7 +129,8 @@ def main():
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
     report = {"schema_version": 1, "status": "running",
-        "scope": "V01c-lpac-network-fixture-only" if lpac else "V01a-loader-terminal-fixtures-only",
+        "scope": "V01d-system-dependency-fixture-only" if registry else
+            "V01c-lpac-network-fixture-only" if lpac else "V01a-loader-terminal-fixtures-only",
         "platform": KEY, "target": TARGET, "source_sha": os.environ["CM_SOURCE_SHA"],
         "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"], "run_id": int(os.environ["GITHUB_RUN_ID"]),
         "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]), "request_id": os.environ["CM_REQUEST_ID"],
@@ -193,14 +205,16 @@ def main():
             source = root / "fixtures/native-loader" / ("windows-lpac-network.c" if lpac else "windows-preflight.c")
             probe, payload = temp / "native-probe.exe", temp / "sentinel.dll"
             flags = ["/nologo", "/Bv", "/std:c11", "/W4", "/WX", "/O2", "/MT", "/utf-8", "/TC"]
-            libraries = ["bcrypt.lib", *(["userenv.lib", "advapi32.lib", "ws2_32.lib"] if lpac else [])]
+            libraries = ["bcrypt.lib", *(["userenv.lib", "advapi32.lib", "ws2_32.lib", "onecoreuap.lib"] if lpac else [])]
             run("compile-native-probe", [cl, *flags, source, "/Fo" + str(temp / "probe.obj"),
                 "/Fe" + str(probe), "/link", *libraries, "/INCREMENTAL:NO"], 120)
             if lpac:
                 report["inputs"] = {"probe": pe_fixture(probe.read_bytes(), False)}
                 run("probe-dependencies", [cl.with_name("dumpbin.exe"), "/nologo", "/dependents", probe])
-                _, text = run("lpac-internal-provider-network-control", [probe, "run"], 120)
-                report["controls"]["lpac_network"] = lpac_network_record(text)
+                label = "lpac-registry-read-network-control" if registry else "lpac-internal-provider-network-control"
+                _, text = run(label, [probe, "registry-read" if registry else "run"], 120)
+                report["controls"]["lpac_registry_read" if registry else "lpac_network"] = (
+                    lpac_registry_record(text) if registry else lpac_network_record(text))
                 report["status"] = "passed_bounded_network_controls_only"
                 return
             run("compile-sentinel-dll", [cl, *flags, "/DCM_PAYLOAD", "/LD", source,
@@ -285,7 +299,8 @@ def main():
         report["status"] = "failed"
         raise
     finally:
-        name = "windows-x64-lpac-network.json" if lpac else "windows-x64-mechanisms.json"
+        name = "windows-x64-lpac-registry-read.json" if registry else (
+            "windows-x64-lpac-network.json" if lpac else "windows-x64-mechanisms.json")
         (logs / name).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print("Windows V01a fixture controls passed; isolation, full dependency closure and product qualification remain NOT_RUN", flush=True)
 
@@ -414,6 +429,33 @@ def self_check():
             pass
         else:
             raise AssertionError("Incomplete or overclaimed LPAC network observation accepted")
+    registry = {**lpac, "gate": "lpac-registry-read-network-control", "capability_count": 1,
+        "capability": "registryRead", "host_registry_baseline": True,
+        "host_environment_read_error": 5, "host_environment_write_open_error": 5}
+    assert lpac_registry_record(json.dumps(registry)) == registry
+    changed = [{**registry, key: value} for key, value in (("outside_token_checks", True),
+        ("capability_count", 0), ("capability_count", 2), ("capability_count", True),
+        ("capability", "internetClient"), ("capability", "registryread"),
+        ("environment_allowlist_count", 7), ("environment_allowlist_count", True),
+        ("outside_connect_error", 10061), ("outside_connect_error", 10060), ("outside_unexpected_accepts", 1),
+        ("host_environment_read_error", 0), ("host_environment_read_error", 2), ("host_environment_read_error", True),
+        ("host_environment_write_open_error", 0), ("host_environment_write_open_error", 2),
+        ("host_environment_write_open_error", True), ("full_isolation", "pass"), ("product", "pass"), ("extra", True))]
+    changed += [{**registry, key: False} for key, value in registry.items() if type(value) is bool]
+    changed += [{key: value for key, value in registry.items() if key != omitted} for omitted in registry]
+    for raw in [json.dumps(value) for value in changed] + [json.dumps(lpac), "[]", " " * 8193]:
+        try:
+            lpac_registry_record(raw)
+        except (RuntimeError, ValueError):
+            pass
+        else:
+            raise AssertionError("Incomplete or overclaimed LPAC registry-read observation accepted")
+    try:
+        lpac_network_record(json.dumps(registry))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("Named capability accepted as the zero-capability mode")
     print("Windows preflight authority, PE fixture and bounded native records self-check passed", flush=True)
 
 
