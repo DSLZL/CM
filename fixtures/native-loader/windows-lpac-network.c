@@ -33,6 +33,7 @@ static BOOL restricted_mode;
 static BOOL restricted_network;
 static BOOL ordinary_restricted;
 static BOOL file_controls_stage;
+static BOOL restricted_code_files;
 static const wchar_t *file_inputs[3];
 static const wchar_t *file_aliases[] = {
     L"source-hard.txt", L"source-link.txt", L"cache-hard.txt", L"cache-link.txt", L"compiler-link.exe"
@@ -166,7 +167,8 @@ static void inspect_restrictions(HANDLE token, const char *role) {
     for (DWORD i = 0; i < sids->GroupCount; ++i) {
         PSID sid = sids->Groups[i].Sid;
         int index = IsWellKnownSid(sid, WinWorldSid) ? 0 :
-            IsWellKnownSid(sid, WinBuiltinUsersSid) ? 1 : EqualSid(sid, private_sid) ? 2 : -1;
+            IsWellKnownSid(sid, restricted_code_files ? WinRestrictedCodeSid : WinBuiltinUsersSid) ? 1 :
+            EqualSid(sid, private_sid) ? 2 : -1;
         if (index < 0 || seen[index] || (sids->Groups[i].Attributes & SE_GROUP_USE_FOR_DENY_ONLY))
             fail_restriction(role, "sid-policy", ERROR_INVALID_DATA);
         seen[index] = TRUE;
@@ -218,12 +220,13 @@ static void prepare_restricted_token(void) {
     for (DWORD i = 0; i < groups->GroupCount; ++i)
         if (EqualSid(private_sid, groups->Groups[i].Sid)) fail("private-sid-source-group", ERROR_INVALID_DATA);
     free(groups);
-    BYTE world[SECURITY_MAX_SID_SIZE], users[SECURITY_MAX_SID_SIZE];
-    DWORD world_size = sizeof(world), users_size = sizeof(users);
+    BYTE world[SECURITY_MAX_SID_SIZE], system_sid[SECURITY_MAX_SID_SIZE];
+    DWORD world_size = sizeof(world), system_size = sizeof(system_sid);
     if (!CreateWellKnownSid(WinWorldSid, NULL, world, &world_size) ||
-            !CreateWellKnownSid(WinBuiltinUsersSid, NULL, users, &users_size))
+            !CreateWellKnownSid(restricted_code_files ? WinRestrictedCodeSid : WinBuiltinUsersSid,
+                NULL, system_sid, &system_size))
         fail("restricted-well-known-sids", GetLastError());
-    SID_AND_ATTRIBUTES sids[3] = {{world, 0}, {users, 0}, {private_sid, 0}};
+    SID_AND_ATTRIBUTES sids[3] = {{world, 0}, {system_sid, 0}, {private_sid, 0}};
     for (DWORD i = 0; i < ARRAYSIZE(sids); ++i)
         if (!IsValidSid(sids[i].Sid)) fail("restricted-input-sid", ERROR_INVALID_SID);
     if (!CreateRestrictedToken(token, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL, 3, sids, &restricted_base)) {
@@ -238,7 +241,8 @@ static void prepare_restricted_token(void) {
             if (created && !diagnostic) fail("restricted-diagnostic-handle", ERROR_INVALID_HANDLE);
             if (diagnostic && !CloseHandle(diagnostic)) fail("restricted-diagnostic-close", GetLastError());
             fprintf(stderr, "Restricted-token diagnostic: policy=%s; created=%s; error=%lu; handle=%s\n",
-                i ? "private-nt" : "world-users", created ? "true" : "false", error,
+                i ? "private-nt" : restricted_code_files ? "world-restricted-code" : "world-users",
+                created ? "true" : "false", error,
                 diagnostic ? "closed" : "not-created");
         }
         CloseHandle(token);
@@ -592,7 +596,8 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         used += (size_t)length + 1;
     }
     environment[used] = L'\0';
-    const wchar_t *mode = file_controls_stage ? L"restricted-appcontainer-files" :
+    const wchar_t *mode = restricted_code_files ? L"restricted-code-appcontainer-files" :
+        file_controls_stage ? L"restricted-appcontainer-files" :
         ordinary_restricted ? L"restricted-appcontainer-network" :
         peer_policy >= 0 ? peer_modes[peer_policy] : socket_transfer ? L"shared-transfer" :
         socket_share ? L"socket-share" : socket_policy >= 0 ? socket_modes[socket_policy] :
@@ -697,7 +702,8 @@ int wmain(int argc, wchar_t **argv) {
     if (!separator) fail("root-path", ERROR_INVALID_DATA);
     *separator = L'\0';
     const wchar_t *mode = argc == 6 || argc == 7 || argc == 9 ? argv[5] : argc >= 2 ? argv[1] : NULL;
-    file_controls_stage = mode && !wcscmp(mode, L"restricted-appcontainer-files");
+    restricted_code_files = mode && !wcscmp(mode, L"restricted-code-appcontainer-files");
+    file_controls_stage = restricted_code_files || (mode && !wcscmp(mode, L"restricted-appcontainer-files"));
     BOOL file_parent = file_controls_stage && argc == 5;
     if (file_controls_stage) {
         if (!file_parent && argc != 9) fail("file-control-arguments", ERROR_INVALID_PARAMETER);
@@ -1106,7 +1112,7 @@ int wmain(int argc, wchar_t **argv) {
     if (restricted_mode) {
         printf("{\"status\":\"pass\",\"gate\":\"%s\","
             "\"outside_token_checks\":3,\"outside_restricted_token_checks\":2,"
-            "\"restricting_sid_count\":3,\"restricting_sid_policy\":\"world-users-private-nt\","
+            "\"restricting_sid_count\":3,\"restricting_sid_policy\":\"%s\","
             "\"private_sid_group_absence_checked\":true,\"private_sid_file_grants\":%lu,"
             "\"private_sid_default_dacl_checked\":true,"
             "\"privilege_allowlist_checked\":true,\"capability_count\":%u%s,"
@@ -1116,8 +1122,10 @@ int wmain(int argc, wchar_t **argv) {
             "\"host_registry_baseline\":true,\"host_environment_read_error\":5,"
             "\"host_environment_write_open_error\":5,\"profile_deleted\":true,"
             "\"network\":\"%s\",\"full_isolation\":\"not_run\",\"product\":\"not_run\"%s%s%s}\n",
-            file_controls_stage ? "restricted-appcontainer-files-control" : ordinary_restricted ? "restricted-appcontainer-network-control" :
+            restricted_code_files ? "restricted-code-appcontainer-files-control" :
+                file_controls_stage ? "restricted-appcontainer-files-control" : ordinary_restricted ? "restricted-appcontainer-network-control" :
                 restricted_network ? "lpac-restricted-network-control" : "lpac-restricted-registry-control",
+            restricted_code_files ? "world-restricted-code-private-nt" : "world-users-private-nt",
             private_sid_file_grants, ordinary_restricted ? 0u : 1u,
             ordinary_restricted ? "" : ",\"capability\":\"registryRead\"",
             ARRAYSIZE(environment_names), ordinary_restricted ? "all_packages_file_denied" : "lpac_opt_out_file_denied",

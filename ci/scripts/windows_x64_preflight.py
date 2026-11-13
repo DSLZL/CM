@@ -146,7 +146,7 @@ def restricted_appcontainer_record(text):
     return exact_record(text, expected)
 
 
-def restricted_appcontainer_files_record(text):
+def restricted_appcontainer_files_record(text, *, restricted_code=False):
     expected = lpac_restricted_expected()
     expected.update(gate="restricted-appcontainer-files-control", capability_count=0,
         all_packages_file_denied=expected.pop("lpac_opt_out_file_denied"), all_application_packages_opt_out=False,
@@ -154,6 +154,8 @@ def restricted_appcontainer_files_record(text):
         outside_compiler_creation_baselines=3, compiler_creation_checks=3, compiler_creation_error=5,
         source_cache_aliases_checked=True, compiler_executed=False)
     del expected["capability"]
+    if restricted_code:
+        expected.update(gate="restricted-code-appcontainer-files-control", restricting_sid_policy="world-restricted-code-private-nt")
     return exact_record(text, expected)
 
 
@@ -230,14 +232,16 @@ def main():
     mechanism = os.environ.get("CM_PREFLIGHT_STAGE", "loader-terminal")
     if mechanism not in ("loader-terminal", "lpac-network", "lpac-registry-read", "lpac-registry-restricted",
             "lpac-restricted-network", "lpac-socket-availability", "lpac-socket-share", "lpac-shared-peer-observation",
-            "lpac-shared-transfer", "restricted-appcontainer-network", "restricted-appcontainer-files"):
+            "lpac-shared-transfer", "restricted-appcontainer-network", "restricted-appcontainer-files",
+            "restricted-code-appcontainer-files"):
         raise RuntimeError("Unknown Windows native mechanism stage")
     socket_stage = mechanism == "lpac-socket-availability"
     socket_share_stage = mechanism == "lpac-socket-share"
     peer_stage = mechanism == "lpac-shared-peer-observation"
     transfer_stage = mechanism == "lpac-shared-transfer"
     ordinary_stage = mechanism == "restricted-appcontainer-network"
-    files_stage = mechanism == "restricted-appcontainer-files"
+    restricted_code_stage = mechanism == "restricted-code-appcontainer-files"
+    files_stage = restricted_code_stage or mechanism == "restricted-appcontainer-files"
     restricted_network = ordinary_stage or mechanism == "lpac-restricted-network"
     restricted = files_stage or transfer_stage or socket_share_stage or restricted_network or mechanism == "lpac-registry-restricted"
     registry = restricted or mechanism == "lpac-registry-read"
@@ -250,7 +254,8 @@ def main():
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
     report = {"schema_version": 1, "status": "running",
-        "scope": "V01m-restricted-appcontainer-files-only" if files_stage else
+        "scope": "V01n-restricted-code-files-only" if restricted_code_stage else
+            "V01m-restricted-appcontainer-files-only" if files_stage else
             "V01l-restricted-appcontainer-network-only" if ordinary_stage else
             "V01k-shared-channel-transfer-only" if transfer_stage else
             "V01j-shared-peer-observations-only" if peer_stage else
@@ -367,6 +372,9 @@ def main():
                         "restricted-appcontainer-network", "restricted_appcontainer_network", restricted_appcontainer_record),
                     "restricted-appcontainer-files": ("restricted-appcontainer-files-control",
                         "restricted-appcontainer-files", "restricted_appcontainer_files", restricted_appcontainer_files_record),
+                    "restricted-code-appcontainer-files": ("restricted-code-appcontainer-files-control",
+                        "restricted-code-appcontainer-files", "restricted_code_appcontainer_files",
+                        lambda text: restricted_appcontainer_files_record(text, restricted_code=True)),
                 }[mechanism]
                 args = [probe, mode]
                 if files_stage:
@@ -472,7 +480,8 @@ def main():
         report["status"] = "failed"
         raise
     finally:
-        name = ("windows-x64-restricted-appcontainer-files.json" if files_stage else
+        name = ("windows-x64-restricted-code-appcontainer-files.json" if restricted_code_stage else
+            "windows-x64-restricted-appcontainer-files.json" if files_stage else
             "windows-x64-restricted-appcontainer-network.json" if ordinary_stage else
             "windows-x64-lpac-shared-transfer.json" if transfer_stage else
             "windows-x64-lpac-shared-peer-observation.json" if peer_stage else
@@ -745,34 +754,41 @@ def self_check():
         "outside_compiler_creation_baselines": 3, "compiler_creation_checks": 3, "compiler_creation_error": 5,
         "source_cache_aliases_checked": True, "compiler_executed": False}
     del files["capability"], files["lpac_opt_out_file_denied"]
-    assert restricted_appcontainer_files_record(json.dumps(files)) == files
-    changed = [{key: value for key, value in files.items() if key != omitted} for omitted in files]
-    for key, value in files.items():
-        if type(value) is bool:
-            changed += [{**files, key: item} for item in (not value, int(value))]
-        elif type(value) is int:
-            changed += [{**files, key: item} for item in (True, float(value), str(value), value + 1, value - 1)]
-    changed += [{**files, key: value} for key, value in (("status", "observed"),
-        ("gate", "restricted-appcontainer-network-control"), ("restricting_sid_policy", "world-users-owner"),
-        ("capability", "registryRead"), ("network", "pass"), ("full_isolation", "pass"), ("product", "pass"),
-        ("file_read_error", 0), ("compiler_creation_error", 0), ("compiler_creation_error", 2), ("extra", True))]
-    for raw in [json.dumps(value) for value in (*changed, lpac, registry, restricted, network, ordinary)] + ["[]", " " * 8193]:
-        try:
-            restricted_appcontainer_files_record(raw)
-        except (RuntimeError, ValueError):
-            pass
-        else:
-            raise AssertionError("Incomplete or overclaimed source/cache/compiler controls accepted")
     old_parsers = (lpac_network_record, lpac_registry_record, lpac_restricted_record,
-        lambda text: lpac_restricted_record(text, network=True), restricted_appcontainer_record,
-        restricted_appcontainer_files_record)
-    for parse in (*old_parsers[:-1], lpac_socket_share_record, lpac_shared_transfer_record):
-        try:
-            parse(json.dumps(files))
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("File/compiler controls accepted as another mode")
+        lambda text: lpac_restricted_record(text, network=True), restricted_appcontainer_record)
+    file_records = (files, {**files, "gate": "restricted-code-appcontainer-files-control",
+        "restricting_sid_policy": "world-restricted-code-private-nt"})
+    file_parsers = (restricted_appcontainer_files_record,
+        lambda text: restricted_appcontainer_files_record(text, restricted_code=True))
+    for record, parse in zip(file_records, file_parsers):
+        assert parse(json.dumps(record)) == record
+        changed = [{key: value for key, value in record.items() if key != omitted} for omitted in record]
+        for key, value in record.items():
+            if type(value) is bool:
+                changed += [{**record, key: item} for item in (not value, int(value))]
+            elif type(value) is int:
+                changed += [{**record, key: item} for item in (True, float(value), str(value), value + 1, value - 1)]
+        changed += [{**record, key: value} for key, value in (("status", "observed"),
+            ("gate", "restricted-appcontainer-network-control"), ("restricting_sid_policy", "world-users-owner"),
+            ("capability", "registryRead"), ("network", "pass"), ("full_isolation", "pass"), ("product", "pass"),
+            ("file_read_error", 0), ("compiler_creation_error", 0), ("compiler_creation_error", 2), ("extra", True))]
+        for raw in [json.dumps(value) for value in (*changed, lpac, registry, restricted, network, ordinary,
+                *[other for other in file_records if other is not record])] + ["[]", " " * 8193]:
+            try:
+                parse(raw)
+            except (RuntimeError, ValueError):
+                pass
+            else:
+                raise AssertionError("Incomplete or overclaimed source/cache/compiler controls accepted")
+        for other in (*old_parsers, lpac_socket_share_record, lpac_shared_transfer_record,
+                *[other for other in file_parsers if other is not parse]):
+            try:
+                other(json.dumps(record))
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("File/compiler controls accepted as another mode")
+    old_parsers += file_parsers
     for mode in SOCKET_MODES:
         for error in (0, 10013):
             observed = {"status": "observed", "gate": "lpac-socket-availability-control",
