@@ -32,6 +32,12 @@ static BOOL registry_mode;
 static BOOL restricted_mode;
 static BOOL restricted_network;
 static BOOL ordinary_restricted;
+static BOOL file_controls_stage;
+static const wchar_t *file_inputs[3];
+static const wchar_t *file_aliases[] = {
+    L"source-hard.txt", L"source-link.txt", L"cache-hard.txt", L"cache-link.txt", L"compiler-link.exe"
+};
+static DWORD file_path_checks, compiler_creation_checks;
 static BOOL socket_share;
 static BOOL socket_transfer;
 static int socket_policy = -1;
@@ -374,6 +380,92 @@ static void create_marker(const wchar_t *name, PSID allowed) {
     private_acl(path, allowed, FILE_GENERIC_READ);
 }
 
+static DWORD read_path_error(const wchar_t *path) {
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        NULL, OPEN_EXISTING, 0, NULL);
+    if (file == INVALID_HANDLE_VALUE) return GetLastError();
+    char byte = 0;
+    DWORD size = 0;
+    BOOL read = ReadFile(file, &byte, 1, &size, NULL);
+    DWORD error = read ? size == 1 ? ERROR_SUCCESS : ERROR_INVALID_DATA : GetLastError();
+    if (!CloseHandle(file)) fail("file-control-close", GetLastError());
+    return error;
+}
+
+static DWORD compiler_creation_error(const wchar_t *path, BOOL search) {
+    STARTUPINFOW startup = {sizeof(startup)};
+    PROCESS_INFORMATION process = {0};
+    wchar_t command[MAX_PATH + 16];
+    if (_snwprintf_s(command, ARRAYSIZE(command), _TRUNCATE, L"\"%ls\" /?", path) < 0)
+        fail("compiler-command-bound", ERROR_INVALID_DATA);
+    // Never execute an unexpectedly permitted compiler.
+    if (!CreateProcessW(search ? NULL : path, command, NULL, NULL, FALSE,
+            CREATE_SUSPENDED | CREATE_NO_WINDOW, NULL, root, &startup, &process)) return GetLastError();
+    if (job && !AssignProcessToJobObject(job, process.hProcess)) fail("compiler-baseline-job", GetLastError());
+    if (!TerminateProcess(process.hProcess, 0)) fail("compiler-control-terminate", GetLastError());
+    DWORD wait = WaitForSingleObject(process.hProcess, 5000);
+    if (wait != WAIT_OBJECT_0) fail("compiler-control-wait", wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError());
+    if (!CloseHandle(process.hThread) || !CloseHandle(process.hProcess))
+        fail("compiler-control-close", GetLastError());
+    return ERROR_SUCCESS;
+}
+
+static void check_file_controls(BOOL denied) {
+    DWORD expected = denied ? ERROR_ACCESS_DENIED : ERROR_SUCCESS;
+    const char *methods[] = {"absolute", "hardlink", "symlink"};
+    for (size_t input = 0; input < 2; ++input) {
+        for (size_t method = 0; method < 3; ++method) {
+            wchar_t alias[MAX_PATH];
+            if (method) path_for(alias, file_aliases[input * 2 + method - 1]);
+            DWORD error = read_path_error(method ? alias : file_inputs[input]);
+            if (error != expected) {
+                char gate[48];
+                if (_snprintf_s(gate, sizeof(gate), _TRUNCATE, "%s-%s-%s", denied ? "client" : "outside",
+                        input ? "cache" : "source", methods[method]) < 0) fail("file-gate-bound", ERROR_INVALID_DATA);
+                fail(gate, error);
+            }
+            ++file_path_checks;
+        }
+    }
+    wchar_t directory[MAX_PATH], alias[MAX_PATH], previous[32768];
+    if (wcscpy_s(directory, ARRAYSIZE(directory), file_inputs[2])) fail("compiler-directory", ERROR_INVALID_DATA);
+    wchar_t *name = wcsrchr(directory, L'\\');
+    if (!name) fail("compiler-directory", ERROR_INVALID_DATA);
+    *name++ = L'\0';
+    SetLastError(ERROR_SUCCESS);
+    DWORD length = GetEnvironmentVariableW(L"PATH", previous, ARRAYSIZE(previous));
+    DWORD path_error = length ? ERROR_SUCCESS : GetLastError();
+    if (length >= ARRAYSIZE(previous) || (!length && path_error != ERROR_ENVVAR_NOT_FOUND && path_error != ERROR_SUCCESS))
+        fail("compiler-path-baseline", path_error);
+    if (!SetEnvironmentVariableW(L"PATH", directory)) fail("compiler-path-set", GetLastError());
+    for (size_t method = 0; method < 3; ++method) {
+        path_for(alias, file_aliases[4]);
+        DWORD error = compiler_creation_error(method == 0 ? file_inputs[2] : method == 1 ? name : alias, method == 1);
+        if (error != expected) {
+            char gate[48];
+            if (_snprintf_s(gate, sizeof(gate), _TRUNCATE, "%s-compiler-%s", denied ? "client" : "outside",
+                    method == 0 ? "absolute" : method == 1 ? "PATH" : "symlink") < 0)
+                fail("compiler-gate-bound", ERROR_INVALID_DATA);
+            fail(gate, error);
+        }
+        ++compiler_creation_checks;
+    }
+    if (!SetEnvironmentVariableW(L"PATH", length ? previous : NULL)) fail("compiler-path-restore", GetLastError());
+}
+
+static void prepare_file_controls(void) {
+    for (size_t i = 0; i < ARRAYSIZE(file_aliases); ++i) {
+        wchar_t path[MAX_PATH];
+        path_for(path, file_aliases[i]);
+        const wchar_t *target = file_inputs[i < 4 ? i / 2 : 2];
+        BOOL created = i < 4 && !(i % 2) ? CreateHardLinkW(path, target, NULL) :
+            CreateSymbolicLinkW(path, target, SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE);
+        if (!created) fail("outside-file-alias-create", GetLastError());
+    }
+    check_file_controls(FALSE);
+    if (file_path_checks != 6 || compiler_creation_checks != 3) fail("outside-file-control-count", ERROR_INVALID_DATA);
+}
+
 static SOCKET listener(unsigned short *port, BOOL provider) {
     SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sock == INVALID_SOCKET) fail(provider ? "provider-socket" : "outside-socket", (DWORD)WSAGetLastError());
@@ -480,7 +572,7 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
     STARTUPINFOEXW startup = {0};
     SIZE_T size = 0;
     DWORD policy = PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT;
-    wchar_t command[1024], environment[4096];
+    wchar_t command[2048], environment[4096];
     if (!CreatePipe(&child->reader, &writer, &security, 0) ||
             !SetHandleInformation(child->reader, HANDLE_FLAG_INHERIT, 0)) fail("report-pipe", GetLastError());
     size_t used = 0;
@@ -500,7 +592,8 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         used += (size_t)length + 1;
     }
     environment[used] = L'\0';
-    const wchar_t *mode = ordinary_restricted ? L"restricted-appcontainer-network" :
+    const wchar_t *mode = file_controls_stage ? L"restricted-appcontainer-files" :
+        ordinary_restricted ? L"restricted-appcontainer-network" :
         peer_policy >= 0 ? peer_modes[peer_policy] : socket_transfer ? L"shared-transfer" :
         socket_share ? L"socket-share" : socket_policy >= 0 ? socket_modes[socket_policy] :
         restricted_network ? L"restricted-network" : restricted_mode ? L"registry-restricted" :
@@ -514,6 +607,13 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         if (!socket_info_reader || _snwprintf_s(command + used_command, ARRAYSIZE(command) - used_command,
                 _TRUNCATE, L" %llu", (unsigned long long)(UINT_PTR)socket_info_reader) < 0)
             fail("socket-share-command", ERROR_INVALID_DATA);
+    }
+    if (file_controls_stage) {
+        for (size_t i = 0; i < ARRAYSIZE(file_inputs); ++i) {
+            size_t used_command = wcslen(command);
+            if (_snwprintf_s(command + used_command, ARRAYSIZE(command) - used_command,
+                    _TRUNCATE, L" \"%ls\"", file_inputs[i]) < 0) fail("file-child-command-bound", ERROR_INVALID_DATA);
+        }
     }
     DWORD attributes = peer_policy == 0 ? 1 : lpac ? 3 : 2;
     InitializeProcThreadAttributeList(NULL, attributes, 0, &size);
@@ -566,7 +666,8 @@ static DWORD receive(Child *child, DWORD kind) {
     if (item.kind != kind || strcmp(item.gate, kind == 1 ? "internal-provider-ready" :
             kind == 4 ? "socket-observation" : kind == 5 ? "shared-socket-ready" :
             kind == 6 ? "shared-peer-address" : kind == 7 ? "shared-peer-port" :
-            kind == 8 ? "outside-connect-observed" : "complete"))
+            kind == 8 ? "outside-connect-observed" : kind == 9 ? "file-path-checks" :
+            kind == 10 ? "compiler-creation-checks" : "complete"))
         fail("child-report-kind", ERROR_INVALID_DATA);
     return item.value;
 }
@@ -595,23 +696,34 @@ int wmain(int argc, wchar_t **argv) {
     wchar_t *separator = wcsrchr(root, L'\\');
     if (!separator) fail("root-path", ERROR_INVALID_DATA);
     *separator = L'\0';
-    const wchar_t *mode = argc == 6 || argc == 7 ? argv[5] : argc == 2 ? argv[1] : NULL;
-    ordinary_restricted = mode && !wcscmp(mode, L"restricted-appcontainer-network");
+    const wchar_t *mode = argc == 6 || argc == 7 || argc == 9 ? argv[5] : argc >= 2 ? argv[1] : NULL;
+    file_controls_stage = mode && !wcscmp(mode, L"restricted-appcontainer-files");
+    BOOL file_parent = file_controls_stage && argc == 5;
+    if (file_controls_stage) {
+        if (!file_parent && argc != 9) fail("file-control-arguments", ERROR_INVALID_PARAMETER);
+        for (size_t i = 0; i < ARRAYSIZE(file_inputs); ++i) {
+            const wchar_t *path = argv[(file_parent ? 2 : 6) + i];
+            if (wcslen(path) < 4 || wcslen(path) >= MAX_PATH || path[1] != L':' || path[2] != L'\\' || wcschr(path, L'"'))
+                fail("file-control-input-path", ERROR_INVALID_PARAMETER);
+            file_inputs[i] = path;
+        }
+    } else if (argc == 9) fail("file-control-arguments", ERROR_INVALID_PARAMETER);
+    ordinary_restricted = file_controls_stage || (mode && !wcscmp(mode, L"restricted-appcontainer-network"));
     socket_transfer = mode && !wcscmp(mode, L"shared-transfer");
     socket_share = socket_transfer || (mode && !wcscmp(mode, L"socket-share"));
     for (size_t i = 0; mode && i < ARRAYSIZE(socket_modes); ++i)
         if (!wcscmp(mode, socket_modes[i])) socket_policy = (int)i;
     for (size_t i = 0; mode && i < ARRAYSIZE(peer_modes); ++i)
         if (!wcscmp(mode, peer_modes[i])) { peer_policy = (int)i; socket_share = TRUE; }
-    if (argc == 5 || argc == 6 || argc == 7) {
+    if (!file_parent && (argc == 5 || argc == 6 || argc == 7 || argc == 9)) {
         if ((argc == 7) != socket_share) fail("socket-share-arguments", ERROR_INVALID_PARAMETER);
         if (argc >= 6) {
             if (wcscmp(argv[5], L"registry-read") && wcscmp(argv[5], L"registry-restricted") &&
                     wcscmp(argv[5], L"restricted-network") && !ordinary_restricted && socket_policy < 0 && !socket_share)
                 fail("child-mode", ERROR_INVALID_PARAMETER);
             registry_mode = TRUE;
-            restricted_network = ordinary_restricted || !wcscmp(argv[5], L"restricted-network");
-            restricted_mode = (socket_share && peer_policy < 0) || peer_policy == 3 ||
+            restricted_network = !file_controls_stage && (ordinary_restricted || !wcscmp(argv[5], L"restricted-network"));
+            restricted_mode = ordinary_restricted || (socket_share && peer_policy < 0) || peer_policy == 3 ||
                 socket_policy == 2 || restricted_network || !wcscmp(argv[5], L"registry-restricted");
         }
         wchar_t *end = NULL;
@@ -626,12 +738,12 @@ int wmain(int argc, wchar_t **argv) {
                 fail("socket-share-input-handle", ERROR_INVALID_PARAMETER);
         }
     } else {
-        if (argc != 2 || (wcscmp(argv[1], L"run") && wcscmp(argv[1], L"registry-read") &&
+        if (argc != (file_controls_stage ? 5 : 2) || (wcscmp(argv[1], L"run") && wcscmp(argv[1], L"registry-read") &&
                 wcscmp(argv[1], L"registry-restricted") && wcscmp(argv[1], L"restricted-network") &&
                 !ordinary_restricted && socket_policy < 0 && !socket_share))
             fail("arguments", ERROR_INVALID_PARAMETER);
-        restricted_network = ordinary_restricted || !wcscmp(argv[1], L"restricted-network");
-        restricted_mode = (socket_share && peer_policy < 0) || peer_policy == 3 ||
+        restricted_network = !file_controls_stage && (ordinary_restricted || !wcscmp(argv[1], L"restricted-network"));
+        restricted_mode = ordinary_restricted || (socket_share && peer_policy < 0) || peer_policy == 3 ||
             socket_policy == 2 || restricted_network || !wcscmp(argv[1], L"registry-restricted");
         registry_mode = peer_policy >= 0 || socket_policy >= 0 || restricted_mode || !wcscmp(argv[1], L"registry-read");
     }
@@ -735,6 +847,11 @@ int wmain(int argc, wchar_t **argv) {
             if (read_marker(L"private-input.txt") || read_marker(L"all-packages.txt") != ERROR_ACCESS_DENIED)
                 fail(!wcscmp(argv[1], L"provider") ? "provider-restricted-file" : "client-restricted-file", ERROR_INVALID_DATA);
             if (!restricted_network) {
+                if (file_controls_stage && !wcscmp(argv[1], L"client")) {
+                    check_file_controls(TRUE);
+                    message(9, file_path_checks, "file-path-checks");
+                    message(10, compiler_creation_checks, "compiler-creation-checks");
+                }
                 message(3, 0, "complete");
                 WSACleanup();
                 return 0;
@@ -831,6 +948,7 @@ int wmain(int argc, wchar_t **argv) {
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
         fail("kill-on-close-job", GetLastError());
+    if (file_controls_stage) prepare_file_controls();
     DWORD socket_observation = 0, peer_address = 0, peer_port = 0, parent_peer_port = 0;
     if (socket_share) {
         unsigned short port = 0;
@@ -896,8 +1014,11 @@ int wmain(int argc, wchar_t **argv) {
         finished(child);
     } else if (restricted_mode && !restricted_network) {
         finished(spawn(0, L"control", FALSE, 0, 0));
-        finished(spawn(1, L"provider", TRUE, 0, 0));
-        finished(spawn(2, L"client", TRUE, 0, 0));
+        finished(spawn(1, L"provider", !ordinary_restricted, 0, 0));
+        Child *client = spawn(2, L"client", !ordinary_restricted, 0, 0);
+        if (file_controls_stage && (receive(client, 9) != file_path_checks || receive(client, 10) != compiler_creation_checks))
+            fail("child-file-control-count", ERROR_INVALID_DATA);
+        finished(client);
     } else {
         unsigned short canary_port = 0;
         SOCKET canary = listener(&canary_port, FALSE), baseline = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -994,8 +1115,8 @@ int wmain(int argc, wchar_t **argv) {
             "\"private_file_positive\":true,\"child_winsock_startup_checks\":3,"
             "\"host_registry_baseline\":true,\"host_environment_read_error\":5,"
             "\"host_environment_write_open_error\":5,\"profile_deleted\":true,"
-            "\"network\":\"%s\",\"full_isolation\":\"not_run\",\"product\":\"not_run\"%s%s}\n",
-            ordinary_restricted ? "restricted-appcontainer-network-control" :
+            "\"network\":\"%s\",\"full_isolation\":\"not_run\",\"product\":\"not_run\"%s%s%s}\n",
+            file_controls_stage ? "restricted-appcontainer-files-control" : ordinary_restricted ? "restricted-appcontainer-network-control" :
                 restricted_network ? "lpac-restricted-network-control" : "lpac-restricted-registry-control",
             private_sid_file_grants, ordinary_restricted ? 0u : 1u,
             ordinary_restricted ? "" : ",\"capability\":\"registryRead\"",
@@ -1007,7 +1128,10 @@ int wmain(int argc, wchar_t **argv) {
                 "\"outside_unexpected_accepts\":0" :
                 ",\"provider_http_positive\":true,\"outside_listener_positive\":true,"
                 "\"outside_connect_error\":10013,\"outside_unexpected_accepts\":0" : "",
-            ordinary_restricted ? ",\"all_application_packages_opt_out\":false" : "");
+            ordinary_restricted ? ",\"all_application_packages_opt_out\":false" : "",
+            file_controls_stage ? ",\"outside_file_baselines\":6,\"file_path_checks\":6,\"file_read_error\":5,"
+                "\"outside_compiler_creation_baselines\":3,\"compiler_creation_checks\":3,\"compiler_creation_error\":5,"
+                "\"source_cache_aliases_checked\":true,\"compiler_executed\":false" : "");
         return 0;
     }
     printf("{\"status\":\"pass\",\"gate\":\"%s\","

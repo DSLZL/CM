@@ -146,6 +146,17 @@ def restricted_appcontainer_record(text):
     return exact_record(text, expected)
 
 
+def restricted_appcontainer_files_record(text):
+    expected = lpac_restricted_expected()
+    expected.update(gate="restricted-appcontainer-files-control", capability_count=0,
+        all_packages_file_denied=expected.pop("lpac_opt_out_file_denied"), all_application_packages_opt_out=False,
+        outside_file_baselines=6, file_path_checks=6, file_read_error=5,
+        outside_compiler_creation_baselines=3, compiler_creation_checks=3, compiler_creation_error=5,
+        source_cache_aliases_checked=True, compiler_executed=False)
+    del expected["capability"]
+    return exact_record(text, expected)
+
+
 def lpac_socket_record(text, mode):
     if mode not in SOCKET_MODES or len(text) > 8192:
         raise RuntimeError("Invalid socket observation mode or record size")
@@ -219,15 +230,16 @@ def main():
     mechanism = os.environ.get("CM_PREFLIGHT_STAGE", "loader-terminal")
     if mechanism not in ("loader-terminal", "lpac-network", "lpac-registry-read", "lpac-registry-restricted",
             "lpac-restricted-network", "lpac-socket-availability", "lpac-socket-share", "lpac-shared-peer-observation",
-            "lpac-shared-transfer", "restricted-appcontainer-network"):
+            "lpac-shared-transfer", "restricted-appcontainer-network", "restricted-appcontainer-files"):
         raise RuntimeError("Unknown Windows native mechanism stage")
     socket_stage = mechanism == "lpac-socket-availability"
     socket_share_stage = mechanism == "lpac-socket-share"
     peer_stage = mechanism == "lpac-shared-peer-observation"
     transfer_stage = mechanism == "lpac-shared-transfer"
     ordinary_stage = mechanism == "restricted-appcontainer-network"
+    files_stage = mechanism == "restricted-appcontainer-files"
     restricted_network = ordinary_stage or mechanism == "lpac-restricted-network"
-    restricted = transfer_stage or socket_share_stage or restricted_network or mechanism == "lpac-registry-restricted"
+    restricted = files_stage or transfer_stage or socket_share_stage or restricted_network or mechanism == "lpac-registry-restricted"
     registry = restricted or mechanism == "lpac-registry-read"
     lpac = peer_stage or socket_stage or registry or mechanism == "lpac-network"
     if Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
@@ -238,7 +250,8 @@ def main():
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
     report = {"schema_version": 1, "status": "running",
-        "scope": "V01l-restricted-appcontainer-network-only" if ordinary_stage else
+        "scope": "V01m-restricted-appcontainer-files-only" if files_stage else
+            "V01l-restricted-appcontainer-network-only" if ordinary_stage else
             "V01k-shared-channel-transfer-only" if transfer_stage else
             "V01j-shared-peer-observations-only" if peer_stage else
             "V01i-shared-socket-fixture-only" if socket_share_stage else
@@ -352,10 +365,27 @@ def main():
                         "lpac_shared_transfer", lpac_shared_transfer_record),
                     "restricted-appcontainer-network": ("restricted-appcontainer-network-control",
                         "restricted-appcontainer-network", "restricted_appcontainer_network", restricted_appcontainer_record),
+                    "restricted-appcontainer-files": ("restricted-appcontainer-files-control",
+                        "restricted-appcontainer-files", "restricted_appcontainer_files", restricted_appcontainer_files_record),
                 }[mechanism]
-                _, text = run(label, [probe, mode], 120)
+                args = [probe, mode]
+                if files_stage:
+                    group = temp / "files-control"
+                    group.mkdir()
+                    candidate = group / probe.name
+                    shutil.copyfile(probe, candidate)
+                    if hashlib.sha256(candidate.read_bytes()).hexdigest() != report["inputs"]["probe"]["sha256"]:
+                        raise RuntimeError("File control changed its compiled fixture")
+                    source_canary, cache_canary = root / "ci/source-files.txt", temp / "outside-cache.txt"
+                    cache_canary.write_bytes(b"outside cache canary")
+                    report["file_control_inputs"] = {name: {"path": str(path),
+                        "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                        for name, path in (("source", source_canary), ("cache", cache_canary), ("compiler", cl))}
+                    args = [candidate, mode, source_canary, cache_canary, cl]
+                _, text = run(label, args, 120)
                 report["controls"][key] = parse(text)
-                report["status"] = ("passed_bounded_shared_transfer_only" if transfer_stage else
+                report["status"] = ("passed_bounded_file_tool_controls_only" if files_stage else
+                    "passed_bounded_shared_transfer_only" if transfer_stage else
                     "passed_bounded_shared_socket_only" if socket_share_stage else
                     "passed_bounded_registry_controls_only" if restricted and not restricted_network else
                     "passed_bounded_network_controls_only")
@@ -442,7 +472,8 @@ def main():
         report["status"] = "failed"
         raise
     finally:
-        name = ("windows-x64-restricted-appcontainer-network.json" if ordinary_stage else
+        name = ("windows-x64-restricted-appcontainer-files.json" if files_stage else
+            "windows-x64-restricted-appcontainer-network.json" if ordinary_stage else
             "windows-x64-lpac-shared-transfer.json" if transfer_stage else
             "windows-x64-lpac-shared-peer-observation.json" if peer_stage else
             "windows-x64-lpac-socket-share.json" if socket_share_stage else
@@ -708,8 +739,40 @@ def self_check():
             pass
         else:
             raise AssertionError("Restricted AppContainer observation accepted as an older mode")
+    files = {**restricted, "gate": "restricted-appcontainer-files-control", "capability_count": 0,
+        "all_packages_file_denied": True, "all_application_packages_opt_out": False,
+        "outside_file_baselines": 6, "file_path_checks": 6, "file_read_error": 5,
+        "outside_compiler_creation_baselines": 3, "compiler_creation_checks": 3, "compiler_creation_error": 5,
+        "source_cache_aliases_checked": True, "compiler_executed": False}
+    del files["capability"], files["lpac_opt_out_file_denied"]
+    assert restricted_appcontainer_files_record(json.dumps(files)) == files
+    changed = [{key: value for key, value in files.items() if key != omitted} for omitted in files]
+    for key, value in files.items():
+        if type(value) is bool:
+            changed += [{**files, key: item} for item in (not value, int(value))]
+        elif type(value) is int:
+            changed += [{**files, key: item} for item in (True, float(value), str(value), value + 1, value - 1)]
+    changed += [{**files, key: value} for key, value in (("status", "observed"),
+        ("gate", "restricted-appcontainer-network-control"), ("restricting_sid_policy", "world-users-owner"),
+        ("capability", "registryRead"), ("network", "pass"), ("full_isolation", "pass"), ("product", "pass"),
+        ("file_read_error", 0), ("compiler_creation_error", 0), ("compiler_creation_error", 2), ("extra", True))]
+    for raw in [json.dumps(value) for value in (*changed, lpac, registry, restricted, network, ordinary)] + ["[]", " " * 8193]:
+        try:
+            restricted_appcontainer_files_record(raw)
+        except (RuntimeError, ValueError):
+            pass
+        else:
+            raise AssertionError("Incomplete or overclaimed source/cache/compiler controls accepted")
     old_parsers = (lpac_network_record, lpac_registry_record, lpac_restricted_record,
-        lambda text: lpac_restricted_record(text, network=True), restricted_appcontainer_record)
+        lambda text: lpac_restricted_record(text, network=True), restricted_appcontainer_record,
+        restricted_appcontainer_files_record)
+    for parse in (*old_parsers[:-1], lpac_socket_share_record, lpac_shared_transfer_record):
+        try:
+            parse(json.dumps(files))
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("File/compiler controls accepted as another mode")
     for mode in SOCKET_MODES:
         for error in (0, 10013):
             observed = {"status": "observed", "gate": "lpac-socket-availability-control",
