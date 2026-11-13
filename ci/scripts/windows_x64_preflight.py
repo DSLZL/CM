@@ -17,6 +17,7 @@ import record_run
 
 KEY, TARGET = "windows-x64", "x86_64-pc-windows-msvc"
 SOCKET_MODES = ("socket-ordinary", "socket-lpac", "socket-restricted")
+PEER_MODES = ("peer-outside", "peer-ordinary", "peer-lpac", "peer-restricted")
 
 
 def authority(policy, entry, env):
@@ -143,6 +144,27 @@ def lpac_socket_record(text, mode):
         "full_isolation": "not_run", "product": "not_run"})
 
 
+def lpac_shared_peer_record(text, mode):
+    if mode not in PEER_MODES or len(text) > 8192:
+        raise RuntimeError("Invalid shared-peer observation mode or record size")
+    value = json.loads(text)
+    bounds = {"parent_peer_port": (1, 65535), "peer_address": (0, 0xFFFFFFFF), "peer_port": (0, 65535)}
+    if (not isinstance(value, dict) or any(type(value.get(key)) is not int or not low <= value[key] <= high
+            for key, (low, high) in bounds.items()) or type(value.get("direct_socket_error")) is not int
+            or value["direct_socket_error"] not in (0, 10013)):
+        raise RuntimeError("Missing bounded shared-peer observation")
+    return exact_record(text, {"status": "observed", "gate": "lpac-shared-peer-observation", "mode": mode,
+        "appcontainer": mode != "peer-outside", "lpac": mode in ("peer-lpac", "peer-restricted"),
+        "outside_token_checks": 1, "outside_restricted_token_checks": int(mode == "peer-restricted"),
+        "capability_count": int(mode in ("peer-lpac", "peer-restricted")), "inherited_handle_count": 2,
+        "environment_allowlist_count": 8, "environment_canary_not_inherited": True,
+        "file_controls_checked": True, "pid_bound_socket_share": True,
+        "direct_socket_error": value["direct_socket_error"], "parent_peer_address": 2130706433,
+        "parent_peer_port": value["parent_peer_port"], "peer_size": 16, "peer_family": 2,
+        "peer_address": value["peer_address"], "peer_port": value["peer_port"], "profile_deleted": True,
+        "http": "not_run", "network": "not_run", "full_isolation": "not_run", "product": "not_run"})
+
+
 def lpac_socket_share_record(text):
     return exact_record(text, {"status": "pass", "gate": "lpac-socket-share-control",
         "outside_token_checks": 1, "outside_restricted_token_checks": 1,
@@ -163,14 +185,15 @@ def main():
     authority(json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text()), entry, os.environ)
     mechanism = os.environ.get("CM_PREFLIGHT_STAGE", "loader-terminal")
     if mechanism not in ("loader-terminal", "lpac-network", "lpac-registry-read", "lpac-registry-restricted",
-            "lpac-restricted-network", "lpac-socket-availability", "lpac-socket-share"):
+            "lpac-restricted-network", "lpac-socket-availability", "lpac-socket-share", "lpac-shared-peer-observation"):
         raise RuntimeError("Unknown Windows native mechanism stage")
     socket_stage = mechanism == "lpac-socket-availability"
     socket_share_stage = mechanism == "lpac-socket-share"
+    peer_stage = mechanism == "lpac-shared-peer-observation"
     restricted_network = mechanism == "lpac-restricted-network"
     restricted = socket_share_stage or restricted_network or mechanism == "lpac-registry-restricted"
     registry = restricted or mechanism == "lpac-registry-read"
-    lpac = socket_stage or registry or mechanism == "lpac-network"
+    lpac = peer_stage or socket_stage or registry or mechanism == "lpac-network"
     if Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
         raise RuntimeError("Mechanism source must be the exact recorded source checkout")
     logs = Path(os.environ["CM_CI_LOG_DIR"]).resolve()
@@ -179,7 +202,8 @@ def main():
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
     report = {"schema_version": 1, "status": "running",
-        "scope": "V01i-shared-socket-fixture-only" if socket_share_stage else
+        "scope": "V01j-shared-peer-observations-only" if peer_stage else
+            "V01i-shared-socket-fixture-only" if socket_share_stage else
             "V01h-socket-availability-fixture-only" if socket_stage else
             "V01g-restricted-network-fixture-only" if restricted_network else
             "V01f-private-sid-registry-fixture-only" if restricted else "V01d-system-dependency-fixture-only" if registry else
@@ -264,8 +288,8 @@ def main():
             if lpac:
                 report["inputs"] = {"probe": pe_fixture(probe.read_bytes(), False)}
                 run("probe-dependencies", [cl.with_name("dumpbin.exe"), "/nologo", "/dependents", probe])
-                if socket_stage:
-                    for mode in SOCKET_MODES:
+                if socket_stage or peer_stage:
+                    for mode in (PEER_MODES if peer_stage else SOCKET_MODES):
                         group = temp / mode
                         group.mkdir()
                         candidate = group / probe.name
@@ -273,8 +297,9 @@ def main():
                         if hashlib.sha256(candidate.read_bytes()).hexdigest() != report["inputs"]["probe"]["sha256"]:
                             raise RuntimeError("Socket policy comparison changed its compiled fixture")
                         _, text = run("lpac-" + mode + "-control", [candidate, mode], 120)
-                        report["controls"][mode] = lpac_socket_record(text, mode)
-                    report["status"] = "observed_socket_availability_only"
+                        parse = lpac_shared_peer_record if peer_stage else lpac_socket_record
+                        report["controls"][mode] = parse(text, mode)
+                    report["status"] = "observed_shared_peer_only" if peer_stage else "observed_socket_availability_only"
                     return
                 label, mode, key, parse = {
                     "lpac-network": ("lpac-internal-provider-network-control", "run", "lpac_network", lpac_network_record),
@@ -374,7 +399,8 @@ def main():
         report["status"] = "failed"
         raise
     finally:
-        name = ("windows-x64-lpac-socket-share.json" if socket_share_stage else
+        name = ("windows-x64-lpac-shared-peer-observation.json" if peer_stage else
+            "windows-x64-lpac-socket-share.json" if socket_share_stage else
             "windows-x64-lpac-socket-availability.json" if socket_stage else
             "windows-x64-lpac-restricted-network.json" if restricted_network else
             "windows-x64-lpac-registry-restricted.json" if restricted else "windows-x64-lpac-registry-read.json" if registry else
@@ -681,6 +707,59 @@ def self_check():
             pass
         else:
             raise AssertionError("Shared parent/child socket control accepted as another qualification")
+    for mode, appcontainer, lpac_mode, restricted_count, capability_count in (
+            ("peer-outside", False, False, 0, 0), ("peer-ordinary", True, False, 0, 0),
+            ("peer-lpac", True, True, 0, 1), ("peer-restricted", True, True, 1, 1)):
+        for address, port in ((0, 0), (2130706433, 49152), (0xFFFFFFFF, 65535)):
+            observed = {"status": "observed", "gate": "lpac-shared-peer-observation", "mode": mode,
+                "appcontainer": appcontainer, "lpac": lpac_mode,
+                "outside_token_checks": 1, "outside_restricted_token_checks": restricted_count,
+                "capability_count": capability_count, "inherited_handle_count": 2,
+                "environment_allowlist_count": 8, "environment_canary_not_inherited": True,
+                "file_controls_checked": True, "pid_bound_socket_share": True, "direct_socket_error": 10013,
+                "parent_peer_address": 2130706433, "parent_peer_port": 49151, "peer_size": 16, "peer_family": 2,
+                "peer_address": address, "peer_port": port, "profile_deleted": True,
+                "http": "not_run", "network": "not_run", "full_isolation": "not_run", "product": "not_run"}
+            for error in (0, 10013):
+                assert lpac_shared_peer_record(json.dumps({**observed, "direct_socket_error": error}), mode) == {
+                    **observed, "direct_socket_error": error}
+            changed = [{key: value for key, value in observed.items() if key != omitted} for omitted in observed]
+            changed += [{**observed, key: value} for key, value in (("status", "pass"), ("mode", "unknown"),
+                ("gate", "lpac-socket-share-control"), ("direct_socket_error", 10060), ("direct_socket_error", 10061),
+                ("parent_peer_address", 0), ("parent_peer_port", 0), ("parent_peer_port", 65536),
+                ("peer_size", 0), ("peer_family", 23), ("peer_address", -1), ("peer_address", 0x100000000),
+                ("peer_port", -1), ("peer_port", 65536), ("http", "pass"), ("network", "pass"),
+                ("full_isolation", "pass"), ("product", "pass"), ("extra", True))]
+            for key, value in observed.items():
+                if type(value) is bool:
+                    changed += [{**observed, key: item} for item in (not value, int(value))]
+                elif type(value) is int:
+                    changed += [{**observed, key: item} for item in (True, float(value), str(value))]
+            changed += [{**observed, key: observed[key] + 1} for key in (
+                "outside_token_checks", "outside_restricted_token_checks", "capability_count", "inherited_handle_count",
+                "environment_allowlist_count")]
+            for raw in [json.dumps(value) for value in changed + old_records + [shared]] + ["[]", " " * 8193]:
+                try:
+                    lpac_shared_peer_record(raw, mode)
+                except (RuntimeError, ValueError):
+                    pass
+                else:
+                    raise AssertionError("Incomplete or overclaimed shared-peer observation accepted")
+            for other in (*[item for item in PEER_MODES if item != mode], "unknown"):
+                try:
+                    lpac_shared_peer_record(json.dumps(observed), other)
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError("Cross-policy shared-peer observation accepted")
+            for parse in (*old_parsers, lpac_socket_share_record,
+                    *[lambda text, mode=mode: lpac_socket_record(text, mode) for mode in SOCKET_MODES]):
+                try:
+                    parse(json.dumps(observed))
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError("Shared-peer observation accepted as another qualification")
     print("Windows preflight authority, PE fixture and bounded native records self-check passed", flush=True)
 
 

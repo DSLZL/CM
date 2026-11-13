@@ -33,7 +33,9 @@ static BOOL restricted_mode;
 static BOOL restricted_network;
 static BOOL socket_share;
 static int socket_policy = -1;
+static int peer_policy = -1;
 static const wchar_t *socket_modes[] = {L"socket-ordinary", L"socket-lpac", L"socket-restricted"};
+static const wchar_t *peer_modes[] = {L"peer-outside", L"peer-ordinary", L"peer-lpac", L"peer-restricted"};
 static const char request[] = "GET /controlled HTTP/1.0\r\n\r\n";
 static const char response[] = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nOK";
 static const wchar_t *environment_names[] = {
@@ -437,6 +439,14 @@ static void inspect(Child *child, BOOL lpac, const wchar_t *role) {
     BOOL member = FALSE;
     if (!OpenProcessToken(child->process.hProcess, TOKEN_QUERY, &token)) fail("child-token", GetLastError());
     DWORD *container = token_info(token, TokenIsAppContainer);
+    if (peer_policy == 0) {
+        TOKEN_USER *outside_user = token_info(token, TokenUser);
+        if (*container || !EqualSid(outside_user->User.Sid, owner->User.Sid) ||
+                !IsProcessInJob(child->process.hProcess, job, &member) || !member)
+            fail("outside-shared-peer-token", ERROR_INVALID_DATA);
+        free(container); free(outside_user); CloseHandle(token);
+        return;
+    }
     TOKEN_APPCONTAINER_INFORMATION *identity = token_info(token, TokenAppContainerSid);
     TOKEN_GROUPS *capabilities = token_info(token, TokenCapabilities);
     TOKEN_USER *user = token_info(token, TokenUser);
@@ -488,7 +498,8 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         used += (size_t)length + 1;
     }
     environment[used] = L'\0';
-    const wchar_t *mode = socket_share ? L"socket-share" : socket_policy >= 0 ? socket_modes[socket_policy] :
+    const wchar_t *mode = peer_policy >= 0 ? peer_modes[peer_policy] :
+        socket_share ? L"socket-share" : socket_policy >= 0 ? socket_modes[socket_policy] :
         restricted_network ? L"restricted-network" : restricted_mode ? L"registry-restricted" :
             registry_mode ? L"registry-read" : L"";
     if (_snwprintf_s(command, ARRAYSIZE(command), _TRUNCATE, L"\"%ls\" %ls %llu %u %u%ls%ls", executable, role,
@@ -501,7 +512,7 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
                 _TRUNCATE, L" %llu", (unsigned long long)(UINT_PTR)socket_info_reader) < 0)
             fail("socket-share-command", ERROR_INVALID_DATA);
     }
-    DWORD attributes = lpac ? 3 : 2;
+    DWORD attributes = peer_policy == 0 ? 1 : lpac ? 3 : 2;
     InitializeProcThreadAttributeList(NULL, attributes, 0, &size);
     startup.lpAttributeList = malloc(size);
     if (!startup.lpAttributeList || !InitializeProcThreadAttributeList(startup.lpAttributeList, attributes, 0, &size))
@@ -512,8 +523,8 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         capabilities.CapabilityCount = 1;
     }
     HANDLE inherited[] = {writer, socket_info_reader};
-    if (!UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-            &capabilities, sizeof(capabilities), NULL, NULL) ||
+    if ((peer_policy != 0 && !UpdateProcThreadAttribute(startup.lpAttributeList, 0,
+            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, &capabilities, sizeof(capabilities), NULL, NULL)) ||
             !UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
             inherited, socket_share ? sizeof(inherited) : sizeof(writer), NULL, NULL) ||
             (lpac && !UpdateProcThreadAttribute(startup.lpAttributeList, 0,
@@ -549,7 +560,8 @@ static DWORD receive(Child *child, DWORD kind) {
         fail("child-report-bytes", ERROR_INVALID_DATA);
     if (item.kind == 2) fail(item.gate, item.value);
     if (item.kind != kind || strcmp(item.gate, kind == 1 ? "internal-provider-ready" :
-            kind == 4 ? "socket-observation" : kind == 5 ? "shared-socket-ready" : "complete"))
+            kind == 4 ? "socket-observation" : kind == 5 ? "shared-socket-ready" :
+            kind == 6 ? "shared-peer-address" : kind == 7 ? "shared-peer-port" : "complete"))
         fail("child-report-kind", ERROR_INVALID_DATA);
     return item.value;
 }
@@ -582,6 +594,8 @@ int wmain(int argc, wchar_t **argv) {
     socket_share = mode && !wcscmp(mode, L"socket-share");
     for (size_t i = 0; mode && i < ARRAYSIZE(socket_modes); ++i)
         if (!wcscmp(mode, socket_modes[i])) socket_policy = (int)i;
+    for (size_t i = 0; mode && i < ARRAYSIZE(peer_modes); ++i)
+        if (!wcscmp(mode, peer_modes[i])) { peer_policy = (int)i; socket_share = TRUE; }
     if (argc == 5 || argc == 6 || argc == 7) {
         if ((argc == 7) != socket_share) fail("socket-share-arguments", ERROR_INVALID_PARAMETER);
         if (argc >= 6) {
@@ -590,7 +604,8 @@ int wmain(int argc, wchar_t **argv) {
                 fail("child-mode", ERROR_INVALID_PARAMETER);
             registry_mode = TRUE;
             restricted_network = !wcscmp(argv[5], L"restricted-network");
-            restricted_mode = socket_share || socket_policy == 2 || restricted_network || !wcscmp(argv[5], L"registry-restricted");
+            restricted_mode = (socket_share && peer_policy < 0) || peer_policy == 3 ||
+                socket_policy == 2 || restricted_network || !wcscmp(argv[5], L"registry-restricted");
         }
         wchar_t *end = NULL;
         report_pipe = (HANDLE)(UINT_PTR)wcstoull(argv[2], &end, 10);
@@ -609,8 +624,9 @@ int wmain(int argc, wchar_t **argv) {
                 socket_policy < 0 && !socket_share))
             fail("arguments", ERROR_INVALID_PARAMETER);
         restricted_network = !wcscmp(argv[1], L"restricted-network");
-        restricted_mode = socket_share || socket_policy == 2 || restricted_network || !wcscmp(argv[1], L"registry-restricted");
-        registry_mode = socket_policy >= 0 || restricted_mode || !wcscmp(argv[1], L"registry-read");
+        restricted_mode = (socket_share && peer_policy < 0) || peer_policy == 3 ||
+            socket_policy == 2 || restricted_network || !wcscmp(argv[1], L"registry-restricted");
+        registry_mode = peer_policy >= 0 || socket_policy >= 0 || restricted_mode || !wcscmp(argv[1], L"registry-read");
     }
     if (report_pipe) check_child_environment();
     WSADATA winsock;
@@ -622,16 +638,20 @@ int wmain(int argc, wchar_t **argv) {
     if (report_pipe) {
         if (socket_share) {
             // shortcut: one existing parent/child channel; qualify reconnect and isolation before product use.
-            if (read_marker(L"private-input.txt") || read_marker(L"all-packages.txt") != ERROR_ACCESS_DENIED)
+            if (read_marker(L"private-input.txt") || read_marker(L"all-packages.txt") !=
+                    (DWORD)(peer_policy == 0 || peer_policy == 1 ? ERROR_SUCCESS : ERROR_ACCESS_DENIED))
                 fail("socket-share-file-control", ERROR_INVALID_DATA);
-            LSTATUS access = open_host_environment(KEY_QUERY_VALUE);
-            if (access != ERROR_ACCESS_DENIED) fail("socket-share-host-env-read", (DWORD)access);
-            access = open_host_environment(KEY_SET_VALUE);
-            if (access != ERROR_ACCESS_DENIED) fail("socket-share-host-env-write", (DWORD)access);
+            if (peer_policy < 0 || peer_policy == 3) {
+                LSTATUS access = open_host_environment(KEY_QUERY_VALUE);
+                if (access != ERROR_ACCESS_DENIED) fail("socket-share-host-env-read", (DWORD)access);
+                access = open_host_environment(KEY_SET_VALUE);
+                if (access != ERROR_ACCESS_DENIED) fail("socket-share-host-env-write", (DWORD)access);
+            }
             SOCKET direct = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
             DWORD direct_error = direct == INVALID_SOCKET ? (DWORD)WSAGetLastError() : 0;
-            if (direct != INVALID_SOCKET) closesocket(direct);
-            if (direct_error != WSAEACCES) fail("socket-share-direct-denial", direct_error);
+            if (direct != INVALID_SOCKET && closesocket(direct))
+                fail("socket-share-direct-close", (DWORD)WSAGetLastError());
+            if (peer_policy < 0 && direct_error != WSAEACCES) fail("socket-share-direct-denial", direct_error);
             WSAPROTOCOL_INFOW info = {0};
             DWORD received = 0;
             if (!ReadFile(socket_info_reader, &info, (DWORD)sizeof(info), &received, NULL))
@@ -649,6 +669,15 @@ int wmain(int argc, wchar_t **argv) {
                 fail("socket-share-peer-size", (DWORD)peer_size);
             if (peer.sin_family != AF_INET)
                 fail("socket-share-peer-family", (DWORD)peer.sin_family);
+            if (peer_policy >= 0) {
+                message(4, direct_error, "socket-observation");
+                message(6, (DWORD)ntohl(peer.sin_addr.s_addr), "shared-peer-address");
+                message(7, (DWORD)ntohs(peer.sin_port), "shared-peer-port");
+                if (closesocket(channel)) fail("shared-peer-close", (DWORD)WSAGetLastError());
+                message(3, 0, "complete");
+                WSACleanup();
+                return 0;
+            }
             if (peer.sin_addr.s_addr != htonl(INADDR_LOOPBACK))
                 fail("socket-share-peer-address", (DWORD)ntohl(peer.sin_addr.s_addr));
             if (!peer.sin_port)
@@ -751,7 +780,7 @@ int wmain(int argc, wchar_t **argv) {
     if (*container) fail("outside-launcher-token", ERROR_INVALID_DATA);
     free(container); CloseHandle(token);
     if (registry_mode) {
-        if (socket_policy < 0) {
+        if (socket_policy < 0 && (peer_policy < 0 || peer_policy == 3)) {
             LSTATUS access = open_host_environment(KEY_QUERY_VALUE);
             if (access != ERROR_SUCCESS) fail("outside-host-env-read-handle", (DWORD)access);
             access = open_host_environment(KEY_SET_VALUE);
@@ -785,7 +814,7 @@ int wmain(int argc, wchar_t **argv) {
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
         fail("kill-on-close-job", GetLastError());
-    DWORD socket_observation = 0;
+    DWORD socket_observation = 0, peer_address = 0, peer_port = 0, parent_peer_port = 0;
     if (socket_share) {
         unsigned short port = 0;
         SOCKET server = listener(&port, FALSE);
@@ -800,11 +829,21 @@ int wmain(int argc, wchar_t **argv) {
                 setsockopt(shared_source, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout)))
             fail("socket-share-retained-timeout", (DWORD)WSAGetLastError());
         if (closesocket(server)) fail("socket-share-listener-close", (DWORD)WSAGetLastError());
+        if (peer_policy >= 0) {
+            struct sockaddr_in peer = {0};
+            int size = sizeof(peer);
+            if (getpeername(shared_peer, (struct sockaddr *)&peer, &size))
+                fail("shared-parent-peer", (DWORD)WSAGetLastError());
+            if (size != (int)sizeof(peer) || peer.sin_family != AF_INET ||
+                    peer.sin_addr.s_addr != htonl(INADDR_LOOPBACK) || !peer.sin_port)
+                fail("shared-parent-loopback", ERROR_INVALID_DATA);
+            parent_peer_port = (DWORD)ntohs(peer.sin_port);
+        }
         SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
         if (!CreatePipe(&socket_info_reader, &socket_info_writer, &security, 0) ||
                 !SetHandleInformation(socket_info_writer, HANDLE_FLAG_INHERIT, 0))
             fail("socket-share-info-pipe", GetLastError());
-        Child *child = spawn(0, L"socket-share", TRUE, 0, 0);
+        Child *child = spawn(0, L"socket-share", peer_policy < 0 || peer_policy >= 2, 0, 0);
         CloseHandle(socket_info_reader); socket_info_reader = NULL;
         WSAPROTOCOL_INFOW info = {0};
         if (WSADuplicateSocketW(shared_peer, child->process.dwProcessId, &info))
@@ -814,11 +853,16 @@ int wmain(int argc, wchar_t **argv) {
             fail("socket-share-info-write", GetLastError());
         if (written != sizeof(info)) fail("socket-share-info-size", ERROR_INVALID_DATA);
         CloseHandle(socket_info_writer); socket_info_writer = NULL;
-        if (receive(child, 5)) fail("socket-share-ready", ERROR_INVALID_DATA);
+        if (peer_policy >= 0) {
+            socket_observation = receive(child, 4);
+            peer_address = receive(child, 6);
+            peer_port = receive(child, 7);
+        } else if (receive(child, 5)) fail("socket-share-ready", ERROR_INVALID_DATA);
         // The originating descriptor stays open until the target reconstructs it.
         if (closesocket(shared_peer)) fail("socket-share-origin-close", (DWORD)WSAGetLastError());
         shared_peer = INVALID_SOCKET;
-        exchange(shared_source, request, sizeof(request) - 1, response, sizeof(response) - 1);
+        if (peer_policy < 0)
+            exchange(shared_source, request, sizeof(request) - 1, response, sizeof(response) - 1);
         if (closesocket(shared_source)) fail("socket-share-source-close", (DWORD)WSAGetLastError());
         shared_source = INVALID_SOCKET;
         finished(child);
@@ -854,6 +898,22 @@ int wmain(int argc, wchar_t **argv) {
     if (FAILED(result)) fail("owned-profile-delete", (DWORD)result);
     profile_created = FALSE;
     cleanup(); WSACleanup();
+    if (peer_policy >= 0) {
+        printf("{\"status\":\"observed\",\"gate\":\"lpac-shared-peer-observation\",\"mode\":\"%ls\","
+            "\"appcontainer\":%s,\"lpac\":%s,"
+            "\"outside_token_checks\":1,\"outside_restricted_token_checks\":%u,\"capability_count\":%u,"
+            "\"inherited_handle_count\":2,\"environment_allowlist_count\":%zu,"
+            "\"environment_canary_not_inherited\":true,\"file_controls_checked\":true,"
+            "\"pid_bound_socket_share\":true,\"direct_socket_error\":%lu,"
+            "\"parent_peer_address\":2130706433,\"parent_peer_port\":%lu,"
+            "\"peer_size\":16,\"peer_family\":2,\"peer_address\":%lu,\"peer_port\":%lu,"
+            "\"profile_deleted\":true,\"http\":\"not_run\",\"network\":\"not_run\","
+            "\"full_isolation\":\"not_run\",\"product\":\"not_run\"}\n",
+            peer_modes[peer_policy], peer_policy ? "true" : "false", peer_policy >= 2 ? "true" : "false",
+            peer_policy == 3 ? 1u : 0u, peer_policy >= 2 ? 1u : 0u,
+            ARRAYSIZE(environment_names), socket_observation, parent_peer_port, peer_address, peer_port);
+        return 0;
+    }
     if (socket_share) {
         printf("{\"status\":\"pass\",\"gate\":\"lpac-socket-share-control\","
             "\"outside_token_checks\":1,\"outside_restricted_token_checks\":1,"
