@@ -40,7 +40,7 @@ static BOOL restricted_code_files;
 static BOOL installer_files;
 static PSID installer_sid;
 static BOOL file_diagnostic_done;
-static BOOL private_catalog, catalog_created;
+static BOOL private_catalog, catalog_network, catalog_created;
 static HKEY catalog_writer, catalog_reader;
 static wchar_t catalog_path[128];
 static DWORD catalog_keys, catalog_values, catalog_bytes;
@@ -861,7 +861,8 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         used += (size_t)length + 1;
     }
     environment[used] = L'\0';
-    const wchar_t *mode = private_catalog ? L"restricted-installer-private-catalog" :
+    const wchar_t *mode = catalog_network ? L"restricted-installer-private-network" :
+        private_catalog ? L"restricted-installer-private-catalog" :
         installer_files ? L"restricted-installer-appcontainer-files" :
         restricted_code_files ? L"restricted-code-appcontainer-files" :
         file_controls_stage ? L"restricted-appcontainer-files" :
@@ -987,7 +988,8 @@ int wmain(int argc, wchar_t **argv) {
     *separator = L'\0';
     const wchar_t *mode = argc == 6 || argc == 7 || argc == 9 || argc == 10 ? argv[5] : argc >= 2 ? argv[1] : NULL;
     restricted_code_files = mode && !wcscmp(mode, L"restricted-code-appcontainer-files");
-    private_catalog = mode && !wcscmp(mode, L"restricted-installer-private-catalog");
+    catalog_network = mode && !wcscmp(mode, L"restricted-installer-private-network");
+    private_catalog = catalog_network || (mode && !wcscmp(mode, L"restricted-installer-private-catalog"));
     installer_files = private_catalog || (mode && !wcscmp(mode, L"restricted-installer-appcontainer-files"));
     file_controls_stage = installer_files || restricted_code_files || (mode && !wcscmp(mode, L"restricted-appcontainer-files"));
     BOOL file_parent = file_controls_stage && argc == 5;
@@ -1014,7 +1016,8 @@ int wmain(int argc, wchar_t **argv) {
                     wcscmp(argv[5], L"restricted-network") && !ordinary_restricted && socket_policy < 0 && !socket_share)
                 fail("child-mode", ERROR_INVALID_PARAMETER);
             registry_mode = TRUE;
-            restricted_network = !file_controls_stage && (ordinary_restricted || !wcscmp(argv[5], L"restricted-network"));
+            restricted_network = catalog_network || (!file_controls_stage &&
+                (ordinary_restricted || !wcscmp(argv[5], L"restricted-network")));
             restricted_mode = ordinary_restricted || (socket_share && peer_policy < 0) || peer_policy == 3 ||
                 socket_policy == 2 || restricted_network || !wcscmp(argv[5], L"registry-restricted");
         }
@@ -1042,7 +1045,8 @@ int wmain(int argc, wchar_t **argv) {
                 wcscmp(argv[1], L"registry-restricted") && wcscmp(argv[1], L"restricted-network") &&
                 !ordinary_restricted && socket_policy < 0 && !socket_share))
             fail("arguments", ERROR_INVALID_PARAMETER);
-        restricted_network = !file_controls_stage && (ordinary_restricted || !wcscmp(argv[1], L"restricted-network"));
+        restricted_network = catalog_network || (!file_controls_stage &&
+            (ordinary_restricted || !wcscmp(argv[1], L"restricted-network")));
         restricted_mode = ordinary_restricted || (socket_share && peer_policy < 0) || peer_policy == 3 ||
             socket_policy == 2 || restricted_network || !wcscmp(argv[1], L"registry-restricted");
         registry_mode = peer_policy >= 0 || socket_policy >= 0 || restricted_mode || !wcscmp(argv[1], L"registry-read");
@@ -1347,6 +1351,11 @@ int wmain(int argc, wchar_t **argv) {
         DWORD port = receive(provider, 1);
         if (!port || port > 65535) fail("provider-port", ERROR_INVALID_DATA);
         Child *client = spawn(2, L"client", !ordinary_restricted, (unsigned short)port, canary_port);
+        if (catalog_network) {
+            if (receive(client, 9) != file_path_checks || receive(client, 10) != compiler_creation_checks)
+                fail("child-file-control-count", ERROR_INVALID_DATA);
+            file_diagnostic_done = TRUE;
+        }
         if (ordinary_restricted && receive(client, 8) != (DWORD)WSAETIMEDOUT)
             fail("outside-timeout-observation", ERROR_INVALID_DATA);
         finished(client);
@@ -1435,7 +1444,8 @@ int wmain(int argc, wchar_t **argv) {
             "\"host_registry_baseline\":true,\"host_environment_read_error\":5,"
             "\"host_environment_write_open_error\":5,\"profile_deleted\":true,"
             "\"network\":\"%s\",\"full_isolation\":\"not_run\",\"product\":\"not_run\"%s%s%s%s%s}\n",
-            private_catalog ? "restricted-installer-private-catalog-control" :
+            catalog_network ? "restricted-installer-private-network-control" :
+                private_catalog ? "restricted-installer-private-catalog-control" :
                 installer_files ? "restricted-installer-appcontainer-files-control" :
                 restricted_code_files ? "restricted-code-appcontainer-files-control" :
                 file_controls_stage ? "restricted-appcontainer-files-control" : ordinary_restricted ? "restricted-appcontainer-network-control" :
