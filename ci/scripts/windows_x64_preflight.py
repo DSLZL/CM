@@ -265,13 +265,27 @@ def registry_failure_trace(temp, logs, label, run, report):
     session = "CM-WX-Q-" + hashlib.sha256(str(temp).encode()).hexdigest()[:20]
     trace = temp / "registry.etl"
     state = {"diagnostic_only": True, "provider": "Microsoft-Windows-Kernel-Registry",
-        "maximum_trace_megabytes": 8, "automatic_stop_seconds": 20, "child_policy_changed": False}
+        "maximum_trace_megabytes": 8, "automatic_stop_seconds": 20,
+        "automatic_stop_method": "controller-timer", "child_policy_changed": False}
     started = False
+    timer = None
+
+    def expire():
+        try:
+            state["deadline_stop_code"], _ = run("registry-trace-deadline-stop",
+                [system / "logman.exe", "stop", session, "-ets"], 15, codes=None)
+        except Exception as error:
+            state["deadline_stop_error"] = type(error).__name__
+
     try:
         code, _ = run("registry-trace-start", [system / "logman.exe", "create", "trace", session,
             "-ets", "-p", state["provider"], "0xffffffffffffffff", "0xff", "-o", trace,
-            "-f", "bincirc", "-max", "8", "-rf", "00:00:20"], 15, codes=None)
+            "-f", "bincirc", "-max", "8"], 15, codes=None)
         state["start_code"], started = code, code == 0
+        if started:
+            timer = threading.Timer(20, expire)
+            timer.daemon = True
+            timer.start()
     except Exception as error:
         state["start_error"] = type(error).__name__
     try:
@@ -282,6 +296,14 @@ def registry_failure_trace(temp, logs, label, run, report):
                 [system / "logman.exe", "stop", session, "-ets"], 15, codes=None)
         except Exception as error:
             state["stop_error"] = type(error).__name__
+        if timer is not None:
+            try:
+                timer.cancel()
+                timer.join(timeout=20)
+                if timer.is_alive():
+                    state["timer_cleanup_error"] = "still_alive"
+            except Exception as error:
+                state["timer_cleanup_error"] = type(error).__name__
         if started:
             try:
                 failure = logs / (label + ".log")
@@ -644,25 +666,41 @@ def self_check():
             raise AssertionError("Invalid trace child identity accepted")
     with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"SystemRoot": "C:/Windows"}):
         temp = Path(directory)
-        for start_code, stop_error in ((0, False), (1, False), (0, True), (None, False)):
+        for start_code, stop_error, expired in ((0, False, False), (1, False, False), (0, True, False),
+                (None, False, False), (0, False, True)):
             calls, report = [], {}
 
             def trace_run(label, args, timeout, codes=None):
                 calls.append(label)
+                if label == "registry-trace-start":
+                    assert "-ets" in args and "-rf" not in args
                 if start_code is None and label == "registry-trace-start":
                     raise OSError("diagnostic start failure")
                 if stop_error and label == "registry-trace-stop":
                     raise OSError("diagnostic stop failure")
                 return (start_code if label == "registry-trace-start" else 0), ""
 
-            try:
-                with registry_failure_trace(temp, temp, "probe", trace_run, report):
-                    raise RuntimeError("original native failure")
-            except RuntimeError as error:
-                assert str(error) == "original native failure"
-            else:
-                raise AssertionError("Optional trace hid the original native failure")
-            assert calls == ["registry-trace-start", "registry-trace-stop"]
+            with patch.object(threading, "Timer") as timer_factory:
+                timer_factory.return_value.is_alive.return_value = False
+                if expired:
+                    timer_factory.return_value.start.side_effect = lambda: timer_factory.call_args.args[1]()
+                try:
+                    with registry_failure_trace(temp, temp, "probe", trace_run, report):
+                        raise RuntimeError("original native failure")
+                except RuntimeError as error:
+                    assert str(error) == "original native failure"
+                else:
+                    raise AssertionError("Optional trace hid the original native failure")
+                if start_code == 0:
+                    assert timer_factory.call_args.args[0] == 20
+                    timer_factory.return_value.cancel.assert_called_once()
+                    timer_factory.return_value.join.assert_called_once_with(timeout=20)
+                else:
+                    timer_factory.assert_not_called()
+            assert calls == ["registry-trace-start", *(["registry-trace-deadline-stop"] if expired else []),
+                "registry-trace-stop"]
+            if expired:
+                assert report["registry_trace_diagnostic"]["deadline_stop_code"] == 0
             assert report["registry_trace_diagnostic"]["child_policy_changed"] is False
             if stop_error:
                 assert report["registry_trace_diagnostic"]["stop_error"] == "OSError"
