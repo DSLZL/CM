@@ -339,6 +339,10 @@ def main():
             probe, payload = temp / "native-probe.exe", temp / "sentinel.dll"
             flags = ["/nologo", "/Bv", "/std:c11", "/W4", "/WX", "/O2", "/MT", "/utf-8", "/TC"]
             libraries = ["bcrypt.lib", *(["userenv.lib", "advapi32.lib", "ws2_32.lib", "onecoreuap.lib"] if lpac else [])]
+            if restricted_code_stage:
+                flags.append("/DCM_DELAY_DIAGNOSTIC")
+                libraries += ["delayimp.lib", *["/DELAYLOAD:" + name for name in
+                    ("bcrypt.dll", "USERENV.dll", "ADVAPI32.dll", "WS2_32.dll", "api-ms-win-security-base-l1-2-2.dll")]]
             run("compile-native-probe", [cl, *flags, source, "/Fo" + str(temp / "probe.obj"),
                 "/Fe" + str(probe), "/link", *libraries, "/INCREMENTAL:NO"], 120)
             if lpac:

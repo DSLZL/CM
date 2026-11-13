@@ -11,6 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#if defined(CM_DELAY_DIAGNOSTIC)
+#include <delayimp.h>
+#endif
 
 #if !defined(_M_X64)
 #error This bounded fixture requires native x64 MSVC
@@ -135,6 +138,29 @@ static void fail(const char *gate, DWORD error) {
     }
     ExitProcess(2);
 }
+
+#if defined(CM_DELAY_DIAGNOSTIC)
+static FARPROC WINAPI delay_failure(unsigned reason, PDelayLoadInfo info) {
+    char gate[48];
+    if (!info || !info->szDll || (reason != dliFailLoadLib && reason != dliFailGetProc) ||
+            _snprintf_s(gate, sizeof(gate), _TRUNCATE, "%s-%s",
+                reason == dliFailLoadLib ? "dll-load" : "dll-import", info->szDll) < 0)
+        fail("delay-diagnostic", ERROR_INVALID_DATA);
+    fail(gate, info->dwLastError);
+    return NULL;
+}
+
+const PfnDliHook __pfnDliFailureHook2 = delay_failure;
+
+static void check_delayed_imports(void) {
+    const char *names[] = {"bcrypt.dll", "USERENV.dll", "ADVAPI32.dll", "WS2_32.dll",
+        "api-ms-win-security-base-l1-2-2.dll"};
+    for (size_t i = 0; i < ARRAYSIZE(names); ++i) {
+        HRESULT result = __HrLoadAllImportsForDll(names[i]);
+        if (FAILED(result)) fail("delay-preload", (DWORD)result);
+    }
+}
+#endif
 
 static void *token_info(HANDLE token, TOKEN_INFORMATION_CLASS kind) {
     DWORD size = 0;
@@ -754,6 +780,9 @@ int wmain(int argc, wchar_t **argv) {
         registry_mode = peer_policy >= 0 || socket_policy >= 0 || restricted_mode || !wcscmp(argv[1], L"registry-read");
     }
     if (report_pipe) check_child_environment();
+#if defined(CM_DELAY_DIAGNOSTIC)
+    if (restricted_code_files) check_delayed_imports();
+#endif
     WSADATA winsock;
     int error = WSAStartup(MAKEWORD(2, 2), &winsock);
     if (error) fail(!report_pipe ? "winsock-startup-outside" :
