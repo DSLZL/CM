@@ -465,8 +465,10 @@ static void finished(Child *child) {
     if (wait != WAIT_OBJECT_0) fail("child-exit-wait", wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError());
     if (!GetExitCodeProcess(child->process.hProcess, &code)) fail("child-exit-code", GetLastError());
     if (code) {
-        fprintf(stderr, "Native child exit=%lu\n", code);
-        receive(child, 3); fail("child-exit", code);
+        fprintf(stderr, "Native child role=%s; exit=%lu; hex=0x%08lX\n",
+            child == &children[0] ? "control" : child == &children[1] ? "provider" : "client", code, code);
+        if (code == 2) receive(child, 3);
+        fail("child-exit", code);
     }
     if (receive(child, 3)) fail("child-result", ERROR_INVALID_DATA);
     CloseHandle(child->process.hProcess); child->process.hProcess = NULL;
