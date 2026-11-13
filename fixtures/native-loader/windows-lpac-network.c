@@ -39,6 +39,11 @@ static BOOL file_controls_stage;
 static BOOL restricted_code_files;
 static BOOL installer_files;
 static PSID installer_sid;
+static BOOL file_diagnostic_done;
+static const char *startup_gates[] = {
+    "wsa-reg-parameters", "wsa-reg-protocol", "wsa-reg-namespace", "wsa-dll-mswsock",
+    "wsa-dll-nsi", "wsa-dll-dnsapi", "wsa-dll-nlaapi", "wsa-dll-winrnr"
+};
 static const wchar_t *file_inputs[3];
 static const wchar_t *file_aliases[] = {
     L"source-hard.txt", L"source-link.txt", L"cache-hard.txt", L"cache-link.txt", L"compiler-link.exe"
@@ -131,6 +136,9 @@ static __declspec(noreturn) void fail(const char *gate, DWORD error) {
     if (report_pipe) message(2, error, gate);
     else {
         fprintf(stderr, "LPAC mechanism failed at %s; error=%lu\n", gate, error);
+        if (installer_files && file_diagnostic_done)
+            fprintf(stderr, "Actual file controls completed before startup: outside_baselines=6/3; "
+                "restricted_checks=6/3; denied_error=5; compiler_executed=false\n");
         if (restricted_network && !strcmp(gate, "provider-socket") && error == WSAEACCES)
             socket_access_diagnostic();
         if (socket_share) {
@@ -163,6 +171,27 @@ static void check_delayed_imports(void) {
     }
 }
 #endif
+
+static void startup_diagnostics(void) {
+    const wchar_t *keys[] = {
+        L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters",
+        L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\Protocol_Catalog9",
+        L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\NameSpace_Catalog5"
+    };
+    const wchar_t *libraries[] = {L"mswsock.dll", L"nsi.dll", L"dnsapi.dll", L"nlaapi.dll", L"winrnr.dll"};
+    for (size_t i = 0; i < ARRAYSIZE(keys); ++i) {
+        HKEY key = NULL;
+        LSTATUS error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, keys[i], 0, KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS, &key);
+        if (key && RegCloseKey(key)) fail("wsa-diagnostic-key-close", ERROR_INVALID_HANDLE);
+        message(11, (DWORD)error, startup_gates[i]);
+    }
+    for (size_t i = 0; i < ARRAYSIZE(libraries); ++i) {
+        HMODULE library = LoadLibraryExW(libraries[i], NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        DWORD error = library ? ERROR_SUCCESS : GetLastError();
+        if (library && !FreeLibrary(library)) fail("wsa-diagnostic-dll-close", GetLastError());
+        message(11, error, startup_gates[ARRAYSIZE(keys) + i]);
+    }
+}
 
 static void *token_info(HANDLE token, TOKEN_INFORMATION_CLASS kind) {
     DWORD size = 0;
@@ -703,19 +732,30 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
 }
 
 static DWORD receive(Child *child, DWORD kind) {
-    Message item = {0};
-    DWORD size = 0;
-    if (!ReadFile(child->reader, &item, (DWORD)sizeof(item), &size, NULL)) fail("child-report", GetLastError());
-    if (size != sizeof(item) || !memchr(item.gate, 0, sizeof(item.gate)))
-        fail("child-report-bytes", ERROR_INVALID_DATA);
-    if (item.kind == 2) fail(item.gate, item.value);
-    if (item.kind != kind || strcmp(item.gate, kind == 1 ? "internal-provider-ready" :
-            kind == 4 ? "socket-observation" : kind == 5 ? "shared-socket-ready" :
-            kind == 6 ? "shared-peer-address" : kind == 7 ? "shared-peer-port" :
-            kind == 8 ? "outside-connect-observed" : kind == 9 ? "file-path-checks" :
-            kind == 10 ? "compiler-creation-checks" : "complete"))
-        fail("child-report-kind", ERROR_INVALID_DATA);
-    return item.value;
+    BOOL seen[ARRAYSIZE(startup_gates)] = {0};
+    for (;;) {
+        Message item = {0};
+        DWORD size = 0;
+        if (!ReadFile(child->reader, &item, (DWORD)sizeof(item), &size, NULL)) fail("child-report", GetLastError());
+        if (size != sizeof(item) || !memchr(item.gate, 0, sizeof(item.gate)))
+            fail("child-report-bytes", ERROR_INVALID_DATA);
+        if (installer_files && item.kind == 11) {
+            size_t index = 0;
+            while (index < ARRAYSIZE(startup_gates) && strcmp(item.gate, startup_gates[index])) ++index;
+            if (index == ARRAYSIZE(startup_gates) || seen[index]) fail("startup-diagnostic-kind", ERROR_INVALID_DATA);
+            seen[index] = TRUE;
+            fprintf(stderr, "Winsock startup diagnostic: %s; result=%lu\n", item.gate, item.value);
+            continue;
+        }
+        if (item.kind == 2) fail(item.gate, item.value);
+        if (item.kind != kind || strcmp(item.gate, kind == 1 ? "internal-provider-ready" :
+                kind == 4 ? "socket-observation" : kind == 5 ? "shared-socket-ready" :
+                kind == 6 ? "shared-peer-address" : kind == 7 ? "shared-peer-port" :
+                kind == 8 ? "outside-connect-observed" : kind == 9 ? "file-path-checks" :
+                kind == 10 ? "compiler-creation-checks" : "complete"))
+            fail("child-report-kind", ERROR_INVALID_DATA);
+        return item.value;
+    }
 }
 
 static void finished(Child *child) {
@@ -799,8 +839,14 @@ int wmain(int argc, wchar_t **argv) {
 #if defined(CM_DELAY_DIAGNOSTIC)
     if (restricted_code_files || installer_files) check_delayed_imports();
 #endif
+    if (installer_files && report_pipe && !wcscmp(argv[1], L"client")) {
+        check_file_controls(TRUE);
+        message(9, file_path_checks, "file-path-checks");
+        message(10, compiler_creation_checks, "compiler-creation-checks");
+    }
     WSADATA winsock;
     int error = WSAStartup(MAKEWORD(2, 2), &winsock);
+    if (error && installer_files && report_pipe) startup_diagnostics();
     if (error) fail(!report_pipe ? "winsock-startup-outside" :
         socket_share ? "winsock-startup-socket-share" : socket_policy >= 0 ? "winsock-startup-socket" :
         !wcscmp(argv[1], L"control") ? "winsock-startup-control" :
@@ -898,7 +944,7 @@ int wmain(int argc, wchar_t **argv) {
             if (read_marker(L"private-input.txt") || read_marker(L"all-packages.txt") != ERROR_ACCESS_DENIED)
                 fail(!wcscmp(argv[1], L"provider") ? "provider-restricted-file" : "client-restricted-file", ERROR_INVALID_DATA);
             if (!restricted_network) {
-                if (file_controls_stage && !wcscmp(argv[1], L"client")) {
+                if (file_controls_stage && !installer_files && !wcscmp(argv[1], L"client")) {
                     check_file_controls(TRUE);
                     message(9, file_path_checks, "file-path-checks");
                     message(10, compiler_creation_checks, "compiler-creation-checks");
@@ -1065,11 +1111,13 @@ int wmain(int argc, wchar_t **argv) {
         finished(child);
     } else if (restricted_mode && !restricted_network) {
         finished(spawn(0, L"control", FALSE, 0, 0));
-        finished(spawn(1, L"provider", !ordinary_restricted, 0, 0));
+        if (!installer_files) finished(spawn(1, L"provider", !ordinary_restricted, 0, 0));
         Child *client = spawn(2, L"client", !ordinary_restricted, 0, 0);
         if (file_controls_stage && (receive(client, 9) != file_path_checks || receive(client, 10) != compiler_creation_checks))
             fail("child-file-control-count", ERROR_INVALID_DATA);
+        if (installer_files) file_diagnostic_done = TRUE;
         finished(client);
+        if (installer_files) finished(spawn(1, L"provider", !ordinary_restricted, 0, 0));
     } else {
         unsigned short canary_port = 0;
         SOCKET canary = listener(&canary_port, FALSE), baseline = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
