@@ -45,9 +45,9 @@ static HKEY catalog_writer, catalog_reader;
 static wchar_t catalog_path[128];
 static DWORD catalog_keys, catalog_values, catalog_bytes;
 static const wchar_t catalog_parameters[] = L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters";
-static const wchar_t *catalog_roots[] = {catalog_parameters,
-    L"SYSTEM\\CurrentControlSet\\Services\\Winsock\\Parameters",
-    L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Winsock"};
+static const wchar_t *catalog_read_paths[] = {catalog_parameters,
+    L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\Protocol_Catalog9",
+    L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\NameSpace_Catalog5"};
 static const char *startup_gates[] = {
     "wsa-reg-parameters", "wsa-reg-protocol", "wsa-reg-namespace", "wsa-dll-mswsock",
     "wsa-dll-nsi", "wsa-dll-dnsapi", "wsa-dll-nlaapi", "wsa-dll-winrnr"
@@ -514,20 +514,16 @@ static void prepare_private_catalog(void) {
         fail("catalog-root-existing", ERROR_ALREADY_EXISTS);
     }
     catalog_created = TRUE;
-    for (size_t i = 0; i < (catalog_network ? ARRAYSIZE(catalog_roots) : 1); ++i) {
-        HKEY source = NULL, destination = NULL;
-        DWORD previous_values = catalog_values, previous_bytes = catalog_bytes;
-        error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, catalog_roots[i], 0, KEY_READ, &source);
-        if (error) fail("catalog-source-open", (DWORD)error);
-        error = RegCreateKeyExW(catalog_writer, catalog_roots[i], 0, NULL, REG_OPTION_VOLATILE,
-            KEY_ALL_ACCESS, NULL, &destination, &disposition);
-        if (error || disposition != REG_CREATED_NEW_KEY)
-            fail("catalog-destination-create", error ? (DWORD)error : ERROR_ALREADY_EXISTS);
-        copy_catalog(source, destination, 0);
-        if (catalog_values == previous_values || catalog_bytes == previous_bytes)
-            fail("catalog-copy-empty", ERROR_INVALID_DATA);
-        if (RegCloseKey(source) || RegCloseKey(destination)) fail("catalog-copy-close", ERROR_INVALID_HANDLE);
-    }
+    HKEY source = NULL, destination = NULL;
+    error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, catalog_parameters, 0, KEY_READ, &source);
+    if (error) fail("catalog-source-open", (DWORD)error);
+    error = RegCreateKeyExW(catalog_writer, catalog_parameters, 0, NULL, REG_OPTION_VOLATILE,
+        KEY_ALL_ACCESS, NULL, &destination, &disposition);
+    if (error || disposition != REG_CREATED_NEW_KEY)
+        fail("catalog-destination-create", error ? (DWORD)error : ERROR_ALREADY_EXISTS);
+    copy_catalog(source, destination, 0);
+    if (!catalog_values || !catalog_bytes) fail("catalog-copy-empty", ERROR_INVALID_DATA);
+    if (RegCloseKey(source) || RegCloseKey(destination)) fail("catalog-copy-close", ERROR_INVALID_HANDLE);
     error = RegOpenKeyExW(catalog_writer, L"", 0, KEY_READ, &catalog_reader);
     if (error) fail("catalog-read-handle", (DWORD)error);
     if (catalog_reader == catalog_writer ||
@@ -535,20 +531,18 @@ static void prepare_private_catalog(void) {
         fail("catalog-read-inherit", ERROR_INVALID_HANDLE);
 }
 
-static void apply_private_catalog(BOOL restricted_child) {
-    const wchar_t *keys[] = {catalog_parameters,
-        L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\Protocol_Catalog9",
-        L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\NameSpace_Catalog5",
-        catalog_roots[1], catalog_roots[2]};
-    if (restricted_child) {
-        for (size_t i = 0; i < 3; ++i) {
-            HKEY key = NULL;
-            LSTATUS error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, keys[i], 0,
-                KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS, &key);
-            if (key) RegCloseKey(key);
-            if (error != ERROR_ACCESS_DENIED) fail("catalog-real-key-denial", (DWORD)error);
-        }
+static void check_real_catalog_denials(void) {
+    for (size_t i = 0; i < ARRAYSIZE(catalog_read_paths); ++i) {
+        HKEY key = NULL;
+        LSTATUS error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, catalog_read_paths[i], 0,
+            KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS, &key);
+        if (key) RegCloseKey(key);
+        if (error != ERROR_ACCESS_DENIED) fail("catalog-real-key-denial", (DWORD)error);
     }
+}
+
+static void apply_private_catalog(BOOL restricted_child) {
+    if (restricted_child) check_real_catalog_denials();
     BYTE byte = 0;
     LSTATUS error = RegSetValueExW(catalog_reader, L"CMWriteProbe", 0, REG_BINARY, &byte, 1);
     if (error != ERROR_ACCESS_DENIED) fail("catalog-inherited-write-denial", (DWORD)error);
@@ -556,30 +550,26 @@ static void apply_private_catalog(BOOL restricted_child) {
     if (error) fail("catalog-override", (DWORD)error);
     if (RegCloseKey(catalog_reader)) fail("catalog-child-handle-close", ERROR_INVALID_HANDLE);
     catalog_reader = NULL;
-    for (size_t i = 0; i < (catalog_network ? ARRAYSIZE(keys) : 3); ++i) {
+    for (size_t i = 0; i < ARRAYSIZE(catalog_read_paths); ++i) {
         HKEY key = NULL;
-        error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, keys[i], 0, KEY_READ, &key);
+        error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, catalog_read_paths[i], 0, KEY_READ, &key);
         if (error) fail("catalog-private-key-read", (DWORD)error);
         if (RegCloseKey(key)) fail("catalog-private-key-close", ERROR_INVALID_HANDLE);
     }
     if (restricted_child) {
         const REGSAM writes[] = {KEY_SET_VALUE, WRITE_DAC};
-        for (size_t i = 0; i < (catalog_network ? ARRAYSIZE(catalog_roots) : 1); ++i) {
-            for (size_t j = 0; j < ARRAYSIZE(writes); ++j) {
-                HKEY key = NULL;
-                error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, catalog_roots[i], 0, writes[j], &key);
-                if (key) RegCloseKey(key);
-                if (error != ERROR_ACCESS_DENIED) fail("catalog-private-write-denial", (DWORD)error);
-            }
-            wchar_t path[256];
-            if (_snwprintf_s(path, ARRAYSIZE(path), _TRUNCATE, L"%ls\\CMCreateProbe", catalog_roots[i]) < 0)
-                fail("catalog-private-create-bound", ERROR_INVALID_DATA);
+        for (size_t i = 0; i < ARRAYSIZE(writes); ++i) {
             HKEY key = NULL;
-            error = RegCreateKeyExW(HKEY_LOCAL_MACHINE, path,
-                0, NULL, REG_OPTION_VOLATILE, KEY_WRITE, NULL, &key, NULL);
+            error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, catalog_parameters, 0, writes[i], &key);
             if (key) RegCloseKey(key);
-            if (error != ERROR_ACCESS_DENIED) fail("catalog-private-create-denial", (DWORD)error);
+            if (error != ERROR_ACCESS_DENIED) fail("catalog-private-write-denial", (DWORD)error);
         }
+        HKEY key = NULL;
+        error = RegCreateKeyExW(HKEY_LOCAL_MACHINE,
+            L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\CMCreateProbe",
+            0, NULL, REG_OPTION_VOLATILE, KEY_WRITE, NULL, &key, NULL);
+        if (key) RegCloseKey(key);
+        if (error != ERROR_ACCESS_DENIED) fail("catalog-private-create-denial", (DWORD)error);
     }
 }
 
@@ -1081,6 +1071,11 @@ int wmain(int argc, wchar_t **argv) {
         socket_share ? "winsock-startup-socket-share" : socket_policy >= 0 ? "winsock-startup-socket" :
         !wcscmp(argv[1], L"control") ? "winsock-startup-control" :
         !wcscmp(argv[1], L"provider") ? "winsock-startup-provider" : "winsock-startup-client", (DWORD)error);
+    if (catalog_network && report_pipe) {
+        LSTATUS restored = RegOverridePredefKey(HKEY_LOCAL_MACHINE, NULL);
+        if (restored) fail("catalog-original-view-restore", (DWORD)restored);
+        if (wcscmp(argv[1], L"control")) check_real_catalog_denials();
+    }
     if (report_pipe) {
         if (socket_share) {
             // shortcut: one existing parent/child channel; qualify reconnect and isolation before product use.
@@ -1189,8 +1184,8 @@ int wmain(int argc, wchar_t **argv) {
                 fail("ordinary-container-file-positive", ERROR_ACCESS_DENIED);
             if (catalog_network) {
                 SOCKET probe = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-                if (probe == INVALID_SOCKET) fail("control-catalog-socket", (DWORD)WSAGetLastError());
-                if (closesocket(probe)) fail("control-catalog-socket-close", (DWORD)WSAGetLastError());
+                if (probe == INVALID_SOCKET) fail("control-restored-socket", (DWORD)WSAGetLastError());
+                if (closesocket(probe)) fail("control-restored-socket-close", (DWORD)WSAGetLastError());
             }
         } else if (!wcscmp(argv[1], L"provider")) {
             unsigned short port = 0;
@@ -1485,12 +1480,13 @@ int wmain(int argc, wchar_t **argv) {
                 "\"source_cache_aliases_checked\":true,\"compiler_executed\":false" : "",
             installer_files ? ",\"system_sid_group_absence_checked\":true" : "",
             private_catalog ? catalog_network ?
-                ",\"private_registry_view\":\"winsock-catalog-and-ipv4-transport-only\",\"catalog_copy_bounded\":true,"
-                "\"copied_registry_root_count\":3,\"mapped_control_socket_positive\":true,"
+                ",\"private_registry_view\":\"winsock-catalog-startup-only\",\"catalog_copy_bounded\":true,"
+                "\"copied_registry_root_count\":1,\"real_hklm_restored_before_socket\":true,"
+                "\"restored_control_socket_positive\":true,"
                 "\"inherited_handle_count\":2,\"inherited_catalog_write_denials\":3,"
-                "\"real_catalog_read_denials\":6,\"private_catalog_read_checks\":15,"
-                "\"private_catalog_write_denials\":6,\"private_catalog_dacl_denials\":6,"
-                "\"private_catalog_create_denials\":6,\"private_catalog_deleted\":true" :
+                "\"real_catalog_read_denials\":12,\"private_catalog_read_checks\":9,"
+                "\"private_catalog_write_denials\":2,\"private_catalog_dacl_denials\":2,"
+                "\"private_catalog_create_denials\":2,\"private_catalog_deleted\":true" :
                 ",\"private_registry_view\":\"winsock-catalog-only\",\"catalog_copy_bounded\":true,"
                 "\"inherited_handle_count\":2,\"inherited_catalog_write_denials\":3,"
                 "\"real_catalog_read_denials\":6,\"private_catalog_read_checks\":9,"
