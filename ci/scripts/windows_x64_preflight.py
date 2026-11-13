@@ -112,15 +112,28 @@ def lpac_registry_record(text):
         "profile_deleted": True, "full_isolation": "not_run", "product": "not_run"})
 
 
+def lpac_restricted_registry_record(text):
+    return exact_record(text, {"status": "pass", "gate": "lpac-restricted-registry-control",
+        "outside_token_checks": 3, "outside_restricted_token_checks": 2,
+        "restricting_sid_count": 3, "restricting_sid_policy": "world-users-package",
+        "privilege_allowlist_checked": True, "capability_count": 1, "capability": "registryRead",
+        "ordinary_file_positive": True, "environment_allowlist_count": 8,
+        "environment_canary_not_inherited": True, "lpac_opt_out_file_denied": True,
+        "private_file_positive": True, "child_winsock_startup_checks": 3,
+        "host_registry_baseline": True, "host_environment_read_error": 5, "host_environment_write_open_error": 5,
+        "profile_deleted": True, "network": "not_run", "full_isolation": "not_run", "product": "not_run"})
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     entry = record_run.require_hosted_worker(enabled=False)
     authority(json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text()), entry, os.environ)
     mechanism = os.environ.get("CM_PREFLIGHT_STAGE", "loader-terminal")
-    if mechanism not in ("loader-terminal", "lpac-network", "lpac-registry-read"):
+    if mechanism not in ("loader-terminal", "lpac-network", "lpac-registry-read", "lpac-registry-restricted"):
         raise RuntimeError("Unknown Windows native mechanism stage")
-    registry = mechanism == "lpac-registry-read"
-    lpac = mechanism in ("lpac-network", "lpac-registry-read")
+    restricted = mechanism == "lpac-registry-restricted"
+    registry = mechanism in ("lpac-registry-read", "lpac-registry-restricted")
+    lpac = mechanism in ("lpac-network", "lpac-registry-read", "lpac-registry-restricted")
     if Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
         raise RuntimeError("Mechanism source must be the exact recorded source checkout")
     logs = Path(os.environ["CM_CI_LOG_DIR"]).resolve()
@@ -129,7 +142,7 @@ def main():
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
     report = {"schema_version": 1, "status": "running",
-        "scope": "V01d-system-dependency-fixture-only" if registry else
+        "scope": "V01e-restricted-registry-fixture-only" if restricted else "V01d-system-dependency-fixture-only" if registry else
             "V01c-lpac-network-fixture-only" if lpac else "V01a-loader-terminal-fixtures-only",
         "platform": KEY, "target": TARGET, "source_sha": os.environ["CM_SOURCE_SHA"],
         "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"], "run_id": int(os.environ["GITHUB_RUN_ID"]),
@@ -211,11 +224,15 @@ def main():
             if lpac:
                 report["inputs"] = {"probe": pe_fixture(probe.read_bytes(), False)}
                 run("probe-dependencies", [cl.with_name("dumpbin.exe"), "/nologo", "/dependents", probe])
-                label = "lpac-registry-read-network-control" if registry else "lpac-internal-provider-network-control"
-                _, text = run(label, [probe, "registry-read" if registry else "run"], 120)
-                report["controls"]["lpac_registry_read" if registry else "lpac_network"] = (
-                    lpac_registry_record(text) if registry else lpac_network_record(text))
-                report["status"] = "passed_bounded_network_controls_only"
+                label, mode, key, parse = {
+                    "lpac-network": ("lpac-internal-provider-network-control", "run", "lpac_network", lpac_network_record),
+                    "lpac-registry-read": ("lpac-registry-read-network-control", "registry-read", "lpac_registry_read", lpac_registry_record),
+                    "lpac-registry-restricted": ("lpac-restricted-registry-control", "registry-restricted",
+                        "lpac_registry_restricted", lpac_restricted_registry_record),
+                }[mechanism]
+                _, text = run(label, [probe, mode], 120)
+                report["controls"][key] = parse(text)
+                report["status"] = "passed_bounded_registry_controls_only" if restricted else "passed_bounded_network_controls_only"
                 return
             run("compile-sentinel-dll", [cl, *flags, "/DCM_PAYLOAD", "/LD", source,
                 "/Fo" + str(temp / "payload.obj"), "/Fe" + str(payload), "/link",
@@ -299,7 +316,7 @@ def main():
         report["status"] = "failed"
         raise
     finally:
-        name = "windows-x64-lpac-registry-read.json" if registry else (
+        name = "windows-x64-lpac-registry-restricted.json" if restricted else "windows-x64-lpac-registry-read.json" if registry else (
             "windows-x64-lpac-network.json" if lpac else "windows-x64-mechanisms.json")
         (logs / name).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print("Windows V01a fixture controls passed; isolation, full dependency closure and product qualification remain NOT_RUN", flush=True)
@@ -456,6 +473,43 @@ def self_check():
         pass
     else:
         raise AssertionError("Named capability accepted as the zero-capability mode")
+    restricted = {"status": "pass", "gate": "lpac-restricted-registry-control",
+        "outside_token_checks": 3, "outside_restricted_token_checks": 2,
+        "restricting_sid_count": 3, "restricting_sid_policy": "world-users-package",
+        "privilege_allowlist_checked": True, "capability_count": 1, "capability": "registryRead",
+        "ordinary_file_positive": True, "environment_allowlist_count": 8,
+        "environment_canary_not_inherited": True, "lpac_opt_out_file_denied": True,
+        "private_file_positive": True, "child_winsock_startup_checks": 3,
+        "host_registry_baseline": True, "host_environment_read_error": 5, "host_environment_write_open_error": 5,
+        "profile_deleted": True, "network": "not_run", "full_isolation": "not_run", "product": "not_run"}
+    assert lpac_restricted_registry_record(json.dumps(restricted)) == restricted
+    changed = [{**restricted, key: value} for key, value in (
+        ("outside_token_checks", True), ("outside_restricted_token_checks", 0), ("outside_restricted_token_checks", True),
+        ("restricting_sid_count", 0), ("restricting_sid_count", 2), ("restricting_sid_count", 4), ("restricting_sid_count", True),
+        ("restricting_sid_policy", "world-users-owner"), ("restricting_sid_policy", "registryRead"),
+        ("capability_count", 0), ("capability_count", 2), ("capability_count", True), ("capability", "internetClient"),
+        ("environment_allowlist_count", 7), ("environment_allowlist_count", True),
+        ("child_winsock_startup_checks", 0), ("child_winsock_startup_checks", True),
+        ("host_environment_read_error", 0), ("host_environment_read_error", 2), ("host_environment_read_error", True),
+        ("host_environment_write_open_error", 0), ("host_environment_write_open_error", 2),
+        ("host_environment_write_open_error", True), ("network", "pass"), ("provider_http_positive", True),
+        ("full_isolation", "pass"), ("product", "pass"), ("extra", True))]
+    changed += [{**restricted, key: False} for key, value in restricted.items() if type(value) is bool]
+    changed += [{key: value for key, value in restricted.items() if key != omitted} for omitted in restricted]
+    for raw in [json.dumps(value) for value in changed] + [json.dumps(lpac), json.dumps(registry), "[]", " " * 8193]:
+        try:
+            lpac_restricted_registry_record(raw)
+        except (RuntimeError, ValueError):
+            pass
+        else:
+            raise AssertionError("Incomplete or overclaimed restricted-registry observation accepted")
+    for parse in (lpac_network_record, lpac_registry_record):
+        try:
+            parse(json.dumps(restricted))
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Restricted registry-only observation accepted as network qualification")
     print("Windows preflight authority, PE fixture and bounded native records self-check passed", flush=True)
 
 

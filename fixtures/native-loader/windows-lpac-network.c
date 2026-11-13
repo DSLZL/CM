@@ -18,7 +18,7 @@
 
 typedef struct { DWORD kind, value; char gate[48]; } Message;
 typedef struct { PROCESS_INFORMATION process; HANDLE reader; } Child;
-static HANDLE job, report_pipe;
+static HANDLE job, report_pipe, restricted_base;
 static Child children[3];
 static wchar_t profile[64], executable[MAX_PATH], root[MAX_PATH];
 static PSID package_sid;
@@ -26,6 +26,7 @@ static PSID registry_sid;
 static TOKEN_USER *owner;
 static BOOL profile_created;
 static BOOL registry_mode;
+static BOOL restricted_mode;
 static const char request[] = "GET /controlled HTTP/1.0\r\n\r\n";
 static const char response[] = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nOK";
 static const wchar_t *environment_names[] = {
@@ -34,6 +35,7 @@ static const wchar_t *environment_names[] = {
 
 static void cleanup(void) {
     if (job) { CloseHandle(job); job = NULL; }
+    if (restricted_base) { CloseHandle(restricted_base); restricted_base = NULL; }
     for (size_t i = 0; i < ARRAYSIZE(children); ++i) {
         if (children[i].process.hProcess) {
             if (WaitForSingleObject(children[i].process.hProcess, 5000) != WAIT_OBJECT_0) {
@@ -80,6 +82,59 @@ static void *token_info(HANDLE token, TOKEN_INFORMATION_CLASS kind) {
     if (!data) fail("token-memory", ERROR_OUTOFMEMORY);
     if (!GetTokenInformation(token, kind, data, size, &size)) fail("token-query", GetLastError());
     return data;
+}
+
+static void fail_restriction(const char *role, const char *operation, DWORD error) {
+    char gate[48];
+    if (_snprintf_s(gate, sizeof(gate), _TRUNCATE, "%s-restrict-%s", role, operation) < 0)
+        fail("restricted-diagnostic-bound", ERROR_INVALID_DATA);
+    fail(gate, error);
+}
+
+static void inspect_restrictions(HANDLE token, const char *role) {
+    TOKEN_GROUPS *sids = token_info(token, TokenRestrictedSids);
+    TOKEN_PRIVILEGES *privileges = token_info(token, TokenPrivileges);
+    TOKEN_USER *user = token_info(token, TokenUser);
+    BOOL seen[3] = {0};
+    LUID traverse;
+    if (sids->GroupCount != 3 || !EqualSid(user->User.Sid, owner->User.Sid))
+        fail_restriction(role, "identity-or-count", ERROR_INVALID_DATA);
+    for (DWORD i = 0; i < sids->GroupCount; ++i) {
+        PSID sid = sids->Groups[i].Sid;
+        int index = IsWellKnownSid(sid, WinWorldSid) ? 0 :
+            IsWellKnownSid(sid, WinBuiltinUsersSid) ? 1 : EqualSid(sid, package_sid) ? 2 : -1;
+        if (index < 0 || seen[index] || (sids->Groups[i].Attributes & SE_GROUP_USE_FOR_DENY_ONLY))
+            fail_restriction(role, "sid-policy", ERROR_INVALID_DATA);
+        seen[index] = TRUE;
+    }
+    if (!LookupPrivilegeValueW(NULL, L"SeChangeNotifyPrivilege", &traverse))
+        fail_restriction(role, "privilege-name", GetLastError());
+    for (DWORD i = 0; i < privileges->PrivilegeCount; ++i) {
+        LUID_AND_ATTRIBUTES item = privileges->Privileges[i];
+        if ((item.Attributes & SE_PRIVILEGE_ENABLED) &&
+                (item.Luid.LowPart != traverse.LowPart || item.Luid.HighPart != traverse.HighPart))
+            fail_restriction(role, "enabled-privilege", ERROR_INVALID_DATA);
+    }
+    free(sids); free(privileges); free(user);
+}
+
+static void prepare_restricted_token(void) {
+    HANDLE token = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY, &token))
+        fail("restricted-source-token", GetLastError());
+    TOKEN_GROUPS *existing = token_info(token, TokenRestrictedSids);
+    if (existing->GroupCount) fail("restricted-source-intersection", ERROR_INVALID_DATA);
+    free(existing);
+    BYTE world[SECURITY_MAX_SID_SIZE], users[SECURITY_MAX_SID_SIZE];
+    DWORD world_size = sizeof(world), users_size = sizeof(users);
+    if (!CreateWellKnownSid(WinWorldSid, NULL, world, &world_size) ||
+            !CreateWellKnownSid(WinBuiltinUsersSid, NULL, users, &users_size))
+        fail("restricted-well-known-sids", GetLastError());
+    SID_AND_ATTRIBUTES sids[3] = {{world, 0}, {users, 0}, {package_sid, 0}};
+    if (!CreateRestrictedToken(token, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL, 3, sids, &restricted_base))
+        fail("restricted-token-create", GetLastError());
+    CloseHandle(token);
+    inspect_restrictions(restricted_base, "base");
 }
 
 static void derive_registry_capability(void) {
@@ -255,7 +310,7 @@ static void exchange(SOCKET sock, const char *sent, size_t sent_size, const char
     if (memcmp(buffer, expected, size)) fail("http-response", ERROR_INVALID_DATA);
 }
 
-static void inspect(Child *child, BOOL lpac) {
+static void inspect(Child *child, BOOL lpac, const wchar_t *role) {
     HANDLE token = NULL;
     BOOL member = FALSE;
     if (!OpenProcessToken(child->process.hProcess, TOKEN_QUERY, &token)) fail("child-token", GetLastError());
@@ -275,6 +330,8 @@ static void inspect(Child *child, BOOL lpac) {
             !(capabilities->Groups[0].Attributes & SE_GROUP_ENABLED) ||
             (capabilities->Groups[0].Attributes & SE_GROUP_USE_FOR_DENY_ONLY)))
         fail("outside-registry-capability", ERROR_INVALID_DATA);
+    if (lpac && restricted_mode)
+        inspect_restrictions(token, !wcscmp(role, L"provider") ? "provider" : "client");
     free(container); free(identity); free(capabilities); free(user); free(integrity);
     CloseHandle(token);
 }
@@ -310,7 +367,7 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
     environment[used] = L'\0';
     if (_snwprintf_s(command, ARRAYSIZE(command), _TRUNCATE, L"\"%ls\" %ls %llu %u %u%ls", executable, role,
             (unsigned long long)(UINT_PTR)writer, (unsigned int)provider, (unsigned int)canary,
-            registry_mode ? L" registry-read" : L"") < 0)
+            restricted_mode ? L" registry-restricted" : registry_mode ? L" registry-read" : L"") < 0)
         fail("child-command", ERROR_INVALID_DATA);
     DWORD attributes = lpac ? 3 : 2;
     InitializeProcThreadAttributeList(NULL, attributes, 0, &size);
@@ -331,14 +388,20 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         fail("child-attribute-update", GetLastError());
     startup.StartupInfo.cb = sizeof(startup);
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    if (!CreateProcessW(executable, command, NULL, NULL, TRUE,
-            EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
-            environment, root, &startup.StartupInfo, &child->process)) fail("child-create", GetLastError());
+    DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
+    BOOL created = lpac && restricted_mode ?
+        CreateProcessAsUserW(restricted_base, executable, command, NULL, NULL, TRUE, flags,
+            environment, root, &startup.StartupInfo, &child->process) :
+        CreateProcessW(executable, command, NULL, NULL, TRUE, flags,
+            environment, root, &startup.StartupInfo, &child->process);
+    if (!created) fail(lpac && restricted_mode ?
+        (!wcscmp(role, L"provider") ? "provider-restricted-create" : "client-restricted-create") :
+        "child-create", GetLastError());
     DeleteProcThreadAttributeList(startup.lpAttributeList);
     free(startup.lpAttributeList);
     CloseHandle(writer);
     if (!AssignProcessToJobObject(job, child->process.hProcess)) fail("child-job", GetLastError());
-    inspect(child, lpac);
+    inspect(child, lpac, role);
     if (ResumeThread(child->process.hThread) == (DWORD)-1) fail("child-resume", GetLastError());
     CloseHandle(child->process.hThread); child->process.hThread = NULL;
     return child;
@@ -379,16 +442,20 @@ int wmain(int argc, wchar_t **argv) {
     *separator = L'\0';
     if (argc == 5 || argc == 6) {
         if (argc == 6) {
-            if (wcscmp(argv[5], L"registry-read")) fail("child-mode", ERROR_INVALID_PARAMETER);
+            if (wcscmp(argv[5], L"registry-read") && wcscmp(argv[5], L"registry-restricted"))
+                fail("child-mode", ERROR_INVALID_PARAMETER);
             registry_mode = TRUE;
+            restricted_mode = !wcscmp(argv[5], L"registry-restricted");
         }
         wchar_t *end = NULL;
         report_pipe = (HANDLE)(UINT_PTR)wcstoull(argv[2], &end, 10);
         if (!report_pipe || !end || *end) fail("report-argument", ERROR_INVALID_DATA);
     } else {
-        if (argc != 2 || (wcscmp(argv[1], L"run") && wcscmp(argv[1], L"registry-read")))
+        if (argc != 2 || (wcscmp(argv[1], L"run") && wcscmp(argv[1], L"registry-read") &&
+                wcscmp(argv[1], L"registry-restricted")))
             fail("arguments", ERROR_INVALID_PARAMETER);
-        registry_mode = !wcscmp(argv[1], L"registry-read");
+        restricted_mode = !wcscmp(argv[1], L"registry-restricted");
+        registry_mode = restricted_mode || !wcscmp(argv[1], L"registry-read");
     }
     if (report_pipe) check_child_environment();
     WSADATA winsock;
@@ -406,7 +473,10 @@ int wmain(int argc, wchar_t **argv) {
             if (access != ERROR_ACCESS_DENIED)
                 fail(provider_role ? "provider-host-env-write-handle" : "client-host-env-write-handle", (DWORD)access);
         }
-        if (!wcscmp(argv[1], L"control")) {
+        if (restricted_mode && (!wcscmp(argv[1], L"provider") || !wcscmp(argv[1], L"client"))) {
+            if (read_marker(L"private-input.txt") || read_marker(L"all-packages.txt") != ERROR_ACCESS_DENIED)
+                fail(!wcscmp(argv[1], L"provider") ? "provider-restricted-file" : "client-restricted-file", ERROR_INVALID_DATA);
+        } else if (!wcscmp(argv[1], L"control")) {
             if (read_marker(L"all-packages.txt") || read_marker(L"private-input.txt"))
                 fail("ordinary-container-file-positive", ERROR_ACCESS_DENIED);
         } else if (!wcscmp(argv[1], L"provider")) {
@@ -477,6 +547,7 @@ int wmain(int argc, wchar_t **argv) {
     HRESULT result = CreateAppContainerProfile(profile, profile, L"CM bounded network fixture", NULL, 0, &package_sid);
     if (FAILED(result)) fail("fresh-profile-create", (DWORD)result);
     profile_created = TRUE;
+    if (restricted_mode) prepare_restricted_token();
     private_acl(root, package_sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
     private_acl(executable, package_sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
     BYTE all_packages[SECURITY_MAX_SID_SIZE];
@@ -490,28 +561,48 @@ int wmain(int argc, wchar_t **argv) {
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
         fail("kill-on-close-job", GetLastError());
-    unsigned short canary_port = 0;
-    SOCKET canary = listener(&canary_port, FALSE), baseline = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    error = connect_bounded(baseline, canary_port);
-    if (error) fail("outside-network-baseline", (DWORD)error);
-    SOCKET accepted = accept(canary, NULL, NULL);
-    if (accepted == INVALID_SOCKET) fail("outside-baseline-accept", (DWORD)WSAGetLastError());
-    closesocket(accepted); closesocket(baseline);
-    finished(spawn(0, L"control", FALSE, 0, 0));
-    Child *provider = spawn(1, L"provider", TRUE, 0, 0);
-    DWORD port = receive(provider, 1);
-    if (!port || port > 65535) fail("provider-port", ERROR_INVALID_DATA);
-    finished(spawn(2, L"client", TRUE, (unsigned short)port, canary_port));
-    finished(provider);
-    fd_set readable;
-    struct timeval now = {0, 0};
-    FD_ZERO(&readable); FD_SET(canary, &readable);
-    if (select(0, &readable, NULL, NULL, &now) != 0) fail("outside-unexpected-accept", ERROR_INVALID_DATA);
-    closesocket(canary);
+    if (restricted_mode) {
+        finished(spawn(0, L"control", FALSE, 0, 0));
+        finished(spawn(1, L"provider", TRUE, 0, 0));
+        finished(spawn(2, L"client", TRUE, 0, 0));
+    } else {
+        unsigned short canary_port = 0;
+        SOCKET canary = listener(&canary_port, FALSE), baseline = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        error = connect_bounded(baseline, canary_port);
+        if (error) fail("outside-network-baseline", (DWORD)error);
+        SOCKET accepted = accept(canary, NULL, NULL);
+        if (accepted == INVALID_SOCKET) fail("outside-baseline-accept", (DWORD)WSAGetLastError());
+        closesocket(accepted); closesocket(baseline);
+        finished(spawn(0, L"control", FALSE, 0, 0));
+        Child *provider = spawn(1, L"provider", TRUE, 0, 0);
+        DWORD port = receive(provider, 1);
+        if (!port || port > 65535) fail("provider-port", ERROR_INVALID_DATA);
+        finished(spawn(2, L"client", TRUE, (unsigned short)port, canary_port));
+        finished(provider);
+        fd_set readable;
+        struct timeval now = {0, 0};
+        FD_ZERO(&readable); FD_SET(canary, &readable);
+        if (select(0, &readable, NULL, NULL, &now) != 0) fail("outside-unexpected-accept", ERROR_INVALID_DATA);
+        closesocket(canary);
+    }
     result = DeleteAppContainerProfile(profile);
     if (FAILED(result)) fail("owned-profile-delete", (DWORD)result);
     profile_created = FALSE;
     cleanup(); WSACleanup();
+    if (restricted_mode) {
+        printf("{\"status\":\"pass\",\"gate\":\"lpac-restricted-registry-control\","
+            "\"outside_token_checks\":3,\"outside_restricted_token_checks\":2,"
+            "\"restricting_sid_count\":3,\"restricting_sid_policy\":\"world-users-package\","
+            "\"privilege_allowlist_checked\":true,\"capability_count\":1,\"capability\":\"registryRead\","
+            "\"ordinary_file_positive\":true,\"environment_allowlist_count\":%zu,"
+            "\"environment_canary_not_inherited\":true,\"lpac_opt_out_file_denied\":true,"
+            "\"private_file_positive\":true,\"child_winsock_startup_checks\":3,"
+            "\"host_registry_baseline\":true,\"host_environment_read_error\":5,"
+            "\"host_environment_write_open_error\":5,\"profile_deleted\":true,"
+            "\"network\":\"not_run\",\"full_isolation\":\"not_run\",\"product\":\"not_run\"}\n",
+            ARRAYSIZE(environment_names));
+        return 0;
+    }
     printf("{\"status\":\"pass\",\"gate\":\"%s\","
          "\"outside_token_checks\":3,\"capability_count\":%u,\"ordinary_file_positive\":true,"
          "\"environment_allowlist_count\":%zu,\"environment_canary_not_inherited\":true,"
