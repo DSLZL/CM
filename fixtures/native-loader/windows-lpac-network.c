@@ -176,14 +176,16 @@ static void startup_diagnostics(BOOL outside) {
     const wchar_t *keys[] = {
         L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters",
         L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\Protocol_Catalog9",
-        L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\NameSpace_Catalog5"
+        L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\NameSpace_Catalog5", L"Environment"
     };
+    const size_t catalog_count = ARRAYSIZE(keys) - 1;
     const wchar_t *libraries[] = {L"mswsock.dll", L"nsi.dll", L"dnsapi.dll", L"nlaapi.dll", L"winrnr.dll"};
-    for (size_t i = 0; i < ARRAYSIZE(keys); ++i) {
+    for (size_t i = 0; i < (outside ? ARRAYSIZE(keys) : catalog_count); ++i) {
         HKEY key = NULL;
-        LSTATUS error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, keys[i], 0,
+        LSTATUS error = RegOpenKeyExW(i < catalog_count ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, keys[i], 0,
             outside ? KEY_READ : KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS, &key);
         if (outside) {
+            const char *gate = i < catalog_count ? startup_gates[i] : "host-env";
             PSECURITY_DESCRIPTOR descriptor = NULL;
             wchar_t *text = NULL;
             DWORD length = 0, query_error = (DWORD)error;
@@ -195,8 +197,8 @@ static void startup_diagnostics(BOOL outside) {
                     DACL_SECURITY_INFORMATION, &text, &length)) query_error = GetLastError();
             if (!query_error && (!text || !length || length > 8192 || wcsnlen_s(text, length) >= length))
                 query_error = ERROR_INVALID_DATA;
-            if (query_error) fprintf(stderr, "Outside registry DACL: %s; error=%lu\n", startup_gates[i], query_error);
-            else fprintf(stderr, "Outside registry DACL: %s; sddl=%ls\n", startup_gates[i], text);
+            if (query_error) fprintf(stderr, "Outside registry DACL: %s; error=%lu\n", gate, query_error);
+            else fprintf(stderr, "Outside registry DACL: %s; sddl=%ls\n", gate, text);
             LocalFree(text); LocalFree(descriptor);
         }
         if (key && RegCloseKey(key)) fail("wsa-diagnostic-key-close", ERROR_INVALID_HANDLE);
@@ -207,7 +209,7 @@ static void startup_diagnostics(BOOL outside) {
         HMODULE library = LoadLibraryExW(libraries[i], NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
         DWORD error = library ? ERROR_SUCCESS : GetLastError();
         if (library && !FreeLibrary(library)) fail("wsa-diagnostic-dll-close", GetLastError());
-        message(11, error, startup_gates[ARRAYSIZE(keys) + i]);
+        message(11, error, startup_gates[catalog_count + i]);
     }
 }
 
@@ -372,6 +374,32 @@ static void derive_registry_capability(void) {
         LocalFree(capabilities);
     }
     if (!registry_sid) fail("derive-registry-read", error);
+}
+
+static void capability_restriction_diagnostic(void) {
+    derive_registry_capability();
+    HANDLE token = NULL, diagnostic = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &token))
+        fail("capability-diagnostic-token", GetLastError());
+    SID_AND_ATTRIBUTES sid = {registry_sid, 0};
+    BOOL created = CreateRestrictedToken(token, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL, 1, &sid, &diagnostic);
+    DWORD error = created ? ERROR_SUCCESS : GetLastError();
+    if (created) {
+        if (!diagnostic) fail("capability-diagnostic-handle", ERROR_INVALID_HANDLE);
+        TOKEN_GROUPS *restricted = token_info(diagnostic, TokenRestrictedSids);
+        if (restricted->GroupCount != 1 || !EqualSid(restricted->Groups[0].Sid, registry_sid) ||
+                (restricted->Groups[0].Attributes & SE_GROUP_USE_FOR_DENY_ONLY))
+            fail("capability-diagnostic-restriction", ERROR_INVALID_DATA);
+        free(restricted);
+    }
+    if (diagnostic && !CloseHandle(diagnostic)) fail("capability-diagnostic-close", GetLastError());
+    if (!CloseHandle(token)) fail("capability-diagnostic-source-close", GetLastError());
+    wchar_t *text = NULL;
+    if (!ConvertSidToStringSidW(registry_sid, &text)) fail("capability-diagnostic-sid", GetLastError());
+    fprintf(stderr, "Capability restricting SID compatibility: name=registryRead; sid=%ls; created=%s; "
+        "error=%lu; restriction_checked=%s; token_assigned=false; process_created=false\n",
+        text, created ? "true" : "false", error, created ? "true" : "not-run");
+    LocalFree(text);
 }
 
 static LSTATUS open_host_environment(REGSAM access) {
@@ -1038,6 +1066,7 @@ int wmain(int argc, wchar_t **argv) {
         }
         if (!ordinary_restricted) derive_registry_capability();
     }
+    if (installer_files) capability_restriction_diagnostic();
     if (!SetEnvironmentVariableW(L"CM_LPAC_ENV_CANARY", L"must-not-inherit")) fail("outside-env-canary", GetLastError());
     unsigned char random[16];
     if (BCryptGenRandom(NULL, random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG))
