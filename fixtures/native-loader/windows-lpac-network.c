@@ -99,12 +99,27 @@ static void socket_access_diagnostic(void) {
     LocalFree(text); LocalFree(descriptor);
 }
 
+static void shared_peer_diagnostic(SOCKET socket, const char *role) {
+    if (socket == INVALID_SOCKET) return;
+    struct sockaddr_in peer = {0};
+    int size = sizeof(peer);
+    int result = getpeername(socket, (struct sockaddr *)&peer, &size);
+    DWORD error = result ? (DWORD)WSAGetLastError() : 0;
+    fprintf(stderr, "Read-only shared socket peer; role=%s result=%d error=%lu size=%d family=%u address=%lu port=%u\n",
+        role, result, error, size, (unsigned int)peer.sin_family,
+        (unsigned long)ntohl(peer.sin_addr.s_addr), (unsigned int)ntohs(peer.sin_port));
+}
+
 static void fail(const char *gate, DWORD error) {
     if (report_pipe) message(2, error, gate);
     else {
         fprintf(stderr, "LPAC mechanism failed at %s; error=%lu\n", gate, error);
         if (restricted_network && !strcmp(gate, "provider-socket") && error == WSAEACCES)
             socket_access_diagnostic();
+        if (socket_share) {
+            shared_peer_diagnostic(shared_source, "parent-source");
+            shared_peer_diagnostic(shared_peer, "parent-accepted");
+        }
         cleanup();
     }
     ExitProcess(2);
