@@ -124,7 +124,7 @@ static void shared_peer_diagnostic(SOCKET socket, const char *role) {
         (unsigned long)ntohl(peer.sin_addr.s_addr), (unsigned int)ntohs(peer.sin_port));
 }
 
-static void fail(const char *gate, DWORD error) {
+static __declspec(noreturn) void fail(const char *gate, DWORD error) {
     if (report_pipe) message(2, error, gate);
     else {
         fprintf(stderr, "LPAC mechanism failed at %s; error=%lu\n", gate, error);
@@ -147,7 +147,6 @@ static FARPROC WINAPI delay_failure(unsigned reason, PDelayLoadInfo info) {
                 reason == dliFailLoadLib ? "dll-load" : "dll-import", info->szDll) < 0)
         fail("delay-diagnostic", ERROR_INVALID_DATA);
     fail(gate, info->dwLastError);
-    return NULL;
 }
 
 const PfnDliHook __pfnDliFailureHook2 = delay_failure;
