@@ -29,6 +29,8 @@ static BOOL profile_created;
 static BOOL registry_mode;
 static BOOL restricted_mode;
 static BOOL restricted_network;
+static int socket_policy = -1;
+static const wchar_t *socket_modes[] = {L"socket-ordinary", L"socket-lpac", L"socket-restricted"};
 static const char request[] = "GET /controlled HTTP/1.0\r\n\r\n";
 static const char response[] = "HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nOK";
 static const wchar_t *environment_names[] = {
@@ -429,7 +431,7 @@ static void inspect(Child *child, BOOL lpac, const wchar_t *role) {
             (capabilities->Groups[0].Attributes & SE_GROUP_USE_FOR_DENY_ONLY)))
         fail("outside-registry-capability", ERROR_INVALID_DATA);
     if (lpac && restricted_mode)
-        inspect_restrictions(token, !wcscmp(role, L"provider") ? "provider" : "client");
+        inspect_restrictions(token, socket_policy >= 0 ? "socket" : !wcscmp(role, L"provider") ? "provider" : "client");
     free(container); free(identity); free(capabilities); free(user); free(integrity);
     CloseHandle(token);
 }
@@ -463,10 +465,12 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         used += (size_t)length + 1;
     }
     environment[used] = L'\0';
-    if (_snwprintf_s(command, ARRAYSIZE(command), _TRUNCATE, L"\"%ls\" %ls %llu %u %u%ls", executable, role,
+    const wchar_t *mode = socket_policy >= 0 ? socket_modes[socket_policy] :
+        restricted_network ? L"restricted-network" : restricted_mode ? L"registry-restricted" :
+            registry_mode ? L"registry-read" : L"";
+    if (_snwprintf_s(command, ARRAYSIZE(command), _TRUNCATE, L"\"%ls\" %ls %llu %u %u%ls%ls", executable, role,
             (unsigned long long)(UINT_PTR)writer, (unsigned int)provider, (unsigned int)canary,
-            restricted_network ? L" restricted-network" : restricted_mode ? L" registry-restricted" :
-                registry_mode ? L" registry-read" : L"") < 0)
+            *mode ? L" " : L"", mode) < 0)
         fail("child-command", ERROR_INVALID_DATA);
     DWORD attributes = lpac ? 3 : 2;
     InitializeProcThreadAttributeList(NULL, attributes, 0, &size);
@@ -494,7 +498,8 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         CreateProcessW(executable, command, NULL, NULL, TRUE, flags,
             environment, root, &startup.StartupInfo, &child->process);
     if (!created) fail(lpac && restricted_mode ?
-        (!wcscmp(role, L"provider") ? "provider-restricted-create" : "client-restricted-create") :
+        (socket_policy >= 0 ? "socket-restricted-create" :
+            !wcscmp(role, L"provider") ? "provider-restricted-create" : "client-restricted-create") :
         "child-create", GetLastError());
     DeleteProcThreadAttributeList(startup.lpAttributeList);
     free(startup.lpAttributeList);
@@ -513,7 +518,8 @@ static DWORD receive(Child *child, DWORD kind) {
     if (size != sizeof(item) || !memchr(item.gate, 0, sizeof(item.gate)))
         fail("child-report-bytes", ERROR_INVALID_DATA);
     if (item.kind == 2) fail(item.gate, item.value);
-    if (item.kind != kind || strcmp(item.gate, kind == 1 ? "internal-provider-ready" : "complete"))
+    if (item.kind != kind || strcmp(item.gate, kind == 1 ? "internal-provider-ready" :
+            kind == 4 ? "socket-observation" : "complete"))
         fail("child-report-kind", ERROR_INVALID_DATA);
     return item.value;
 }
@@ -525,7 +531,8 @@ static void finished(Child *child) {
     if (!GetExitCodeProcess(child->process.hProcess, &code)) fail("child-exit-code", GetLastError());
     if (code) {
         fprintf(stderr, "Native child role=%s; exit=%lu; hex=0x%08lX\n",
-            child == &children[0] ? "control" : child == &children[1] ? "provider" : "client", code, code);
+            socket_policy >= 0 ? "socket" : child == &children[0] ? "control" :
+                child == &children[1] ? "provider" : "client", code, code);
         if (code == 2) receive(child, 3);
         fail("child-exit", code);
     }
@@ -541,33 +548,51 @@ int wmain(int argc, wchar_t **argv) {
     wchar_t *separator = wcsrchr(root, L'\\');
     if (!separator) fail("root-path", ERROR_INVALID_DATA);
     *separator = L'\0';
+    const wchar_t *mode = argc == 6 ? argv[5] : argc == 2 ? argv[1] : NULL;
+    for (size_t i = 0; mode && i < ARRAYSIZE(socket_modes); ++i)
+        if (!wcscmp(mode, socket_modes[i])) socket_policy = (int)i;
     if (argc == 5 || argc == 6) {
         if (argc == 6) {
             if (wcscmp(argv[5], L"registry-read") && wcscmp(argv[5], L"registry-restricted") &&
-                    wcscmp(argv[5], L"restricted-network"))
+                    wcscmp(argv[5], L"restricted-network") && socket_policy < 0)
                 fail("child-mode", ERROR_INVALID_PARAMETER);
             registry_mode = TRUE;
             restricted_network = !wcscmp(argv[5], L"restricted-network");
-            restricted_mode = restricted_network || !wcscmp(argv[5], L"registry-restricted");
+            restricted_mode = socket_policy == 2 || restricted_network || !wcscmp(argv[5], L"registry-restricted");
         }
         wchar_t *end = NULL;
         report_pipe = (HANDLE)(UINT_PTR)wcstoull(argv[2], &end, 10);
         if (!report_pipe || !end || *end) fail("report-argument", ERROR_INVALID_DATA);
     } else {
         if (argc != 2 || (wcscmp(argv[1], L"run") && wcscmp(argv[1], L"registry-read") &&
-                wcscmp(argv[1], L"registry-restricted") && wcscmp(argv[1], L"restricted-network")))
+                wcscmp(argv[1], L"registry-restricted") && wcscmp(argv[1], L"restricted-network") && socket_policy < 0))
             fail("arguments", ERROR_INVALID_PARAMETER);
         restricted_network = !wcscmp(argv[1], L"restricted-network");
-        restricted_mode = restricted_network || !wcscmp(argv[1], L"registry-restricted");
-        registry_mode = restricted_mode || !wcscmp(argv[1], L"registry-read");
+        restricted_mode = socket_policy == 2 || restricted_network || !wcscmp(argv[1], L"registry-restricted");
+        registry_mode = socket_policy >= 0 || restricted_mode || !wcscmp(argv[1], L"registry-read");
     }
     if (report_pipe) check_child_environment();
     WSADATA winsock;
     int error = WSAStartup(MAKEWORD(2, 2), &winsock);
     if (error) fail(!report_pipe ? "winsock-startup-outside" :
+        socket_policy >= 0 ? "winsock-startup-socket" :
         !wcscmp(argv[1], L"control") ? "winsock-startup-control" :
         !wcscmp(argv[1], L"provider") ? "winsock-startup-provider" : "winsock-startup-client", (DWORD)error);
     if (report_pipe) {
+        if (socket_policy >= 0) {
+            if (wcscmp(argv[1], L"socket")) fail("socket-role", ERROR_INVALID_PARAMETER);
+            if (read_marker(L"private-input.txt") ||
+                    read_marker(L"all-packages.txt") != (socket_policy ? ERROR_ACCESS_DENIED : ERROR_SUCCESS))
+                fail("socket-file-control", ERROR_INVALID_DATA);
+            SOCKET probe = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            DWORD observation = probe == INVALID_SOCKET ? (DWORD)WSAGetLastError() : 0;
+            if (probe == INVALID_SOCKET && !observation) fail("socket-error-missing", ERROR_INVALID_DATA);
+            if (probe != INVALID_SOCKET && closesocket(probe)) fail("socket-close", (DWORD)WSAGetLastError());
+            message(4, observation, "socket-observation");
+            message(3, 0, "complete");
+            WSACleanup();
+            return 0;
+        }
         if (registry_mode && (!wcscmp(argv[1], L"provider") || !wcscmp(argv[1], L"client"))) {
             BOOL provider_role = !wcscmp(argv[1], L"provider");
             LSTATUS access = open_host_environment(KEY_QUERY_VALUE);
@@ -640,10 +665,12 @@ int wmain(int argc, wchar_t **argv) {
     if (*container) fail("outside-launcher-token", ERROR_INVALID_DATA);
     free(container); CloseHandle(token);
     if (registry_mode) {
-        LSTATUS access = open_host_environment(KEY_QUERY_VALUE);
-        if (access != ERROR_SUCCESS) fail("outside-host-env-read-handle", (DWORD)access);
-        access = open_host_environment(KEY_SET_VALUE);
-        if (access != ERROR_SUCCESS) fail("outside-host-env-write-handle", (DWORD)access);
+        if (socket_policy < 0) {
+            LSTATUS access = open_host_environment(KEY_QUERY_VALUE);
+            if (access != ERROR_SUCCESS) fail("outside-host-env-read-handle", (DWORD)access);
+            access = open_host_environment(KEY_SET_VALUE);
+            if (access != ERROR_SUCCESS) fail("outside-host-env-write-handle", (DWORD)access);
+        }
         derive_registry_capability();
     }
     if (!SetEnvironmentVariableW(L"CM_LPAC_ENV_CANARY", L"must-not-inherit")) fail("outside-env-canary", GetLastError());
@@ -672,7 +699,12 @@ int wmain(int argc, wchar_t **argv) {
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
         fail("kill-on-close-job", GetLastError());
-    if (restricted_mode && !restricted_network) {
+    DWORD socket_observation = 0;
+    if (socket_policy >= 0) {
+        Child *child = spawn(0, L"socket", socket_policy != 0, 0, 0);
+        socket_observation = receive(child, 4);
+        finished(child);
+    } else if (restricted_mode && !restricted_network) {
         finished(spawn(0, L"control", FALSE, 0, 0));
         finished(spawn(1, L"provider", TRUE, 0, 0));
         finished(spawn(2, L"client", TRUE, 0, 0));
@@ -700,6 +732,13 @@ int wmain(int argc, wchar_t **argv) {
     if (FAILED(result)) fail("owned-profile-delete", (DWORD)result);
     profile_created = FALSE;
     cleanup(); WSACleanup();
+    if (socket_policy >= 0) {
+        printf("{\"status\":\"observed\",\"gate\":\"lpac-socket-availability-control\","
+            "\"mode\":\"%ls\",\"socket_error\":%lu,\"network\":\"not_run\","
+            "\"full_isolation\":\"not_run\",\"product\":\"not_run\"}\n",
+            socket_modes[socket_policy], socket_observation);
+        return 0;
+    }
     if (restricted_mode) {
         printf("{\"status\":\"pass\",\"gate\":\"%s\","
             "\"outside_token_checks\":3,\"outside_restricted_token_checks\":2,"

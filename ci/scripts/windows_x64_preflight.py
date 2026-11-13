@@ -16,6 +16,7 @@ import ci_progress
 import record_run
 
 KEY, TARGET = "windows-x64", "x86_64-pc-windows-msvc"
+SOCKET_MODES = ("socket-ordinary", "socket-lpac", "socket-restricted")
 
 
 def authority(policy, entry, env):
@@ -130,18 +131,31 @@ def lpac_restricted_record(text, *, network=False):
     return exact_record(text, expected)
 
 
+def lpac_socket_record(text, mode):
+    if mode not in SOCKET_MODES or len(text) > 8192:
+        raise RuntimeError("Invalid socket observation mode or record size")
+    value = json.loads(text)
+    if (not isinstance(value, dict) or type(value.get("socket_error")) is not int
+            or value["socket_error"] not in (0, 10013)):
+        raise RuntimeError("Missing bounded socket availability observation")
+    return exact_record(text, {"status": "observed", "gate": "lpac-socket-availability-control",
+        "mode": mode, "socket_error": value["socket_error"], "network": "not_run",
+        "full_isolation": "not_run", "product": "not_run"})
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     entry = record_run.require_hosted_worker(enabled=False)
     authority(json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text()), entry, os.environ)
     mechanism = os.environ.get("CM_PREFLIGHT_STAGE", "loader-terminal")
     if mechanism not in ("loader-terminal", "lpac-network", "lpac-registry-read", "lpac-registry-restricted",
-            "lpac-restricted-network"):
+            "lpac-restricted-network", "lpac-socket-availability"):
         raise RuntimeError("Unknown Windows native mechanism stage")
+    socket_stage = mechanism == "lpac-socket-availability"
     restricted_network = mechanism == "lpac-restricted-network"
     restricted = restricted_network or mechanism == "lpac-registry-restricted"
     registry = restricted or mechanism == "lpac-registry-read"
-    lpac = registry or mechanism == "lpac-network"
+    lpac = socket_stage or registry or mechanism == "lpac-network"
     if Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
         raise RuntimeError("Mechanism source must be the exact recorded source checkout")
     logs = Path(os.environ["CM_CI_LOG_DIR"]).resolve()
@@ -150,7 +164,8 @@ def main():
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
     report = {"schema_version": 1, "status": "running",
-        "scope": "V01g-restricted-network-fixture-only" if restricted_network else
+        "scope": "V01h-socket-availability-fixture-only" if socket_stage else
+            "V01g-restricted-network-fixture-only" if restricted_network else
             "V01f-private-sid-registry-fixture-only" if restricted else "V01d-system-dependency-fixture-only" if registry else
             "V01c-lpac-network-fixture-only" if lpac else "V01a-loader-terminal-fixtures-only",
         "platform": KEY, "target": TARGET, "source_sha": os.environ["CM_SOURCE_SHA"],
@@ -233,6 +248,18 @@ def main():
             if lpac:
                 report["inputs"] = {"probe": pe_fixture(probe.read_bytes(), False)}
                 run("probe-dependencies", [cl.with_name("dumpbin.exe"), "/nologo", "/dependents", probe])
+                if socket_stage:
+                    for mode in SOCKET_MODES:
+                        group = temp / mode
+                        group.mkdir()
+                        candidate = group / probe.name
+                        shutil.copyfile(probe, candidate)
+                        if hashlib.sha256(candidate.read_bytes()).hexdigest() != report["inputs"]["probe"]["sha256"]:
+                            raise RuntimeError("Socket policy comparison changed its compiled fixture")
+                        _, text = run("lpac-" + mode + "-control", [candidate, mode], 120)
+                        report["controls"][mode] = lpac_socket_record(text, mode)
+                    report["status"] = "observed_socket_availability_only"
+                    return
                 label, mode, key, parse = {
                     "lpac-network": ("lpac-internal-provider-network-control", "run", "lpac_network", lpac_network_record),
                     "lpac-registry-read": ("lpac-registry-read-network-control", "registry-read", "lpac_registry_read", lpac_registry_record),
@@ -328,7 +355,8 @@ def main():
         report["status"] = "failed"
         raise
     finally:
-        name = ("windows-x64-lpac-restricted-network.json" if restricted_network else
+        name = ("windows-x64-lpac-socket-availability.json" if socket_stage else
+            "windows-x64-lpac-restricted-network.json" if restricted_network else
             "windows-x64-lpac-registry-restricted.json" if restricted else "windows-x64-lpac-registry-read.json" if registry else
             "windows-x64-lpac-network.json" if lpac else "windows-x64-mechanisms.json")
         (logs / name).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -557,6 +585,42 @@ def self_check():
             pass
         else:
             raise AssertionError("Restricted network observation accepted as another mode")
+    old_parsers = (lpac_network_record, lpac_registry_record, lpac_restricted_record,
+        lambda text: lpac_restricted_record(text, network=True))
+    for mode in SOCKET_MODES:
+        for error in (0, 10013):
+            observed = {"status": "observed", "gate": "lpac-socket-availability-control",
+                "mode": mode, "socket_error": error, "network": "not_run",
+                "full_isolation": "not_run", "product": "not_run"}
+            assert lpac_socket_record(json.dumps(observed), mode) == observed
+            changed = [{**observed, key: value} for key, value in (("status", "pass"),
+                ("gate", "lpac-restricted-network-control"), ("mode", "unknown"),
+                ("socket_error", True), ("socket_error", False), ("socket_error", 0.0),
+                ("socket_error", "10013"), ("socket_error", 10060), ("socket_error", 10061),
+                ("network", "pass"), ("full_isolation", "pass"), ("product", "pass"), ("extra", True))]
+            changed += [{key: value for key, value in observed.items() if key != omitted} for omitted in observed]
+            for raw in [json.dumps(value) for value in changed] + [json.dumps(value)
+                    for value in (lpac, registry, restricted, network)] + ["[]", " " * 8193]:
+                try:
+                    lpac_socket_record(raw, mode)
+                except (RuntimeError, ValueError):
+                    pass
+                else:
+                    raise AssertionError("Incomplete or overclaimed socket observation accepted")
+            for other in (*[item for item in SOCKET_MODES if item != mode], "unknown"):
+                try:
+                    lpac_socket_record(json.dumps(observed), other)
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError("Cross-policy socket observation accepted")
+            for parse in old_parsers:
+                try:
+                    parse(json.dumps(observed))
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError("Socket observation accepted as network or registry qualification")
     print("Windows preflight authority, PE fixture and bounded native records self-check passed", flush=True)
 
 
