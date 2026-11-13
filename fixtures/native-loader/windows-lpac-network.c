@@ -582,7 +582,7 @@ int wmain(int argc, wchar_t **argv) {
         if (socket_policy >= 0) {
             if (wcscmp(argv[1], L"socket")) fail("socket-role", ERROR_INVALID_PARAMETER);
             if (read_marker(L"private-input.txt") ||
-                    read_marker(L"all-packages.txt") != (socket_policy ? ERROR_ACCESS_DENIED : ERROR_SUCCESS))
+                    read_marker(L"all-packages.txt") != (DWORD)(socket_policy ? ERROR_ACCESS_DENIED : ERROR_SUCCESS))
                 fail("socket-file-control", ERROR_INVALID_DATA);
             SOCKET probe = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
             DWORD observation = probe == INVALID_SOCKET ? (DWORD)WSAGetLastError() : 0;
