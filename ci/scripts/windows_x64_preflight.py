@@ -171,7 +171,10 @@ def restricted_appcontainer_files_record(text, *, policy="users"):
                 private_catalog_create_denials=2, private_catalog_deleted=True)
             if network:
                 expected.update(gate="restricted-installer-private-network-control", outside_connect_error=10060,
-                    outside_denial_observation="bounded_timeout_3_seconds", outside_listener_post_positive=True)
+                    outside_denial_observation="bounded_timeout_3_seconds", outside_listener_post_positive=True,
+                    private_registry_view="winsock-catalog-and-ipv4-transport-only", copied_registry_root_count=3,
+                    mapped_control_socket_positive=True, private_catalog_read_checks=15,
+                    private_catalog_write_denials=6, private_catalog_dacl_denials=6, private_catalog_create_denials=6)
     return exact_record(text, expected)
 
 
@@ -816,11 +819,12 @@ def self_check():
             "private_catalog_create_denials": 2, "private_catalog_deleted": True},
         {**files, "gate": "restricted-installer-private-network-control",
             "restricting_sid_policy": "world-trusted-installer-private-nt", "system_sid_group_absence_checked": True,
-            "private_registry_view": "winsock-catalog-only", "catalog_copy_bounded": True,
+            "private_registry_view": "winsock-catalog-and-ipv4-transport-only", "catalog_copy_bounded": True,
+            "copied_registry_root_count": 3, "mapped_control_socket_positive": True,
             "inherited_handle_count": 2, "inherited_catalog_write_denials": 3,
-            "real_catalog_read_denials": 6, "private_catalog_read_checks": 9,
-            "private_catalog_write_denials": 2, "private_catalog_dacl_denials": 2,
-            "private_catalog_create_denials": 2, "private_catalog_deleted": True,
+            "real_catalog_read_denials": 6, "private_catalog_read_checks": 15,
+            "private_catalog_write_denials": 6, "private_catalog_dacl_denials": 6,
+            "private_catalog_create_denials": 6, "private_catalog_deleted": True,
             "network": "pass", "provider_http_positive": True, "outside_listener_positive": True,
             "outside_connect_error": 10060, "outside_unexpected_accepts": 0,
             "outside_denial_observation": "bounded_timeout_3_seconds", "outside_listener_post_positive": True})
@@ -850,6 +854,12 @@ def self_check():
             ("full_isolation", "pass"), ("product", "pass"),
             ("file_read_error", 0), ("compiler_creation_error", 0), ("compiler_creation_error", 2),
             ("private_registry_view", "real-hklm"), ("extra", True))]
+        if record["network"] == "pass":
+            previous = {key: value for key, value in record.items()
+                if key not in ("copied_registry_root_count", "mapped_control_socket_positive")}
+            previous.update(private_registry_view="winsock-catalog-only", private_catalog_read_checks=9,
+                private_catalog_write_denials=2, private_catalog_dacl_denials=2, private_catalog_create_denials=2)
+            changed.append(previous)
         for raw in [json.dumps(value) for value in (*changed, lpac, registry, restricted, network, ordinary,
                 *[other for other in file_records if other is not record])] + ["[]", " " * 8193]:
             try:
