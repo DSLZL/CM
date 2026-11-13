@@ -40,6 +40,11 @@ static BOOL restricted_code_files;
 static BOOL installer_files;
 static PSID installer_sid;
 static BOOL file_diagnostic_done;
+static BOOL private_catalog, catalog_created;
+static HKEY catalog_writer, catalog_reader;
+static wchar_t catalog_path[128];
+static DWORD catalog_keys, catalog_values, catalog_bytes;
+static const wchar_t catalog_parameters[] = L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters";
 static const char *startup_gates[] = {
     "wsa-reg-parameters", "wsa-reg-protocol", "wsa-reg-namespace", "wsa-dll-mswsock",
     "wsa-dll-nsi", "wsa-dll-dnsapi", "wsa-dll-nlaapi", "wsa-dll-winrnr"
@@ -61,6 +66,26 @@ static const wchar_t *environment_names[] = {
     L"APPDATA", L"LOCALAPPDATA", L"SystemDrive", L"SystemRoot", L"TEMP", L"TMP", L"USERPROFILE", L"windir"
 };
 
+static LSTATUS delete_private_catalog(void) {
+    LSTATUS error;
+    if (catalog_reader) {
+        error = RegCloseKey(catalog_reader);
+        if (error) return error;
+        catalog_reader = NULL;
+    }
+    if (!catalog_created) return ERROR_SUCCESS;
+    if (catalog_writer) {
+        error = RegDeleteTreeW(catalog_writer, NULL);
+        if (error) return error;
+        error = RegCloseKey(catalog_writer);
+        if (error) return error;
+        catalog_writer = NULL;
+    }
+    error = RegDeleteKeyW(HKEY_CURRENT_USER, catalog_path);
+    if (!error) catalog_created = FALSE;
+    return error;
+}
+
 static void cleanup(void) {
     if (job) { CloseHandle(job); job = NULL; }
     if (restricted_base) { CloseHandle(restricted_base); restricted_base = NULL; }
@@ -79,6 +104,8 @@ static void cleanup(void) {
     if (socket_info_writer) CloseHandle(socket_info_writer);
     if (shared_source != INVALID_SOCKET) closesocket(shared_source);
     if (shared_peer != INVALID_SOCKET) closesocket(shared_peer);
+    LSTATUS catalog_error = delete_private_catalog();
+    if (catalog_error) fprintf(stderr, "Owned catalog cleanup failed; error=%lu\n", (DWORD)catalog_error);
     if (profile_created) {
         HRESULT result = DeleteAppContainerProfile(profile);
         if (FAILED(result)) fprintf(stderr, "Owned profile cleanup failed; error=%lu\n", (DWORD)result);
@@ -139,6 +166,9 @@ static __declspec(noreturn) void fail(const char *gate, DWORD error) {
         if (installer_files && file_diagnostic_done)
             fprintf(stderr, "Actual file controls completed before startup: outside_baselines=6/3; "
                 "restricted_checks=6/3; denied_error=5; compiler_executed=false\n");
+        if (private_catalog)
+            fprintf(stderr, "Private catalog copy: keys=%lu; values=%lu; bytes=%lu; source_security_copied=false\n",
+                catalog_keys, catalog_values, catalog_bytes);
         if (restricted_network && !strcmp(gate, "provider-socket") && error == WSAEACCES)
             socket_access_diagnostic();
         if (socket_share) {
@@ -419,6 +449,126 @@ static LSTATUS open_host_environment(REGSAM access) {
         if (closed != ERROR_SUCCESS) fail("registry-key-close", (DWORD)closed);
     }
     return result;
+}
+
+static void copy_catalog(HKEY source, HKEY destination, DWORD depth) {
+    if (depth > 16 || ++catalog_keys > 512) fail("catalog-copy-key-bound", ERROR_INVALID_DATA);
+    BYTE *data = malloc(65536);
+    if (!data) fail("catalog-copy-memory", ERROR_OUTOFMEMORY);
+    for (DWORD index = 0;; ++index) {
+        wchar_t name[256];
+        DWORD length = ARRAYSIZE(name), size = 65536, type = 0;
+        LSTATUS error = RegEnumValueW(source, index, name, &length, NULL, &type, data, &size);
+        if (error == ERROR_NO_MORE_ITEMS) break;
+        if (error) fail("catalog-copy-value-enum", (DWORD)error);
+        if (type == REG_LINK || ++catalog_values > 4096 || size > 4194304 - catalog_bytes)
+            fail("catalog-copy-value-bound", ERROR_INVALID_DATA);
+        catalog_bytes += size;
+        error = RegSetValueExW(destination, name, 0, type, data, size);
+        if (error) fail("catalog-copy-value-write", (DWORD)error);
+    }
+    free(data);
+    for (DWORD index = 0;; ++index) {
+        wchar_t name[256];
+        DWORD length = ARRAYSIZE(name), disposition = 0;
+        LSTATUS error = RegEnumKeyExW(source, index, name, &length, NULL, NULL, NULL, NULL);
+        if (error == ERROR_NO_MORE_ITEMS) break;
+        if (error) fail("catalog-copy-key-enum", (DWORD)error);
+        if (!length || wcschr(name, L'\\')) fail("catalog-copy-key-name", ERROR_INVALID_DATA);
+        HKEY input = NULL, output = NULL;
+        error = RegOpenKeyExW(source, name, REG_OPTION_OPEN_LINK, KEY_READ, &input);
+        if (error) fail("catalog-copy-key-open", (DWORD)error);
+        error = RegCreateKeyExW(destination, name, 0, NULL, REG_OPTION_VOLATILE,
+            KEY_ALL_ACCESS, NULL, &output, &disposition);
+        if (error || disposition != REG_CREATED_NEW_KEY)
+            fail("catalog-copy-key-create", error ? (DWORD)error : ERROR_ALREADY_EXISTS);
+        copy_catalog(input, output, depth + 1);
+        if (RegCloseKey(input) || RegCloseKey(output)) fail("catalog-copy-key-close", ERROR_INVALID_HANDLE);
+    }
+}
+
+static void prepare_private_catalog(void) {
+    wchar_t *user = NULL, *package = NULL, *private_text = NULL, sddl[1024];
+    PSECURITY_DESCRIPTOR descriptor = NULL;
+    if (!ConvertSidToStringSidW(owner->User.Sid, &user) || !ConvertSidToStringSidW(package_sid, &package) ||
+            !ConvertSidToStringSidW(private_sid, &private_text)) fail("catalog-acl-sids", GetLastError());
+    if (_snwprintf_s(sddl, ARRAYSIZE(sddl), _TRUNCATE,
+            L"D:P(A;CI;KA;;;%ls)(A;CI;KR;;;%ls)(A;CI;KR;;;%ls)(A;CI;KR;;;OW)",
+            user, package, private_text) < 0) fail("catalog-acl-bound", ERROR_INVALID_DATA);
+    LocalFree(user); LocalFree(package); LocalFree(private_text);
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &descriptor, NULL))
+        fail("catalog-acl-parse", GetLastError());
+    if (_snwprintf_s(catalog_path, ARRAYSIZE(catalog_path), _TRUNCATE,
+            L"Software\\CM.WX.Catalog.%ls", profile) < 0) fail("catalog-path-bound", ERROR_INVALID_DATA);
+    SECURITY_ATTRIBUTES security = {sizeof(security), descriptor, FALSE};
+    DWORD disposition = 0;
+    LSTATUS error = RegCreateKeyExW(HKEY_CURRENT_USER, catalog_path, 0, NULL, REG_OPTION_VOLATILE,
+        KEY_ALL_ACCESS, &security, &catalog_writer, &disposition);
+    LocalFree(descriptor);
+    if (error) fail("catalog-root-create", (DWORD)error);
+    if (disposition != REG_CREATED_NEW_KEY) {
+        RegCloseKey(catalog_writer); catalog_writer = NULL;
+        fail("catalog-root-existing", ERROR_ALREADY_EXISTS);
+    }
+    catalog_created = TRUE;
+    HKEY source = NULL, destination = NULL;
+    error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, catalog_parameters, 0, KEY_READ, &source);
+    if (error) fail("catalog-source-open", (DWORD)error);
+    error = RegCreateKeyExW(catalog_writer, catalog_parameters, 0, NULL, REG_OPTION_VOLATILE,
+        KEY_ALL_ACCESS, NULL, &destination, &disposition);
+    if (error || disposition != REG_CREATED_NEW_KEY)
+        fail("catalog-destination-create", error ? (DWORD)error : ERROR_ALREADY_EXISTS);
+    copy_catalog(source, destination, 0);
+    if (!catalog_values || !catalog_bytes) fail("catalog-copy-empty", ERROR_INVALID_DATA);
+    if (RegCloseKey(source) || RegCloseKey(destination)) fail("catalog-copy-close", ERROR_INVALID_HANDLE);
+    error = RegOpenKeyExW(catalog_writer, L"", 0, KEY_READ, &catalog_reader);
+    if (error) fail("catalog-read-handle", (DWORD)error);
+    if (catalog_reader == catalog_writer ||
+            !SetHandleInformation((HANDLE)catalog_reader, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT))
+        fail("catalog-read-inherit", ERROR_INVALID_HANDLE);
+}
+
+static void apply_private_catalog(BOOL restricted_child) {
+    const wchar_t *keys[] = {catalog_parameters,
+        L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\Protocol_Catalog9",
+        L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\NameSpace_Catalog5"};
+    if (restricted_child) {
+        for (size_t i = 0; i < ARRAYSIZE(keys); ++i) {
+            HKEY key = NULL;
+            LSTATUS error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, keys[i], 0,
+                KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS, &key);
+            if (key) RegCloseKey(key);
+            if (error != ERROR_ACCESS_DENIED) fail("catalog-real-key-denial", (DWORD)error);
+        }
+    }
+    BYTE byte = 0;
+    LSTATUS error = RegSetValueExW(catalog_reader, L"CMWriteProbe", 0, REG_BINARY, &byte, 1);
+    if (error != ERROR_ACCESS_DENIED) fail("catalog-inherited-write-denial", (DWORD)error);
+    error = RegOverridePredefKey(HKEY_LOCAL_MACHINE, catalog_reader);
+    if (error) fail("catalog-override", (DWORD)error);
+    if (RegCloseKey(catalog_reader)) fail("catalog-child-handle-close", ERROR_INVALID_HANDLE);
+    catalog_reader = NULL;
+    for (size_t i = 0; i < ARRAYSIZE(keys); ++i) {
+        HKEY key = NULL;
+        error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, keys[i], 0, KEY_READ, &key);
+        if (error) fail("catalog-private-key-read", (DWORD)error);
+        if (RegCloseKey(key)) fail("catalog-private-key-close", ERROR_INVALID_HANDLE);
+    }
+    if (restricted_child) {
+        const REGSAM writes[] = {KEY_SET_VALUE, WRITE_DAC};
+        for (size_t i = 0; i < ARRAYSIZE(writes); ++i) {
+            HKEY key = NULL;
+            error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, catalog_parameters, 0, writes[i], &key);
+            if (key) RegCloseKey(key);
+            if (error != ERROR_ACCESS_DENIED) fail("catalog-private-write-denial", (DWORD)error);
+        }
+        HKEY key = NULL;
+        error = RegCreateKeyExW(HKEY_LOCAL_MACHINE,
+            L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\CMCreateProbe",
+            0, NULL, REG_OPTION_VOLATILE, KEY_WRITE, NULL, &key, NULL);
+        if (key) RegCloseKey(key);
+        if (error != ERROR_ACCESS_DENIED) fail("catalog-private-create-denial", (DWORD)error);
+    }
 }
 
 static void check_child_environment(void) {
@@ -711,7 +861,8 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         used += (size_t)length + 1;
     }
     environment[used] = L'\0';
-    const wchar_t *mode = installer_files ? L"restricted-installer-appcontainer-files" :
+    const wchar_t *mode = private_catalog ? L"restricted-installer-private-catalog" :
+        installer_files ? L"restricted-installer-appcontainer-files" :
         restricted_code_files ? L"restricted-code-appcontainer-files" :
         file_controls_stage ? L"restricted-appcontainer-files" :
         ordinary_restricted ? L"restricted-appcontainer-network" :
@@ -736,6 +887,12 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
                     _TRUNCATE, L" \"%ls\"", file_inputs[i]) < 0) fail("file-child-command-bound", ERROR_INVALID_DATA);
         }
     }
+    if (private_catalog) {
+        size_t used_command = wcslen(command);
+        if (!catalog_reader || _snwprintf_s(command + used_command, ARRAYSIZE(command) - used_command,
+                _TRUNCATE, L" %llu", (unsigned long long)(UINT_PTR)catalog_reader) < 0)
+            fail("catalog-child-command", ERROR_INVALID_DATA);
+    }
     DWORD attributes = peer_policy == 0 ? 1 : lpac ? 3 : 2;
     InitializeProcThreadAttributeList(NULL, attributes, 0, &size);
     startup.lpAttributeList = malloc(size);
@@ -746,11 +903,11 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         capabilities.Capabilities = &registry;
         capabilities.CapabilityCount = 1;
     }
-    HANDLE inherited[] = {writer, socket_info_reader};
+    HANDLE inherited[] = {writer, private_catalog ? (HANDLE)catalog_reader : socket_info_reader};
     if ((peer_policy != 0 && !UpdateProcThreadAttribute(startup.lpAttributeList, 0,
             PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, &capabilities, sizeof(capabilities), NULL, NULL)) ||
             !UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-            inherited, socket_share ? sizeof(inherited) : sizeof(writer), NULL, NULL) ||
+            inherited, socket_share || private_catalog ? sizeof(inherited) : sizeof(writer), NULL, NULL) ||
             (lpac && !UpdateProcThreadAttribute(startup.lpAttributeList, 0,
             PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY, &policy, sizeof(policy), NULL, NULL)))
         fail("child-attribute-update", GetLastError());
@@ -828,20 +985,21 @@ int wmain(int argc, wchar_t **argv) {
     wchar_t *separator = wcsrchr(root, L'\\');
     if (!separator) fail("root-path", ERROR_INVALID_DATA);
     *separator = L'\0';
-    const wchar_t *mode = argc == 6 || argc == 7 || argc == 9 ? argv[5] : argc >= 2 ? argv[1] : NULL;
+    const wchar_t *mode = argc == 6 || argc == 7 || argc == 9 || argc == 10 ? argv[5] : argc >= 2 ? argv[1] : NULL;
     restricted_code_files = mode && !wcscmp(mode, L"restricted-code-appcontainer-files");
-    installer_files = mode && !wcscmp(mode, L"restricted-installer-appcontainer-files");
+    private_catalog = mode && !wcscmp(mode, L"restricted-installer-private-catalog");
+    installer_files = private_catalog || (mode && !wcscmp(mode, L"restricted-installer-appcontainer-files"));
     file_controls_stage = installer_files || restricted_code_files || (mode && !wcscmp(mode, L"restricted-appcontainer-files"));
     BOOL file_parent = file_controls_stage && argc == 5;
     if (file_controls_stage) {
-        if (!file_parent && argc != 9) fail("file-control-arguments", ERROR_INVALID_PARAMETER);
+        if (!file_parent && argc != (private_catalog ? 10 : 9)) fail("file-control-arguments", ERROR_INVALID_PARAMETER);
         for (size_t i = 0; i < ARRAYSIZE(file_inputs); ++i) {
             const wchar_t *path = argv[(file_parent ? 2 : 6) + i];
             if (wcslen(path) < 4 || wcslen(path) >= MAX_PATH || path[1] != L':' || path[2] != L'\\' || wcschr(path, L'"'))
                 fail("file-control-input-path", ERROR_INVALID_PARAMETER);
             file_inputs[i] = path;
         }
-    } else if (argc == 9) fail("file-control-arguments", ERROR_INVALID_PARAMETER);
+    } else if (argc == 9 || argc == 10) fail("file-control-arguments", ERROR_INVALID_PARAMETER);
     ordinary_restricted = file_controls_stage || (mode && !wcscmp(mode, L"restricted-appcontainer-network"));
     socket_transfer = mode && !wcscmp(mode, L"shared-transfer");
     socket_share = socket_transfer || (mode && !wcscmp(mode, L"socket-share"));
@@ -849,7 +1007,7 @@ int wmain(int argc, wchar_t **argv) {
         if (!wcscmp(mode, socket_modes[i])) socket_policy = (int)i;
     for (size_t i = 0; mode && i < ARRAYSIZE(peer_modes); ++i)
         if (!wcscmp(mode, peer_modes[i])) { peer_policy = (int)i; socket_share = TRUE; }
-    if (!file_parent && (argc == 5 || argc == 6 || argc == 7 || argc == 9)) {
+    if (!file_parent && (argc == 5 || argc == 6 || argc == 7 || argc == 9 || argc == 10)) {
         if ((argc == 7) != socket_share) fail("socket-share-arguments", ERROR_INVALID_PARAMETER);
         if (argc >= 6) {
             if (wcscmp(argv[5], L"registry-read") && wcscmp(argv[5], L"registry-restricted") &&
@@ -863,6 +1021,14 @@ int wmain(int argc, wchar_t **argv) {
         wchar_t *end = NULL;
         report_pipe = (HANDLE)(UINT_PTR)wcstoull(argv[2], &end, 10);
         if (!report_pipe || !end || *end) fail("report-argument", ERROR_INVALID_DATA);
+        if (private_catalog) {
+            if (!*argv[9] || wcslen(argv[9]) > 20 || wcsspn(argv[9], L"0123456789") != wcslen(argv[9]))
+                fail("catalog-handle-argument", ERROR_INVALID_PARAMETER);
+            catalog_reader = (HKEY)(UINT_PTR)wcstoull(argv[9], &end, 10);
+            if (!catalog_reader || (HANDLE)catalog_reader == INVALID_HANDLE_VALUE ||
+                    (HANDLE)catalog_reader == report_pipe || !end || *end)
+                fail("catalog-handle-argument", ERROR_INVALID_HANDLE);
+        }
         if (socket_share) {
             if (wcscmp(argv[1], L"socket-share") || wcscmp(argv[3], L"0") || wcscmp(argv[4], L"0") ||
                     !*argv[6] || wcslen(argv[6]) > 20 || wcsspn(argv[6], L"0123456789") != wcslen(argv[6]))
@@ -885,12 +1051,13 @@ int wmain(int argc, wchar_t **argv) {
 #if defined(CM_DELAY_DIAGNOSTIC)
     if (restricted_code_files || installer_files) check_delayed_imports();
 #endif
-    if (installer_files && !report_pipe) startup_diagnostics(TRUE);
+    if (installer_files && !private_catalog && !report_pipe) startup_diagnostics(TRUE);
     if (installer_files && report_pipe && !wcscmp(argv[1], L"client")) {
         check_file_controls(TRUE);
         message(9, file_path_checks, "file-path-checks");
         message(10, compiler_creation_checks, "compiler-creation-checks");
     }
+    if (private_catalog && report_pipe) apply_private_catalog(wcscmp(argv[1], L"control") != 0);
     WSADATA winsock;
     int error = WSAStartup(MAKEWORD(2, 2), &winsock);
     if (error && installer_files && report_pipe) startup_diagnostics(FALSE);
@@ -1066,7 +1233,7 @@ int wmain(int argc, wchar_t **argv) {
         }
         if (!ordinary_restricted) derive_registry_capability();
     }
-    if (installer_files) capability_restriction_diagnostic();
+    if (installer_files && !private_catalog) capability_restriction_diagnostic();
     if (!SetEnvironmentVariableW(L"CM_LPAC_ENV_CANARY", L"must-not-inherit")) fail("outside-env-canary", GetLastError());
     unsigned char random[16];
     if (BCryptGenRandom(NULL, random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG))
@@ -1079,6 +1246,7 @@ int wmain(int argc, wchar_t **argv) {
     if (FAILED(result)) fail("fresh-profile-create", (DWORD)result);
     profile_created = TRUE;
     if (restricted_mode) prepare_restricted_token();
+    if (private_catalog) prepare_private_catalog();
     private_acl(root, package_sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
     private_acl(executable, package_sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
     BYTE all_packages[SECURITY_MAX_SID_SIZE];
@@ -1200,6 +1368,10 @@ int wmain(int argc, wchar_t **argv) {
         }
         closesocket(canary);
     }
+    if (private_catalog) {
+        LSTATUS deleted = delete_private_catalog();
+        if (deleted) fail("catalog-owned-delete", (DWORD)deleted);
+    }
     result = DeleteAppContainerProfile(profile);
     if (FAILED(result)) fail("owned-profile-delete", (DWORD)result);
     profile_created = FALSE;
@@ -1262,8 +1434,9 @@ int wmain(int argc, wchar_t **argv) {
             "\"private_file_positive\":true,\"child_winsock_startup_checks\":3,"
             "\"host_registry_baseline\":true,\"host_environment_read_error\":5,"
             "\"host_environment_write_open_error\":5,\"profile_deleted\":true,"
-            "\"network\":\"%s\",\"full_isolation\":\"not_run\",\"product\":\"not_run\"%s%s%s%s}\n",
-            installer_files ? "restricted-installer-appcontainer-files-control" :
+            "\"network\":\"%s\",\"full_isolation\":\"not_run\",\"product\":\"not_run\"%s%s%s%s%s}\n",
+            private_catalog ? "restricted-installer-private-catalog-control" :
+                installer_files ? "restricted-installer-appcontainer-files-control" :
                 restricted_code_files ? "restricted-code-appcontainer-files-control" :
                 file_controls_stage ? "restricted-appcontainer-files-control" : ordinary_restricted ? "restricted-appcontainer-network-control" :
                 restricted_network ? "lpac-restricted-network-control" : "lpac-restricted-registry-control",
@@ -1283,7 +1456,12 @@ int wmain(int argc, wchar_t **argv) {
             file_controls_stage ? ",\"outside_file_baselines\":6,\"file_path_checks\":6,\"file_read_error\":5,"
                 "\"outside_compiler_creation_baselines\":3,\"compiler_creation_checks\":3,\"compiler_creation_error\":5,"
                 "\"source_cache_aliases_checked\":true,\"compiler_executed\":false" : "",
-            installer_files ? ",\"system_sid_group_absence_checked\":true" : "");
+            installer_files ? ",\"system_sid_group_absence_checked\":true" : "",
+            private_catalog ? ",\"private_registry_view\":\"winsock-catalog-only\",\"catalog_copy_bounded\":true,"
+                "\"inherited_handle_count\":2,\"inherited_catalog_write_denials\":3,"
+                "\"real_catalog_read_denials\":6,\"private_catalog_read_checks\":9,"
+                "\"private_catalog_write_denials\":2,\"private_catalog_dacl_denials\":2,"
+                "\"private_catalog_create_denials\":2,\"private_catalog_deleted\":true" : "");
         return 0;
     }
     printf("{\"status\":\"pass\",\"gate\":\"%s\","
