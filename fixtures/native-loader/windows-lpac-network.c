@@ -193,15 +193,18 @@ static void create_marker(const wchar_t *name, PSID allowed) {
     private_acl(path, allowed, FILE_GENERIC_READ);
 }
 
-static SOCKET listener(unsigned short *port) {
+static SOCKET listener(unsigned short *port, BOOL provider) {
     SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET) fail(provider ? "provider-socket" : "outside-socket", (DWORD)WSAGetLastError());
     struct sockaddr_in address = {0};
     int size = sizeof(address);
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (sock == INVALID_SOCKET || bind(sock, (const struct sockaddr *)&address, sizeof(address)) ||
-            listen(sock, 2) || getsockname(sock, (struct sockaddr *)&address, &size))
-        fail("listener", (DWORD)WSAGetLastError());
+    if (bind(sock, (const struct sockaddr *)&address, sizeof(address)))
+        fail(provider ? "provider-bind" : "outside-bind", (DWORD)WSAGetLastError());
+    if (listen(sock, 2)) fail(provider ? "provider-listen" : "outside-listen", (DWORD)WSAGetLastError());
+    if (getsockname(sock, (struct sockaddr *)&address, &size))
+        fail(provider ? "provider-address" : "outside-address", (DWORD)WSAGetLastError());
     *port = ntohs(address.sin_port);
     return sock;
 }
@@ -394,12 +397,21 @@ int wmain(int argc, wchar_t **argv) {
         !wcscmp(argv[1], L"control") ? "winsock-startup-control" :
         !wcscmp(argv[1], L"provider") ? "winsock-startup-provider" : "winsock-startup-client", (DWORD)error);
     if (report_pipe) {
+        if (registry_mode && (!wcscmp(argv[1], L"provider") || !wcscmp(argv[1], L"client"))) {
+            BOOL provider_role = !wcscmp(argv[1], L"provider");
+            LSTATUS access = open_host_environment(KEY_QUERY_VALUE);
+            if (access != ERROR_ACCESS_DENIED)
+                fail(provider_role ? "provider-host-env-read-handle" : "client-host-env-read-handle", (DWORD)access);
+            access = open_host_environment(KEY_SET_VALUE);
+            if (access != ERROR_ACCESS_DENIED)
+                fail(provider_role ? "provider-host-env-write-handle" : "client-host-env-write-handle", (DWORD)access);
+        }
         if (!wcscmp(argv[1], L"control")) {
             if (read_marker(L"all-packages.txt") || read_marker(L"private-input.txt"))
                 fail("ordinary-container-file-positive", ERROR_ACCESS_DENIED);
         } else if (!wcscmp(argv[1], L"provider")) {
             unsigned short port = 0;
-            SOCKET server = listener(&port);
+            SOCKET server = listener(&port, TRUE);
             message(1, port, "internal-provider-ready");
             SOCKET connection = accept(server, NULL, NULL);
             if (connection == INVALID_SOCKET) fail("provider-accept", (DWORD)WSAGetLastError());
@@ -423,12 +435,6 @@ int wmain(int argc, wchar_t **argv) {
             }
             closesocket(connection); closesocket(server);
         } else if (!wcscmp(argv[1], L"client")) {
-            if (registry_mode) {
-                LSTATUS access = open_host_environment(KEY_QUERY_VALUE);
-                if (access != ERROR_ACCESS_DENIED) fail("host-env-read-handle", (DWORD)access);
-                access = open_host_environment(KEY_SET_VALUE);
-                if (access != ERROR_ACCESS_DENIED) fail("host-env-write-handle", (DWORD)access);
-            }
             if (read_marker(L"private-input.txt") || read_marker(L"all-packages.txt") != ERROR_ACCESS_DENIED)
                 fail("lpac-opt-out-file-control", ERROR_INVALID_DATA);
             unsigned long provider = wcstoul(argv[3], NULL, 10), canary = wcstoul(argv[4], NULL, 10);
@@ -485,7 +491,7 @@ int wmain(int argc, wchar_t **argv) {
     if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
         fail("kill-on-close-job", GetLastError());
     unsigned short canary_port = 0;
-    SOCKET canary = listener(&canary_port), baseline = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    SOCKET canary = listener(&canary_port, FALSE), baseline = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     error = connect_bounded(baseline, canary_port);
     if (error) fail("outside-network-baseline", (DWORD)error);
     SOCKET accepted = accept(canary, NULL, NULL);
