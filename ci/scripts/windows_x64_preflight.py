@@ -146,7 +146,9 @@ def restricted_appcontainer_record(text):
     return exact_record(text, expected)
 
 
-def restricted_appcontainer_files_record(text, *, restricted_code=False):
+def restricted_appcontainer_files_record(text, *, policy="users"):
+    if policy not in ("users", "restricted-code", "trusted-installer"):
+        raise RuntimeError("Unknown file restriction SID policy")
     expected = lpac_restricted_expected()
     expected.update(gate="restricted-appcontainer-files-control", capability_count=0,
         all_packages_file_denied=expected.pop("lpac_opt_out_file_denied"), all_application_packages_opt_out=False,
@@ -154,8 +156,11 @@ def restricted_appcontainer_files_record(text, *, restricted_code=False):
         outside_compiler_creation_baselines=3, compiler_creation_checks=3, compiler_creation_error=5,
         source_cache_aliases_checked=True, compiler_executed=False)
     del expected["capability"]
-    if restricted_code:
+    if policy == "restricted-code":
         expected.update(gate="restricted-code-appcontainer-files-control", restricting_sid_policy="world-restricted-code-private-nt")
+    elif policy == "trusted-installer":
+        expected.update(gate="restricted-installer-appcontainer-files-control",
+            restricting_sid_policy="world-trusted-installer-private-nt", system_sid_group_absence_checked=True)
     return exact_record(text, expected)
 
 
@@ -233,7 +238,7 @@ def main():
     if mechanism not in ("loader-terminal", "lpac-network", "lpac-registry-read", "lpac-registry-restricted",
             "lpac-restricted-network", "lpac-socket-availability", "lpac-socket-share", "lpac-shared-peer-observation",
             "lpac-shared-transfer", "restricted-appcontainer-network", "restricted-appcontainer-files",
-            "restricted-code-appcontainer-files"):
+            "restricted-code-appcontainer-files", "restricted-installer-appcontainer-files"):
         raise RuntimeError("Unknown Windows native mechanism stage")
     socket_stage = mechanism == "lpac-socket-availability"
     socket_share_stage = mechanism == "lpac-socket-share"
@@ -241,7 +246,8 @@ def main():
     transfer_stage = mechanism == "lpac-shared-transfer"
     ordinary_stage = mechanism == "restricted-appcontainer-network"
     restricted_code_stage = mechanism == "restricted-code-appcontainer-files"
-    files_stage = restricted_code_stage or mechanism == "restricted-appcontainer-files"
+    installer_stage = mechanism == "restricted-installer-appcontainer-files"
+    files_stage = installer_stage or restricted_code_stage or mechanism == "restricted-appcontainer-files"
     restricted_network = ordinary_stage or mechanism == "lpac-restricted-network"
     restricted = files_stage or transfer_stage or socket_share_stage or restricted_network or mechanism == "lpac-registry-restricted"
     registry = restricted or mechanism == "lpac-registry-read"
@@ -254,7 +260,8 @@ def main():
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
     report = {"schema_version": 1, "status": "running",
-        "scope": "V01n-restricted-code-files-only" if restricted_code_stage else
+        "scope": "V01o-restricted-installer-files-only" if installer_stage else
+            "V01n-restricted-code-files-only" if restricted_code_stage else
             "V01m-restricted-appcontainer-files-only" if files_stage else
             "V01l-restricted-appcontainer-network-only" if ordinary_stage else
             "V01k-shared-channel-transfer-only" if transfer_stage else
@@ -339,7 +346,7 @@ def main():
             probe, payload = temp / "native-probe.exe", temp / "sentinel.dll"
             flags = ["/nologo", "/Bv", "/std:c11", "/W4", "/WX", "/O2", "/MT", "/utf-8", "/TC"]
             libraries = ["bcrypt.lib", *(["userenv.lib", "advapi32.lib", "ws2_32.lib", "onecoreuap.lib"] if lpac else [])]
-            if restricted_code_stage:
+            if restricted_code_stage or installer_stage:
                 flags.append("/DCM_DELAY_DIAGNOSTIC")
                 libraries += ["delayimp.lib", *["/DELAYLOAD:" + name for name in
                     ("bcrypt.dll", "USERENV.dll", "ADVAPI32.dll", "WS2_32.dll", "api-ms-win-security-base-l1-2-2.dll")]]
@@ -378,7 +385,10 @@ def main():
                         "restricted-appcontainer-files", "restricted_appcontainer_files", restricted_appcontainer_files_record),
                     "restricted-code-appcontainer-files": ("restricted-code-appcontainer-files-control",
                         "restricted-code-appcontainer-files", "restricted_code_appcontainer_files",
-                        lambda text: restricted_appcontainer_files_record(text, restricted_code=True)),
+                        lambda text: restricted_appcontainer_files_record(text, policy="restricted-code")),
+                    "restricted-installer-appcontainer-files": ("restricted-installer-appcontainer-files-control",
+                        "restricted-installer-appcontainer-files", "restricted_installer_appcontainer_files",
+                        lambda text: restricted_appcontainer_files_record(text, policy="trusted-installer")),
                 }[mechanism]
                 args = [probe, mode]
                 if files_stage:
@@ -393,7 +403,7 @@ def main():
                     report["file_control_inputs"] = {name: {"path": str(path),
                         "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
                         for name, path in (("source", source_canary), ("cache", cache_canary), ("compiler", cl))}
-                    if restricted_code_stage:
+                    if restricted_code_stage or installer_stage:
                         system = Path(os.environ["SystemRoot"]) / "System32"
                         for name, path in (("source", source_canary), ("cache", cache_canary), ("compiler", cl),
                                 *((name, system / (name + ".dll")) for name in
@@ -491,7 +501,8 @@ def main():
         report["status"] = "failed"
         raise
     finally:
-        name = ("windows-x64-restricted-code-appcontainer-files.json" if restricted_code_stage else
+        name = ("windows-x64-restricted-installer-appcontainer-files.json" if installer_stage else
+            "windows-x64-restricted-code-appcontainer-files.json" if restricted_code_stage else
             "windows-x64-restricted-appcontainer-files.json" if files_stage else
             "windows-x64-restricted-appcontainer-network.json" if ordinary_stage else
             "windows-x64-lpac-shared-transfer.json" if transfer_stage else
@@ -768,9 +779,19 @@ def self_check():
     old_parsers = (lpac_network_record, lpac_registry_record, lpac_restricted_record,
         lambda text: lpac_restricted_record(text, network=True), restricted_appcontainer_record)
     file_records = (files, {**files, "gate": "restricted-code-appcontainer-files-control",
-        "restricting_sid_policy": "world-restricted-code-private-nt"})
+        "restricting_sid_policy": "world-restricted-code-private-nt"},
+        {**files, "gate": "restricted-installer-appcontainer-files-control",
+            "restricting_sid_policy": "world-trusted-installer-private-nt", "system_sid_group_absence_checked": True})
     file_parsers = (restricted_appcontainer_files_record,
-        lambda text: restricted_appcontainer_files_record(text, restricted_code=True))
+        lambda text: restricted_appcontainer_files_record(text, policy="restricted-code"),
+        lambda text: restricted_appcontainer_files_record(text, policy="trusted-installer"))
+    for policy in ("", "other", True, None):
+        try:
+            restricted_appcontainer_files_record(json.dumps(files), policy=policy)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Unknown file restriction SID policy accepted")
     for record, parse in zip(file_records, file_parsers):
         assert parse(json.dumps(record)) == record
         changed = [{key: value for key, value in record.items() if key != omitted} for omitted in record]

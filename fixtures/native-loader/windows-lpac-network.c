@@ -37,6 +37,8 @@ static BOOL restricted_network;
 static BOOL ordinary_restricted;
 static BOOL file_controls_stage;
 static BOOL restricted_code_files;
+static BOOL installer_files;
+static PSID installer_sid;
 static const wchar_t *file_inputs[3];
 static const wchar_t *file_aliases[] = {
     L"source-hard.txt", L"source-link.txt", L"cache-hard.txt", L"cache-link.txt", L"compiler-link.exe"
@@ -79,6 +81,7 @@ static void cleanup(void) {
     if (package_sid) FreeSid(package_sid);
     if (private_sid) FreeSid(private_sid);
     LocalFree(registry_sid); registry_sid = NULL;
+    LocalFree(installer_sid); installer_sid = NULL;
     free(owner);
 }
 
@@ -192,11 +195,19 @@ static void inspect_restrictions(HANDLE token, const char *role) {
     for (DWORD i = 0; i < sids->GroupCount; ++i) {
         PSID sid = sids->Groups[i].Sid;
         int index = IsWellKnownSid(sid, WinWorldSid) ? 0 :
-            IsWellKnownSid(sid, restricted_code_files ? WinRestrictedCodeSid : WinBuiltinUsersSid) ? 1 :
+            (installer_files ? EqualSid(sid, installer_sid) :
+                IsWellKnownSid(sid, restricted_code_files ? WinRestrictedCodeSid : WinBuiltinUsersSid)) ? 1 :
             EqualSid(sid, private_sid) ? 2 : -1;
         if (index < 0 || seen[index] || (sids->Groups[i].Attributes & SE_GROUP_USE_FOR_DENY_ONLY))
             fail_restriction(role, "sid-policy", ERROR_INVALID_DATA);
         seen[index] = TRUE;
+    }
+    if (installer_files) {
+        TOKEN_GROUPS *groups = token_info(token, TokenGroups);
+        for (DWORD i = 0; i < groups->GroupCount; ++i)
+            if (EqualSid(groups->Groups[i].Sid, installer_sid))
+                fail_restriction(role, "system-sid-normal-group", ERROR_INVALID_DATA);
+        free(groups);
     }
     if (!LookupPrivilegeValueW(NULL, L"SeChangeNotifyPrivilege", &traverse))
         fail_restriction(role, "privilege-name", GetLastError());
@@ -247,11 +258,14 @@ static void prepare_restricted_token(void) {
     free(groups);
     BYTE world[SECURITY_MAX_SID_SIZE], system_sid[SECURITY_MAX_SID_SIZE];
     DWORD world_size = sizeof(world), system_size = sizeof(system_sid);
+    if (installer_files && !ConvertStringSidToSidW(
+            L"S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464", &installer_sid))
+        fail("installer-restricting-sid", GetLastError());
     if (!CreateWellKnownSid(WinWorldSid, NULL, world, &world_size) ||
             !CreateWellKnownSid(restricted_code_files ? WinRestrictedCodeSid : WinBuiltinUsersSid,
                 NULL, system_sid, &system_size))
         fail("restricted-well-known-sids", GetLastError());
-    SID_AND_ATTRIBUTES sids[3] = {{world, 0}, {system_sid, 0}, {private_sid, 0}};
+    SID_AND_ATTRIBUTES sids[3] = {{world, 0}, {installer_files ? installer_sid : system_sid, 0}, {private_sid, 0}};
     for (DWORD i = 0; i < ARRAYSIZE(sids); ++i)
         if (!IsValidSid(sids[i].Sid)) fail("restricted-input-sid", ERROR_INVALID_SID);
     if (!CreateRestrictedToken(token, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL, 3, sids, &restricted_base)) {
@@ -266,7 +280,8 @@ static void prepare_restricted_token(void) {
             if (created && !diagnostic) fail("restricted-diagnostic-handle", ERROR_INVALID_HANDLE);
             if (diagnostic && !CloseHandle(diagnostic)) fail("restricted-diagnostic-close", GetLastError());
             fprintf(stderr, "Restricted-token diagnostic: policy=%s; created=%s; error=%lu; handle=%s\n",
-                i ? "private-nt" : restricted_code_files ? "world-restricted-code" : "world-users",
+                i ? "private-nt" : installer_files ? "world-trusted-installer" :
+                    restricted_code_files ? "world-restricted-code" : "world-users",
                 created ? "true" : "false", error,
                 diagnostic ? "closed" : "not-created");
         }
@@ -621,7 +636,8 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         used += (size_t)length + 1;
     }
     environment[used] = L'\0';
-    const wchar_t *mode = restricted_code_files ? L"restricted-code-appcontainer-files" :
+    const wchar_t *mode = installer_files ? L"restricted-installer-appcontainer-files" :
+        restricted_code_files ? L"restricted-code-appcontainer-files" :
         file_controls_stage ? L"restricted-appcontainer-files" :
         ordinary_restricted ? L"restricted-appcontainer-network" :
         peer_policy >= 0 ? peer_modes[peer_policy] : socket_transfer ? L"shared-transfer" :
@@ -728,7 +744,8 @@ int wmain(int argc, wchar_t **argv) {
     *separator = L'\0';
     const wchar_t *mode = argc == 6 || argc == 7 || argc == 9 ? argv[5] : argc >= 2 ? argv[1] : NULL;
     restricted_code_files = mode && !wcscmp(mode, L"restricted-code-appcontainer-files");
-    file_controls_stage = restricted_code_files || (mode && !wcscmp(mode, L"restricted-appcontainer-files"));
+    installer_files = mode && !wcscmp(mode, L"restricted-installer-appcontainer-files");
+    file_controls_stage = installer_files || restricted_code_files || (mode && !wcscmp(mode, L"restricted-appcontainer-files"));
     BOOL file_parent = file_controls_stage && argc == 5;
     if (file_controls_stage) {
         if (!file_parent && argc != 9) fail("file-control-arguments", ERROR_INVALID_PARAMETER);
@@ -780,7 +797,7 @@ int wmain(int argc, wchar_t **argv) {
     }
     if (report_pipe) check_child_environment();
 #if defined(CM_DELAY_DIAGNOSTIC)
-    if (restricted_code_files) check_delayed_imports();
+    if (restricted_code_files || installer_files) check_delayed_imports();
 #endif
     WSADATA winsock;
     int error = WSAStartup(MAKEWORD(2, 2), &winsock);
@@ -1149,11 +1166,13 @@ int wmain(int argc, wchar_t **argv) {
             "\"private_file_positive\":true,\"child_winsock_startup_checks\":3,"
             "\"host_registry_baseline\":true,\"host_environment_read_error\":5,"
             "\"host_environment_write_open_error\":5,\"profile_deleted\":true,"
-            "\"network\":\"%s\",\"full_isolation\":\"not_run\",\"product\":\"not_run\"%s%s%s}\n",
-            restricted_code_files ? "restricted-code-appcontainer-files-control" :
+            "\"network\":\"%s\",\"full_isolation\":\"not_run\",\"product\":\"not_run\"%s%s%s%s}\n",
+            installer_files ? "restricted-installer-appcontainer-files-control" :
+                restricted_code_files ? "restricted-code-appcontainer-files-control" :
                 file_controls_stage ? "restricted-appcontainer-files-control" : ordinary_restricted ? "restricted-appcontainer-network-control" :
                 restricted_network ? "lpac-restricted-network-control" : "lpac-restricted-registry-control",
-            restricted_code_files ? "world-restricted-code-private-nt" : "world-users-private-nt",
+            installer_files ? "world-trusted-installer-private-nt" :
+                restricted_code_files ? "world-restricted-code-private-nt" : "world-users-private-nt",
             private_sid_file_grants, ordinary_restricted ? 0u : 1u,
             ordinary_restricted ? "" : ",\"capability\":\"registryRead\"",
             ARRAYSIZE(environment_names), ordinary_restricted ? "all_packages_file_denied" : "lpac_opt_out_file_denied",
@@ -1167,7 +1186,8 @@ int wmain(int argc, wchar_t **argv) {
             ordinary_restricted ? ",\"all_application_packages_opt_out\":false" : "",
             file_controls_stage ? ",\"outside_file_baselines\":6,\"file_path_checks\":6,\"file_read_error\":5,"
                 "\"outside_compiler_creation_baselines\":3,\"compiler_creation_checks\":3,\"compiler_creation_error\":5,"
-                "\"source_cache_aliases_checked\":true,\"compiler_executed\":false" : "");
+                "\"source_cache_aliases_checked\":true,\"compiler_executed\":false" : "",
+            installer_files ? ",\"system_sid_group_absence_checked\":true" : "");
         return 0;
     }
     printf("{\"status\":\"pass\",\"gate\":\"%s\","
