@@ -565,7 +565,8 @@ static DWORD receive(Child *child, DWORD kind) {
     if (item.kind == 2) fail(item.gate, item.value);
     if (item.kind != kind || strcmp(item.gate, kind == 1 ? "internal-provider-ready" :
             kind == 4 ? "socket-observation" : kind == 5 ? "shared-socket-ready" :
-            kind == 6 ? "shared-peer-address" : kind == 7 ? "shared-peer-port" : "complete"))
+            kind == 6 ? "shared-peer-address" : kind == 7 ? "shared-peer-port" :
+            kind == 8 ? "outside-connect-observed" : "complete"))
         fail("child-report-kind", ERROR_INVALID_DATA);
     return item.value;
 }
@@ -779,8 +780,11 @@ int wmain(int argc, wchar_t **argv) {
             closesocket(connection);
             connection = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
             error = connect_bounded(connection, (unsigned short)canary);
-            closesocket(connection);
-            if (error != WSAEACCES) fail("outside-canary-denial", (DWORD)error);
+            if (closesocket(connection) && ordinary_restricted) fail("outside-probe-close", (DWORD)WSAGetLastError());
+            if (ordinary_restricted) {
+                if (error != WSAETIMEDOUT) fail("outside-canary-timeout", (DWORD)error);
+                message(8, (DWORD)error, "outside-connect-observed");
+            } else if (error != WSAEACCES) fail("outside-canary-denial", (DWORD)error);
         } else fail("child-role", ERROR_INVALID_PARAMETER);
         message(3, 0, "complete");
         WSACleanup();
@@ -906,12 +910,26 @@ int wmain(int argc, wchar_t **argv) {
         Child *provider = spawn(1, L"provider", !ordinary_restricted, 0, 0);
         DWORD port = receive(provider, 1);
         if (!port || port > 65535) fail("provider-port", ERROR_INVALID_DATA);
-        finished(spawn(2, L"client", !ordinary_restricted, (unsigned short)port, canary_port));
+        Child *client = spawn(2, L"client", !ordinary_restricted, (unsigned short)port, canary_port);
+        if (ordinary_restricted && receive(client, 8) != (DWORD)WSAETIMEDOUT)
+            fail("outside-timeout-observation", ERROR_INVALID_DATA);
+        finished(client);
         finished(provider);
         fd_set readable;
         struct timeval now = {0, 0};
         FD_ZERO(&readable); FD_SET(canary, &readable);
         if (select(0, &readable, NULL, NULL, &now) != 0) fail("outside-unexpected-accept", ERROR_INVALID_DATA);
+        if (ordinary_restricted) {
+            // A timeout alone cannot distinguish isolation from an unavailable listener.
+            baseline = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            error = connect_bounded(baseline, canary_port);
+            if (error) fail("outside-post-network-baseline", (DWORD)error);
+            accepted = accept(canary, NULL, NULL);
+            if (accepted == INVALID_SOCKET) fail("outside-post-baseline-accept", (DWORD)WSAGetLastError());
+            if (closesocket(accepted) || closesocket(baseline)) fail("outside-post-baseline-close", (DWORD)WSAGetLastError());
+            FD_ZERO(&readable); FD_SET(canary, &readable);
+            if (select(0, &readable, NULL, NULL, &now) != 0) fail("outside-post-unexpected-accept", ERROR_INVALID_DATA);
+        }
         closesocket(canary);
     }
     result = DeleteAppContainerProfile(profile);
@@ -983,7 +1001,11 @@ int wmain(int argc, wchar_t **argv) {
             ordinary_restricted ? "" : ",\"capability\":\"registryRead\"",
             ARRAYSIZE(environment_names), ordinary_restricted ? "all_packages_file_denied" : "lpac_opt_out_file_denied",
             restricted_network ? "pass" : "not_run",
-            restricted_network ? ",\"provider_http_positive\":true,\"outside_listener_positive\":true,"
+            restricted_network ? ordinary_restricted ?
+                ",\"provider_http_positive\":true,\"outside_listener_positive\":true,\"outside_connect_error\":10060,"
+                "\"outside_denial_observation\":\"bounded_timeout_3_seconds\",\"outside_listener_post_positive\":true,"
+                "\"outside_unexpected_accepts\":0" :
+                ",\"provider_http_positive\":true,\"outside_listener_positive\":true,"
                 "\"outside_connect_error\":10013,\"outside_unexpected_accepts\":0" : "",
             ordinary_restricted ? ",\"all_application_packages_opt_out\":false" : "");
         return 0;

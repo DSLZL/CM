@@ -139,7 +139,9 @@ def lpac_restricted_record(text, *, network=False):
 def restricted_appcontainer_record(text):
     expected = lpac_restricted_expected(network=True)
     expected.update(gate="restricted-appcontainer-network-control", capability_count=0,
-        all_packages_file_denied=expected.pop("lpac_opt_out_file_denied"), all_application_packages_opt_out=False)
+        all_packages_file_denied=expected.pop("lpac_opt_out_file_denied"), all_application_packages_opt_out=False,
+        outside_connect_error=10060, outside_denial_observation="bounded_timeout_3_seconds",
+        outside_listener_post_positive=True)
     del expected["capability"]
     return exact_record(text, expected)
 
@@ -675,7 +677,9 @@ def self_check():
         else:
             raise AssertionError("Restricted network observation accepted as another mode")
     ordinary = {**network, "gate": "restricted-appcontainer-network-control", "capability_count": 0,
-        "all_packages_file_denied": True, "all_application_packages_opt_out": False}
+        "all_packages_file_denied": True, "all_application_packages_opt_out": False,
+        "outside_connect_error": 10060, "outside_denial_observation": "bounded_timeout_3_seconds",
+        "outside_listener_post_positive": True}
     del ordinary["capability"], ordinary["lpac_opt_out_file_denied"]
     assert restricted_appcontainer_record(json.dumps(ordinary)) == ordinary
     changed = [{key: value for key, value in ordinary.items() if key != omitted} for omitted in ordinary]
@@ -685,6 +689,8 @@ def self_check():
         elif type(value) is int:
             changed += [{**ordinary, key: item} for item in (True, float(value), str(value), value + 1)]
     changed += [{**ordinary, key: value} for key, value in (("capability", "registryRead"),
+        ("outside_connect_error", 10013), ("outside_connect_error", 10061), ("outside_connect_error", 0),
+        ("outside_denial_observation", "access_denied"),
         ("gate", "lpac-restricted-network-control"), ("network", "not_run"),
         ("full_isolation", "pass"), ("product", "pass"), ("extra", True))]
     for raw in [json.dumps(value) for value in (*changed, lpac, registry, restricted, network)] + ["[]", " " * 8193]:
