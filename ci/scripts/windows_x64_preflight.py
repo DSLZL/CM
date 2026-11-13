@@ -393,6 +393,13 @@ def main():
                     report["file_control_inputs"] = {name: {"path": str(path),
                         "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
                         for name, path in (("source", source_canary), ("cache", cache_canary), ("compiler", cl))}
+                    if restricted_code_stage:
+                        system = Path(os.environ["SystemRoot"]) / "System32"
+                        for name, path in (("source", source_canary), ("cache", cache_canary), ("compiler", cl),
+                                *((name, system / (name + ".dll")) for name in
+                                    ("bcrypt", "bcryptprimitives", "KERNEL32", "KernelBase", "ntdll",
+                                        "USERENV", "ADVAPI32", "WS2_32"))):
+                            run(name + "-permissions", [system / "icacls.exe", path])
                     args = [candidate, mode, source_canary, cache_canary, cl]
                 _, text = run(label, args, 120)
                 report["controls"][key] = parse(text)
