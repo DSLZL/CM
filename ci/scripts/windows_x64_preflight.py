@@ -165,8 +165,8 @@ def lpac_shared_peer_record(text, mode):
         "http": "not_run", "network": "not_run", "full_isolation": "not_run", "product": "not_run"})
 
 
-def lpac_socket_share_record(text):
-    return exact_record(text, {"status": "pass", "gate": "lpac-socket-share-control",
+def lpac_socket_share_expected():
+    return {"status": "pass", "gate": "lpac-socket-share-control",
         "outside_token_checks": 1, "outside_restricted_token_checks": 1,
         "restricting_sid_count": 3, "restricting_sid_policy": "world-users-private-nt",
         "private_sid_group_absence_checked": True, "private_sid_file_grants": 3,
@@ -176,7 +176,26 @@ def lpac_socket_share_record(text):
         "lpac_opt_out_file_denied": True, "private_file_positive": True, "host_registry_baseline": True,
         "host_environment_read_error": 5, "host_environment_write_open_error": 5,
         "direct_socket_error": 10013, "pid_bound_socket_share": True, "parent_child_http_positive": True,
-        "profile_deleted": True, "network_qualification": "not_run", "full_isolation": "not_run", "product": "not_run"})
+        "profile_deleted": True, "network_qualification": "not_run", "full_isolation": "not_run", "product": "not_run"}
+
+
+def lpac_socket_share_record(text):
+    return exact_record(text, lpac_socket_share_expected())
+
+
+def lpac_shared_transfer_record(text):
+    if len(text) > 8192:
+        raise RuntimeError("Oversized shared transfer record")
+    value = json.loads(text)
+    bounds = {"parent_peer_port": (1, 65535), "peer_address": (0, 0xFFFFFFFF), "peer_port": (0, 65535)}
+    if (not isinstance(value, dict) or any(type(value.get(key)) is not int or not low <= value[key] <= high
+            for key, (low, high) in bounds.items()) or (value["peer_address"], value["peer_port"])
+            not in ((0, 0), (2130706433, value["parent_peer_port"]))):
+        raise RuntimeError("Shared transfer peer metadata differs from the parent endpoint")
+    expected = lpac_socket_share_expected()
+    expected.update(gate="lpac-shared-transfer-control", parent_endpoint_checked=True,
+        parent_peer_address=2130706433, peer_size=16, peer_family=2, **{key: value[key] for key in bounds})
+    return exact_record(text, expected)
 
 
 def main():
@@ -185,13 +204,15 @@ def main():
     authority(json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text()), entry, os.environ)
     mechanism = os.environ.get("CM_PREFLIGHT_STAGE", "loader-terminal")
     if mechanism not in ("loader-terminal", "lpac-network", "lpac-registry-read", "lpac-registry-restricted",
-            "lpac-restricted-network", "lpac-socket-availability", "lpac-socket-share", "lpac-shared-peer-observation"):
+            "lpac-restricted-network", "lpac-socket-availability", "lpac-socket-share", "lpac-shared-peer-observation",
+            "lpac-shared-transfer"):
         raise RuntimeError("Unknown Windows native mechanism stage")
     socket_stage = mechanism == "lpac-socket-availability"
     socket_share_stage = mechanism == "lpac-socket-share"
     peer_stage = mechanism == "lpac-shared-peer-observation"
+    transfer_stage = mechanism == "lpac-shared-transfer"
     restricted_network = mechanism == "lpac-restricted-network"
-    restricted = socket_share_stage or restricted_network or mechanism == "lpac-registry-restricted"
+    restricted = transfer_stage or socket_share_stage or restricted_network or mechanism == "lpac-registry-restricted"
     registry = restricted or mechanism == "lpac-registry-read"
     lpac = peer_stage or socket_stage or registry or mechanism == "lpac-network"
     if Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
@@ -202,7 +223,8 @@ def main():
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
     report = {"schema_version": 1, "status": "running",
-        "scope": "V01j-shared-peer-observations-only" if peer_stage else
+        "scope": "V01k-shared-channel-transfer-only" if transfer_stage else
+            "V01j-shared-peer-observations-only" if peer_stage else
             "V01i-shared-socket-fixture-only" if socket_share_stage else
             "V01h-socket-availability-fixture-only" if socket_stage else
             "V01g-restricted-network-fixture-only" if restricted_network else
@@ -310,10 +332,13 @@ def main():
                         "lpac_restricted_network", lambda text: lpac_restricted_record(text, network=True)),
                     "lpac-socket-share": ("lpac-socket-share-control", "socket-share",
                         "lpac_socket_share", lpac_socket_share_record),
+                    "lpac-shared-transfer": ("lpac-shared-transfer-control", "shared-transfer",
+                        "lpac_shared_transfer", lpac_shared_transfer_record),
                 }[mechanism]
                 _, text = run(label, [probe, mode], 120)
                 report["controls"][key] = parse(text)
-                report["status"] = ("passed_bounded_shared_socket_only" if socket_share_stage else
+                report["status"] = ("passed_bounded_shared_transfer_only" if transfer_stage else
+                    "passed_bounded_shared_socket_only" if socket_share_stage else
                     "passed_bounded_registry_controls_only" if restricted and not restricted_network else
                     "passed_bounded_network_controls_only")
                 return
@@ -399,7 +424,8 @@ def main():
         report["status"] = "failed"
         raise
     finally:
-        name = ("windows-x64-lpac-shared-peer-observation.json" if peer_stage else
+        name = ("windows-x64-lpac-shared-transfer.json" if transfer_stage else
+            "windows-x64-lpac-shared-peer-observation.json" if peer_stage else
             "windows-x64-lpac-socket-share.json" if socket_share_stage else
             "windows-x64-lpac-socket-availability.json" if socket_stage else
             "windows-x64-lpac-restricted-network.json" if restricted_network else
@@ -707,6 +733,41 @@ def self_check():
             pass
         else:
             raise AssertionError("Shared parent/child socket control accepted as another qualification")
+    for address, port in ((0, 0), (2130706433, 49151)):
+        transferred = {**shared, "gate": "lpac-shared-transfer-control", "parent_endpoint_checked": True,
+            "parent_peer_address": 2130706433, "parent_peer_port": 49151, "peer_size": 16, "peer_family": 2,
+            "peer_address": address, "peer_port": port}
+        assert lpac_shared_transfer_record(json.dumps(transferred)) == transferred
+        changed = [{key: value for key, value in transferred.items() if key != omitted} for omitted in transferred]
+        changed += [{**transferred, key: value} for key, value in (("gate", "lpac-socket-share-control"),
+            ("status", "observed"), ("parent_peer_address", 0), ("parent_peer_port", 0),
+            ("parent_peer_port", 65536), ("peer_address", -1), ("peer_address", 0x100000000),
+            ("peer_port", -1), ("peer_port", 65536), ("peer_family", 23), ("peer_size", 28),
+            ("network_qualification", "pass"), ("full_isolation", "pass"), ("product", "pass"), ("extra", True))]
+        changed += [{**transferred, "peer_address": bad_address, "peer_port": bad_port}
+            for bad_address, bad_port in ((0, 49151), (2130706433, 0), (2130706433, 49152), (1, 49151))]
+        for key, value in transferred.items():
+            if type(value) is bool:
+                changed += [{**transferred, key: item} for item in (False, 1)]
+            elif type(value) is int:
+                changed += [{**transferred, key: item} for item in (True, float(value), str(value))]
+                if key not in ("parent_peer_port", "peer_address", "peer_port"):
+                    changed += [{**transferred, key: value + 1}, {**transferred, key: value - 1}]
+        for raw in [json.dumps(value) for value in changed + old_records + [shared]] + ["[]", " " * 8193]:
+            try:
+                lpac_shared_transfer_record(raw)
+            except (RuntimeError, ValueError):
+                pass
+            else:
+                raise AssertionError("Incomplete, mismatched or overclaimed shared transfer accepted")
+        for parse in (*old_parsers, lpac_socket_share_record,
+                *[lambda text, mode=mode: lpac_socket_record(text, mode) for mode in SOCKET_MODES]):
+            try:
+                parse(json.dumps(transferred))
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Shared transfer accepted as an older qualification")
     for mode, appcontainer, lpac_mode, restricted_count, capability_count in (
             ("peer-outside", False, False, 0, 0), ("peer-ordinary", True, False, 0, 0),
             ("peer-lpac", True, True, 0, 1), ("peer-restricted", True, True, 1, 1)):
@@ -752,7 +813,7 @@ def self_check():
                     pass
                 else:
                     raise AssertionError("Cross-policy shared-peer observation accepted")
-            for parse in (*old_parsers, lpac_socket_share_record,
+            for parse in (*old_parsers, lpac_socket_share_record, lpac_shared_transfer_record,
                     *[lambda text, mode=mode: lpac_socket_record(text, mode) for mode in SOCKET_MODES]):
                 try:
                     parse(json.dumps(observed))

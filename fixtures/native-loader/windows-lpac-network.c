@@ -32,6 +32,7 @@ static BOOL registry_mode;
 static BOOL restricted_mode;
 static BOOL restricted_network;
 static BOOL socket_share;
+static BOOL socket_transfer;
 static int socket_policy = -1;
 static int peer_policy = -1;
 static const wchar_t *socket_modes[] = {L"socket-ordinary", L"socket-lpac", L"socket-restricted"};
@@ -498,7 +499,7 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         used += (size_t)length + 1;
     }
     environment[used] = L'\0';
-    const wchar_t *mode = peer_policy >= 0 ? peer_modes[peer_policy] :
+    const wchar_t *mode = peer_policy >= 0 ? peer_modes[peer_policy] : socket_transfer ? L"shared-transfer" :
         socket_share ? L"socket-share" : socket_policy >= 0 ? socket_modes[socket_policy] :
         restricted_network ? L"restricted-network" : restricted_mode ? L"registry-restricted" :
             registry_mode ? L"registry-read" : L"";
@@ -591,7 +592,8 @@ int wmain(int argc, wchar_t **argv) {
     if (!separator) fail("root-path", ERROR_INVALID_DATA);
     *separator = L'\0';
     const wchar_t *mode = argc == 6 || argc == 7 ? argv[5] : argc == 2 ? argv[1] : NULL;
-    socket_share = mode && !wcscmp(mode, L"socket-share");
+    socket_transfer = mode && !wcscmp(mode, L"shared-transfer");
+    socket_share = socket_transfer || (mode && !wcscmp(mode, L"socket-share"));
     for (size_t i = 0; mode && i < ARRAYSIZE(socket_modes); ++i)
         if (!wcscmp(mode, socket_modes[i])) socket_policy = (int)i;
     for (size_t i = 0; mode && i < ARRAYSIZE(peer_modes); ++i)
@@ -678,10 +680,17 @@ int wmain(int argc, wchar_t **argv) {
                 WSACleanup();
                 return 0;
             }
-            if (peer.sin_addr.s_addr != htonl(INADDR_LOOPBACK))
-                fail("socket-share-peer-address", (DWORD)ntohl(peer.sin_addr.s_addr));
-            if (!peer.sin_port)
-                fail("socket-share-peer-port", (DWORD)ntohs(peer.sin_port));
+            if (socket_transfer) {
+                message(6, (DWORD)ntohl(peer.sin_addr.s_addr), "shared-peer-address");
+                message(7, (DWORD)ntohs(peer.sin_port), "shared-peer-port");
+            }
+            // Transfer mode binds the endpoint in the parent and records the child's metadata separately.
+            if (!socket_transfer || peer.sin_addr.s_addr || peer.sin_port) {
+                if (peer.sin_addr.s_addr != htonl(INADDR_LOOPBACK))
+                    fail("socket-share-peer-address", (DWORD)ntohl(peer.sin_addr.s_addr));
+                if (!peer.sin_port)
+                    fail("socket-share-peer-port", (DWORD)ntohs(peer.sin_port));
+            }
             DWORD timeout = 3000;
             if (setsockopt(channel, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout)) ||
                     setsockopt(channel, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout)))
@@ -829,7 +838,7 @@ int wmain(int argc, wchar_t **argv) {
                 setsockopt(shared_source, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout)))
             fail("socket-share-retained-timeout", (DWORD)WSAGetLastError());
         if (closesocket(server)) fail("socket-share-listener-close", (DWORD)WSAGetLastError());
-        if (peer_policy >= 0) {
+        if (peer_policy >= 0 || socket_transfer) {
             struct sockaddr_in peer = {0};
             int size = sizeof(peer);
             if (getpeername(shared_peer, (struct sockaddr *)&peer, &size))
@@ -853,6 +862,13 @@ int wmain(int argc, wchar_t **argv) {
             fail("socket-share-info-write", GetLastError());
         if (written != sizeof(info)) fail("socket-share-info-size", ERROR_INVALID_DATA);
         CloseHandle(socket_info_writer); socket_info_writer = NULL;
+        if (socket_transfer) {
+            peer_address = receive(child, 6);
+            peer_port = receive(child, 7);
+            if ((peer_address || peer_port) &&
+                    (peer_address != INADDR_LOOPBACK || peer_port != parent_peer_port))
+                fail("shared-transfer-peer-tuple", ERROR_INVALID_DATA);
+        }
         if (peer_policy >= 0) {
             socket_observation = receive(child, 4);
             peer_address = receive(child, 6);
@@ -915,7 +931,13 @@ int wmain(int argc, wchar_t **argv) {
         return 0;
     }
     if (socket_share) {
-        printf("{\"status\":\"pass\",\"gate\":\"lpac-socket-share-control\","
+        char metadata[256] = "";
+        if (socket_transfer && _snprintf_s(metadata, sizeof(metadata), _TRUNCATE,
+                ",\"parent_endpoint_checked\":true,\"parent_peer_address\":2130706433,\"parent_peer_port\":%lu,"
+                "\"peer_size\":16,\"peer_family\":2,\"peer_address\":%lu,\"peer_port\":%lu",
+                parent_peer_port, peer_address, peer_port) < 0)
+            fail("shared-transfer-record-bound", ERROR_INVALID_DATA);
+        printf("{\"status\":\"pass\",\"gate\":\"%s\","
             "\"outside_token_checks\":1,\"outside_restricted_token_checks\":1,"
             "\"restricting_sid_count\":3,\"restricting_sid_policy\":\"world-users-private-nt\","
             "\"private_sid_group_absence_checked\":true,\"private_sid_file_grants\":%lu,"
@@ -926,8 +948,9 @@ int wmain(int argc, wchar_t **argv) {
             "\"host_registry_baseline\":true,\"host_environment_read_error\":5,\"host_environment_write_open_error\":5,"
             "\"direct_socket_error\":10013,\"pid_bound_socket_share\":true,\"parent_child_http_positive\":true,"
             "\"profile_deleted\":true,\"network_qualification\":\"not_run\","
-            "\"full_isolation\":\"not_run\",\"product\":\"not_run\"}\n",
-            private_sid_file_grants, ARRAYSIZE(environment_names));
+            "\"full_isolation\":\"not_run\",\"product\":\"not_run\"%s}\n",
+            socket_transfer ? "lpac-shared-transfer-control" : "lpac-socket-share-control",
+            private_sid_file_grants, ARRAYSIZE(environment_names), metadata);
         return 0;
     }
     if (socket_policy >= 0) {
