@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import platform
 import queue
+import re
 import shutil
 import struct
 import subprocess
@@ -244,6 +245,84 @@ def lpac_shared_transfer_record(text):
     return exact_record(text, expected)
 
 
+def diagnostic_child_pids(text):
+    if len(text) > 65536:
+        raise RuntimeError("Oversized native failure log")
+    lines = [line for line in text.splitlines() if line.startswith("Native diagnostic child:")]
+    rows = [re.fullmatch(r"Native diagnostic child: role=(control|provider|client); pid=([1-9][0-9]{0,9})", line)
+        for line in lines]
+    if not 1 <= len(rows) <= 3 or not all(rows):
+        raise RuntimeError("Missing or malformed native diagnostic child identity")
+    roles, pids = [row[1] for row in rows], [int(row[2]) for row in rows]
+    if len(set(roles)) != len(rows) or len(set(pids)) != len(rows) or any(pid > 0xFFFFFFFF for pid in pids):
+        raise RuntimeError("Duplicate or out-of-range native diagnostic child identity")
+    return pids
+
+
+@contextmanager
+def registry_failure_trace(temp, logs, label, run, report):
+    system = Path(os.environ["SystemRoot"]) / "System32"
+    session = "CM-WX-Q-" + hashlib.sha256(str(temp).encode()).hexdigest()[:20]
+    trace = temp / "registry.etl"
+    state = {"diagnostic_only": True, "provider": "Microsoft-Windows-Kernel-Registry",
+        "maximum_trace_megabytes": 8, "automatic_stop_seconds": 20, "child_policy_changed": False}
+    started = False
+    try:
+        code, _ = run("registry-trace-start", [system / "logman.exe", "create", "trace", session,
+            "-ets", "-p", state["provider"], "0xffffffffffffffff", "0xff", "-o", trace,
+            "-f", "bincirc", "-max", "8", "-rf", "00:00:20"], 15, codes=None)
+        state["start_code"], started = code, code == 0
+    except Exception as error:
+        state["start_error"] = type(error).__name__
+    try:
+        yield
+    finally:
+        try:
+            state["stop_code"], _ = run("registry-trace-stop",
+                [system / "logman.exe", "stop", session, "-ets"], 15, codes=None)
+        except Exception as error:
+            state["stop_error"] = type(error).__name__
+        if started:
+            try:
+                failure = logs / (label + ".log")
+                if (failure.is_file() and trace.is_file() and 0 < trace.stat().st_size <= 8 * 1024 * 1024
+                        and "Native diagnostic child:" in failure.read_text(encoding="utf-8", errors="strict")):
+                    pids = diagnostic_child_pids(failure.read_text(encoding="utf-8", errors="strict"))
+                    script = temp / "read-registry-trace.ps1"
+                    script.write_text(r'''param([string]$Trace,[string]$Output,[string]$TargetIds)
+$ErrorActionPreference='Stop'
+Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Diagnostics\Microsoft.PowerShell.Diagnostics.psd1') -ErrorAction Stop
+if($TargetIds -notmatch '^[1-9][0-9]{0,9}(,[1-9][0-9]{0,9}){0,2}$'){throw 'Invalid child IDs'}
+$ids=@($TargetIds.Split(',')|ForEach-Object{[long]$_})
+$selected=@(Get-WinEvent -Path $Trace -Oldest -MaxEvents 20000 -ErrorAction Stop |
+    Where-Object{$ids -contains [long]$_.ProcessId}|Select-Object -First 193)
+$events=@($selected|Select-Object -First 192|ForEach-Object{
+    $event=$_; $xml=[xml]$event.ToXml(); $fields=@{}; $names=@()
+    foreach($item in $xml.Event.EventData.Data){
+        $name=[string]$item.Name
+        if($names.Count -lt 32){$names+= $name.Substring(0,[Math]::Min($name.Length,64))}
+        if($name -cin @('KeyName','RelativeName','Status','KeyObject','BaseObject','ObjectName','KeyHandle','DesiredAccess')){
+            $value=[string]$item.'#text'; $fields[$name]=$value.Substring(0,[Math]::Min($value.Length,256))
+        }
+    }
+    [pscustomobject]@{pid=$event.ProcessId;id=$event.Id;opcode=$event.Opcode;field_names=$names;fields=$fields}
+})
+$result=[pscustomobject]@{diagnostic_only=$true;child_pids=$ids;scan_limit=20000;selected_limit=192;truncated=($selected.Count -gt 192);events=$events}
+$text=$result|ConvertTo-Json -Depth 8 -Compress
+$utf8=New-Object Text.UTF8Encoding($false)
+if($utf8.GetByteCount($text) -gt 524288){throw 'Oversized filtered trace'}
+[IO.File]::WriteAllText($Output,$text,$utf8)
+''', encoding="utf-8")
+                    output = logs / "registry-trace-diagnostic.json"
+                    state["extract_code"], _ = run("registry-trace-extract", [system / "WindowsPowerShell/v1.0/powershell.exe",
+                        "-NoLogo", "-NoProfile", "-NonInteractive", "-File", script, "-Trace", trace,
+                        "-Output", output, "-TargetIds", ",".join(map(str, pids))], 30, codes=None)
+                    state["filtered_output_written"] = output.is_file()
+            except Exception as error:
+                state["decode_error"] = type(error).__name__
+        report["registry_trace_diagnostic"] = state
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     entry = record_run.require_hosted_worker(enabled=False)
@@ -306,7 +385,7 @@ def main():
     def run(label, args, timeout=30, codes=(0,)):
         result = ci_progress.run(logs, label, command(label, args), timeout)
         text = (logs / (label + ".log")).read_text(encoding="utf-8", errors="replace")
-        if result.returncode not in codes:
+        if codes is not None and result.returncode not in codes:
             raise RuntimeError(label + " failed; see " + label + ".log")
         return result.returncode, text.strip()
 
@@ -436,7 +515,11 @@ def main():
                                         "USERENV", "ADVAPI32", "WS2_32"))):
                             run(name + "-permissions", [system / "icacls.exe", path])
                     args = [candidate, mode, source_canary, cache_canary, cl]
-                _, text = run(label, args, 120)
+                if catalog_network_stage:
+                    with registry_failure_trace(temp, logs, label, run, report):
+                        _, text = run(label, args, 120)
+                else:
+                    _, text = run(label, args, 120)
                 report["controls"][key] = parse(text)
                 report["status"] = ("passed_bounded_file_tool_network_controls_only" if catalog_network_stage else
                     "passed_bounded_file_tool_controls_only" if files_stage else
@@ -547,6 +630,44 @@ def main():
 def self_check():
     from unittest.mock import patch
     import cm_platforms
+    child = "Native diagnostic child: role=provider; pid=4294967295"
+    assert diagnostic_child_pids(child) == [0xFFFFFFFF]
+    assert diagnostic_child_pids(child + "\nNative diagnostic child: role=client; pid=123") == [0xFFFFFFFF, 123]
+    for text in ("", "x" * 65537, child + "\n" + child, child.replace("provider", "unknown"),
+            child.replace("4294967295", "4294967296"), child.replace("4294967295", "0"),
+            child.replace("4294967295", "1;exit"), child + "\n" + child.replace("provider", "client")):
+        try:
+            diagnostic_child_pids(text)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Invalid trace child identity accepted")
+    with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"SystemRoot": "C:/Windows"}):
+        temp = Path(directory)
+        for start_code, stop_error in ((0, False), (1, False), (0, True), (None, False)):
+            calls, report = [], {}
+
+            def trace_run(label, args, timeout, codes=None):
+                calls.append(label)
+                if start_code is None and label == "registry-trace-start":
+                    raise OSError("diagnostic start failure")
+                if stop_error and label == "registry-trace-stop":
+                    raise OSError("diagnostic stop failure")
+                return (start_code if label == "registry-trace-start" else 0), ""
+
+            try:
+                with registry_failure_trace(temp, temp, "probe", trace_run, report):
+                    raise RuntimeError("original native failure")
+            except RuntimeError as error:
+                assert str(error) == "original native failure"
+            else:
+                raise AssertionError("Optional trace hid the original native failure")
+            assert calls == ["registry-trace-start", "registry-trace-stop"]
+            assert report["registry_trace_diagnostic"]["child_policy_changed"] is False
+            if stop_error:
+                assert report["registry_trace_diagnostic"]["stop_error"] == "OSError"
+            if start_code is None:
+                assert report["registry_trace_diagnostic"]["start_error"] == "OSError"
     entry = cm_platforms.select(KEY)
     env = {"CM_SOURCE_SHA": "a" * 40, "GITHUB_WORKFLOW_SHA": "b" * 40, "CM_REQUEST_ID": "windows-controls",
         "CM_EXECUTION_ROLE": "platform_preflight", "GITHUB_JOB": "native-preflight", "GITHUB_REF": "refs/heads/main",

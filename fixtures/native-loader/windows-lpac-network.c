@@ -172,6 +172,13 @@ static __declspec(noreturn) void fail(const char *gate, DWORD error) {
         if (private_catalog)
             fprintf(stderr, "Private catalog copy: keys=%lu; values=%lu; bytes=%lu; source_security_copied=false\n",
                 catalog_keys, catalog_values, catalog_bytes);
+        if (catalog_network) {
+            const char *roles[] = {"control", "provider", "client"};
+            for (size_t i = 0; i < ARRAYSIZE(children); ++i)
+                if (children[i].process.dwProcessId)
+                    fprintf(stderr, "Native diagnostic child: role=%s; pid=%lu\n",
+                        roles[i], children[i].process.dwProcessId);
+        }
         if (restricted_network && !strcmp(gate, "provider-socket") && error == WSAEACCES)
             socket_access_diagnostic();
         if (socket_share) {
