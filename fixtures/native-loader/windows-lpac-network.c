@@ -630,9 +630,14 @@ int wmain(int argc, wchar_t **argv) {
             int peer_size = sizeof(peer);
             if (getpeername(channel, (struct sockaddr *)&peer, &peer_size))
                 fail("socket-share-peer", (DWORD)WSAGetLastError());
-            if (peer_size != (int)sizeof(peer) || peer.sin_family != AF_INET ||
-                    peer.sin_addr.s_addr != htonl(INADDR_LOOPBACK) || !peer.sin_port)
-                fail("socket-share-loopback", ERROR_INVALID_DATA);
+            if (peer_size != (int)sizeof(peer))
+                fail("socket-share-peer-size", (DWORD)peer_size);
+            if (peer.sin_family != AF_INET)
+                fail("socket-share-peer-family", (DWORD)peer.sin_family);
+            if (peer.sin_addr.s_addr != htonl(INADDR_LOOPBACK))
+                fail("socket-share-peer-address", (DWORD)ntohl(peer.sin_addr.s_addr));
+            if (!peer.sin_port)
+                fail("socket-share-peer-port", (DWORD)ntohs(peer.sin_port));
             DWORD timeout = 3000;
             if (setsockopt(channel, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout)) ||
                     setsockopt(channel, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout)))
