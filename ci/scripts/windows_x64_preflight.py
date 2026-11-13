@@ -143,17 +143,32 @@ def lpac_socket_record(text, mode):
         "full_isolation": "not_run", "product": "not_run"})
 
 
+def lpac_socket_share_record(text):
+    return exact_record(text, {"status": "pass", "gate": "lpac-socket-share-control",
+        "outside_token_checks": 1, "outside_restricted_token_checks": 1,
+        "restricting_sid_count": 3, "restricting_sid_policy": "world-users-private-nt",
+        "private_sid_group_absence_checked": True, "private_sid_file_grants": 3,
+        "private_sid_default_dacl_checked": True, "privilege_allowlist_checked": True,
+        "capability_count": 1, "capability": "registryRead", "inherited_handle_count": 2,
+        "environment_allowlist_count": 8, "environment_canary_not_inherited": True,
+        "lpac_opt_out_file_denied": True, "private_file_positive": True, "host_registry_baseline": True,
+        "host_environment_read_error": 5, "host_environment_write_open_error": 5,
+        "direct_socket_error": 10013, "pid_bound_socket_share": True, "parent_child_http_positive": True,
+        "profile_deleted": True, "network_qualification": "not_run", "full_isolation": "not_run", "product": "not_run"})
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     entry = record_run.require_hosted_worker(enabled=False)
     authority(json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text()), entry, os.environ)
     mechanism = os.environ.get("CM_PREFLIGHT_STAGE", "loader-terminal")
     if mechanism not in ("loader-terminal", "lpac-network", "lpac-registry-read", "lpac-registry-restricted",
-            "lpac-restricted-network", "lpac-socket-availability"):
+            "lpac-restricted-network", "lpac-socket-availability", "lpac-socket-share"):
         raise RuntimeError("Unknown Windows native mechanism stage")
     socket_stage = mechanism == "lpac-socket-availability"
+    socket_share_stage = mechanism == "lpac-socket-share"
     restricted_network = mechanism == "lpac-restricted-network"
-    restricted = restricted_network or mechanism == "lpac-registry-restricted"
+    restricted = socket_share_stage or restricted_network or mechanism == "lpac-registry-restricted"
     registry = restricted or mechanism == "lpac-registry-read"
     lpac = socket_stage or registry or mechanism == "lpac-network"
     if Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
@@ -164,7 +179,8 @@ def main():
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
     report = {"schema_version": 1, "status": "running",
-        "scope": "V01h-socket-availability-fixture-only" if socket_stage else
+        "scope": "V01i-shared-socket-fixture-only" if socket_share_stage else
+            "V01h-socket-availability-fixture-only" if socket_stage else
             "V01g-restricted-network-fixture-only" if restricted_network else
             "V01f-private-sid-registry-fixture-only" if restricted else "V01d-system-dependency-fixture-only" if registry else
             "V01c-lpac-network-fixture-only" if lpac else "V01a-loader-terminal-fixtures-only",
@@ -267,10 +283,13 @@ def main():
                         "lpac_registry_restricted", lpac_restricted_record),
                     "lpac-restricted-network": ("lpac-restricted-network-control", "restricted-network",
                         "lpac_restricted_network", lambda text: lpac_restricted_record(text, network=True)),
+                    "lpac-socket-share": ("lpac-socket-share-control", "socket-share",
+                        "lpac_socket_share", lpac_socket_share_record),
                 }[mechanism]
                 _, text = run(label, [probe, mode], 120)
                 report["controls"][key] = parse(text)
-                report["status"] = ("passed_bounded_registry_controls_only" if restricted and not restricted_network else
+                report["status"] = ("passed_bounded_shared_socket_only" if socket_share_stage else
+                    "passed_bounded_registry_controls_only" if restricted and not restricted_network else
                     "passed_bounded_network_controls_only")
                 return
             run("compile-sentinel-dll", [cl, *flags, "/DCM_PAYLOAD", "/LD", source,
@@ -355,7 +374,8 @@ def main():
         report["status"] = "failed"
         raise
     finally:
-        name = ("windows-x64-lpac-socket-availability.json" if socket_stage else
+        name = ("windows-x64-lpac-socket-share.json" if socket_share_stage else
+            "windows-x64-lpac-socket-availability.json" if socket_stage else
             "windows-x64-lpac-restricted-network.json" if restricted_network else
             "windows-x64-lpac-registry-restricted.json" if restricted else "windows-x64-lpac-registry-read.json" if registry else
             "windows-x64-lpac-network.json" if lpac else "windows-x64-mechanisms.json")
@@ -621,6 +641,46 @@ def self_check():
                     pass
                 else:
                     raise AssertionError("Socket observation accepted as network or registry qualification")
+    shared = {"status": "pass", "gate": "lpac-socket-share-control",
+        "outside_token_checks": 1, "outside_restricted_token_checks": 1,
+        "restricting_sid_count": 3, "restricting_sid_policy": "world-users-private-nt",
+        "private_sid_group_absence_checked": True, "private_sid_file_grants": 3,
+        "private_sid_default_dacl_checked": True, "privilege_allowlist_checked": True,
+        "capability_count": 1, "capability": "registryRead", "inherited_handle_count": 2,
+        "environment_allowlist_count": 8, "environment_canary_not_inherited": True,
+        "lpac_opt_out_file_denied": True, "private_file_positive": True, "host_registry_baseline": True,
+        "host_environment_read_error": 5, "host_environment_write_open_error": 5,
+        "direct_socket_error": 10013, "pid_bound_socket_share": True, "parent_child_http_positive": True,
+        "profile_deleted": True, "network_qualification": "not_run", "full_isolation": "not_run", "product": "not_run"}
+    assert lpac_socket_share_record(json.dumps(shared)) == shared
+    changed = [{key: value for key, value in shared.items() if key != omitted} for omitted in shared]
+    changed += [{**shared, key: value} for key, value in (("status", "observed"),
+        ("gate", "lpac-restricted-network-control"), ("restricting_sid_policy", "world-users-owner"),
+        ("capability", "internetClient"), ("network_qualification", "pass"), ("full_isolation", "pass"),
+        ("product", "pass"), ("outside_connect_error", 10013), ("provider_http_positive", True), ("extra", True))]
+    for key, value in shared.items():
+        if type(value) is bool:
+            changed += [{**shared, key: item} for item in (False, 1)]
+        elif type(value) is int:
+            changed += [{**shared, key: item} for item in (True, float(value), str(value), value + 1, value - 1)]
+    old_records = [lpac, registry, restricted, network] + [
+        {"status": "observed", "gate": "lpac-socket-availability-control", "mode": mode,
+            "socket_error": error, "network": "not_run", "full_isolation": "not_run", "product": "not_run"}
+        for mode in SOCKET_MODES for error in (0, 10013)]
+    for raw in [json.dumps(value) for value in changed + old_records] + ["[]", " " * 8193]:
+        try:
+            lpac_socket_share_record(raw)
+        except (RuntimeError, ValueError):
+            pass
+        else:
+            raise AssertionError("Incomplete or overclaimed shared-socket observation accepted")
+    for parse in (*old_parsers, *[lambda text, mode=mode: lpac_socket_record(text, mode) for mode in SOCKET_MODES]):
+        try:
+            parse(json.dumps(shared))
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Shared parent/child socket control accepted as another qualification")
     print("Windows preflight authority, PE fixture and bounded native records self-check passed", flush=True)
 
 

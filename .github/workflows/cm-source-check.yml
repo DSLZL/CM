@@ -129,7 +129,8 @@ jobs:
           assert win_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'lpac-registry-restricted'") == 1
           assert win_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'lpac-restricted-network'") == 1
           assert win_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'lpac-socket-availability'") == 1
-          assert "-notin @('loader-terminal', 'isolation-availability', 'lpac-network', 'lpac-registry-read', 'lpac-registry-restricted', 'lpac-restricted-network', 'lpac-socket-availability')" in win_recipe
+          assert win_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'lpac-socket-share'") == 1
+          assert "-notin @('loader-terminal', 'isolation-availability', 'lpac-network', 'lpac-registry-read', 'lpac-registry-restricted', 'lpac-restricted-network', 'lpac-socket-availability', 'lpac-socket-share')" in win_recipe
           assert "fixtures/native-loader/windows-lpac-network.c" in paths
           assert "-arch=x64 -host_arch=x64" in win_recipe and "shell: pwsh" in win_recipe
           assert not any(value in win_recipe for value in ("actions/cache/", "cache-save", "secrets.",

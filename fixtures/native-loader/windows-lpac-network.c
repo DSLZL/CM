@@ -19,6 +19,8 @@
 typedef struct { DWORD kind, value; char gate[48]; } Message;
 typedef struct { PROCESS_INFORMATION process; HANDLE reader; } Child;
 static HANDLE job, report_pipe, restricted_base;
+static HANDLE socket_info_reader, socket_info_writer;
+static SOCKET shared_source = INVALID_SOCKET, shared_peer = INVALID_SOCKET;
 static Child children[3];
 static wchar_t profile[64], executable[MAX_PATH], root[MAX_PATH];
 static PSID package_sid, private_sid;
@@ -29,6 +31,7 @@ static BOOL profile_created;
 static BOOL registry_mode;
 static BOOL restricted_mode;
 static BOOL restricted_network;
+static BOOL socket_share;
 static int socket_policy = -1;
 static const wchar_t *socket_modes[] = {L"socket-ordinary", L"socket-lpac", L"socket-restricted"};
 static const char request[] = "GET /controlled HTTP/1.0\r\n\r\n";
@@ -51,6 +54,10 @@ static void cleanup(void) {
         if (children[i].process.hThread) CloseHandle(children[i].process.hThread);
         if (children[i].reader) CloseHandle(children[i].reader);
     }
+    if (socket_info_reader) CloseHandle(socket_info_reader);
+    if (socket_info_writer) CloseHandle(socket_info_writer);
+    if (shared_source != INVALID_SOCKET) closesocket(shared_source);
+    if (shared_peer != INVALID_SOCKET) closesocket(shared_peer);
     if (profile_created) {
         HRESULT result = DeleteAppContainerProfile(profile);
         if (FAILED(result)) fprintf(stderr, "Owned profile cleanup failed; error=%lu\n", (DWORD)result);
@@ -431,7 +438,8 @@ static void inspect(Child *child, BOOL lpac, const wchar_t *role) {
             (capabilities->Groups[0].Attributes & SE_GROUP_USE_FOR_DENY_ONLY)))
         fail("outside-registry-capability", ERROR_INVALID_DATA);
     if (lpac && restricted_mode)
-        inspect_restrictions(token, socket_policy >= 0 ? "socket" : !wcscmp(role, L"provider") ? "provider" : "client");
+        inspect_restrictions(token, socket_share ? "socket-share" :
+            socket_policy >= 0 ? "socket" : !wcscmp(role, L"provider") ? "provider" : "client");
     free(container); free(identity); free(capabilities); free(user); free(integrity);
     CloseHandle(token);
 }
@@ -465,13 +473,19 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         used += (size_t)length + 1;
     }
     environment[used] = L'\0';
-    const wchar_t *mode = socket_policy >= 0 ? socket_modes[socket_policy] :
+    const wchar_t *mode = socket_share ? L"socket-share" : socket_policy >= 0 ? socket_modes[socket_policy] :
         restricted_network ? L"restricted-network" : restricted_mode ? L"registry-restricted" :
             registry_mode ? L"registry-read" : L"";
     if (_snwprintf_s(command, ARRAYSIZE(command), _TRUNCATE, L"\"%ls\" %ls %llu %u %u%ls%ls", executable, role,
             (unsigned long long)(UINT_PTR)writer, (unsigned int)provider, (unsigned int)canary,
             *mode ? L" " : L"", mode) < 0)
         fail("child-command", ERROR_INVALID_DATA);
+    if (socket_share) {
+        size_t used_command = wcslen(command);
+        if (!socket_info_reader || _snwprintf_s(command + used_command, ARRAYSIZE(command) - used_command,
+                _TRUNCATE, L" %llu", (unsigned long long)(UINT_PTR)socket_info_reader) < 0)
+            fail("socket-share-command", ERROR_INVALID_DATA);
+    }
     DWORD attributes = lpac ? 3 : 2;
     InitializeProcThreadAttributeList(NULL, attributes, 0, &size);
     startup.lpAttributeList = malloc(size);
@@ -482,10 +496,11 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         capabilities.Capabilities = &registry;
         capabilities.CapabilityCount = 1;
     }
+    HANDLE inherited[] = {writer, socket_info_reader};
     if (!UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
             &capabilities, sizeof(capabilities), NULL, NULL) ||
             !UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-            &writer, sizeof(writer), NULL, NULL) ||
+            inherited, socket_share ? sizeof(inherited) : sizeof(writer), NULL, NULL) ||
             (lpac && !UpdateProcThreadAttribute(startup.lpAttributeList, 0,
             PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY, &policy, sizeof(policy), NULL, NULL)))
         fail("child-attribute-update", GetLastError());
@@ -498,7 +513,7 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
         CreateProcessW(executable, command, NULL, NULL, TRUE, flags,
             environment, root, &startup.StartupInfo, &child->process);
     if (!created) fail(lpac && restricted_mode ?
-        (socket_policy >= 0 ? "socket-restricted-create" :
+        (socket_share ? "socket-share-restricted-create" : socket_policy >= 0 ? "socket-restricted-create" :
             !wcscmp(role, L"provider") ? "provider-restricted-create" : "client-restricted-create") :
         "child-create", GetLastError());
     DeleteProcThreadAttributeList(startup.lpAttributeList);
@@ -519,7 +534,7 @@ static DWORD receive(Child *child, DWORD kind) {
         fail("child-report-bytes", ERROR_INVALID_DATA);
     if (item.kind == 2) fail(item.gate, item.value);
     if (item.kind != kind || strcmp(item.gate, kind == 1 ? "internal-provider-ready" :
-            kind == 4 ? "socket-observation" : "complete"))
+            kind == 4 ? "socket-observation" : kind == 5 ? "shared-socket-ready" : "complete"))
         fail("child-report-kind", ERROR_INVALID_DATA);
     return item.value;
 }
@@ -531,7 +546,7 @@ static void finished(Child *child) {
     if (!GetExitCodeProcess(child->process.hProcess, &code)) fail("child-exit-code", GetLastError());
     if (code) {
         fprintf(stderr, "Native child role=%s; exit=%lu; hex=0x%08lX\n",
-            socket_policy >= 0 ? "socket" : child == &children[0] ? "control" :
+            socket_share ? "socket-share" : socket_policy >= 0 ? "socket" : child == &children[0] ? "control" :
                 child == &children[1] ? "provider" : "client", code, code);
         if (code == 2) receive(child, 3);
         fail("child-exit", code);
@@ -548,37 +563,88 @@ int wmain(int argc, wchar_t **argv) {
     wchar_t *separator = wcsrchr(root, L'\\');
     if (!separator) fail("root-path", ERROR_INVALID_DATA);
     *separator = L'\0';
-    const wchar_t *mode = argc == 6 ? argv[5] : argc == 2 ? argv[1] : NULL;
+    const wchar_t *mode = argc == 6 || argc == 7 ? argv[5] : argc == 2 ? argv[1] : NULL;
+    socket_share = mode && !wcscmp(mode, L"socket-share");
     for (size_t i = 0; mode && i < ARRAYSIZE(socket_modes); ++i)
         if (!wcscmp(mode, socket_modes[i])) socket_policy = (int)i;
-    if (argc == 5 || argc == 6) {
-        if (argc == 6) {
+    if (argc == 5 || argc == 6 || argc == 7) {
+        if ((argc == 7) != socket_share) fail("socket-share-arguments", ERROR_INVALID_PARAMETER);
+        if (argc >= 6) {
             if (wcscmp(argv[5], L"registry-read") && wcscmp(argv[5], L"registry-restricted") &&
-                    wcscmp(argv[5], L"restricted-network") && socket_policy < 0)
+                    wcscmp(argv[5], L"restricted-network") && socket_policy < 0 && !socket_share)
                 fail("child-mode", ERROR_INVALID_PARAMETER);
             registry_mode = TRUE;
             restricted_network = !wcscmp(argv[5], L"restricted-network");
-            restricted_mode = socket_policy == 2 || restricted_network || !wcscmp(argv[5], L"registry-restricted");
+            restricted_mode = socket_share || socket_policy == 2 || restricted_network || !wcscmp(argv[5], L"registry-restricted");
         }
         wchar_t *end = NULL;
         report_pipe = (HANDLE)(UINT_PTR)wcstoull(argv[2], &end, 10);
         if (!report_pipe || !end || *end) fail("report-argument", ERROR_INVALID_DATA);
+        if (socket_share) {
+            if (wcscmp(argv[1], L"socket-share") || wcscmp(argv[3], L"0") || wcscmp(argv[4], L"0") ||
+                    !*argv[6] || wcslen(argv[6]) > 20 || wcsspn(argv[6], L"0123456789") != wcslen(argv[6]))
+                fail("socket-share-arguments", ERROR_INVALID_PARAMETER);
+            socket_info_reader = (HANDLE)(UINT_PTR)wcstoull(argv[6], &end, 10);
+            if (!socket_info_reader || socket_info_reader == INVALID_HANDLE_VALUE || !end || *end)
+                fail("socket-share-input-handle", ERROR_INVALID_PARAMETER);
+        }
     } else {
         if (argc != 2 || (wcscmp(argv[1], L"run") && wcscmp(argv[1], L"registry-read") &&
-                wcscmp(argv[1], L"registry-restricted") && wcscmp(argv[1], L"restricted-network") && socket_policy < 0))
+                wcscmp(argv[1], L"registry-restricted") && wcscmp(argv[1], L"restricted-network") &&
+                socket_policy < 0 && !socket_share))
             fail("arguments", ERROR_INVALID_PARAMETER);
         restricted_network = !wcscmp(argv[1], L"restricted-network");
-        restricted_mode = socket_policy == 2 || restricted_network || !wcscmp(argv[1], L"registry-restricted");
+        restricted_mode = socket_share || socket_policy == 2 || restricted_network || !wcscmp(argv[1], L"registry-restricted");
         registry_mode = socket_policy >= 0 || restricted_mode || !wcscmp(argv[1], L"registry-read");
     }
     if (report_pipe) check_child_environment();
     WSADATA winsock;
     int error = WSAStartup(MAKEWORD(2, 2), &winsock);
     if (error) fail(!report_pipe ? "winsock-startup-outside" :
-        socket_policy >= 0 ? "winsock-startup-socket" :
+        socket_share ? "winsock-startup-socket-share" : socket_policy >= 0 ? "winsock-startup-socket" :
         !wcscmp(argv[1], L"control") ? "winsock-startup-control" :
         !wcscmp(argv[1], L"provider") ? "winsock-startup-provider" : "winsock-startup-client", (DWORD)error);
     if (report_pipe) {
+        if (socket_share) {
+            // shortcut: one existing parent/child channel; qualify reconnect and isolation before product use.
+            if (read_marker(L"private-input.txt") || read_marker(L"all-packages.txt") != ERROR_ACCESS_DENIED)
+                fail("socket-share-file-control", ERROR_INVALID_DATA);
+            LSTATUS access = open_host_environment(KEY_QUERY_VALUE);
+            if (access != ERROR_ACCESS_DENIED) fail("socket-share-host-env-read", (DWORD)access);
+            access = open_host_environment(KEY_SET_VALUE);
+            if (access != ERROR_ACCESS_DENIED) fail("socket-share-host-env-write", (DWORD)access);
+            SOCKET direct = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            DWORD direct_error = direct == INVALID_SOCKET ? (DWORD)WSAGetLastError() : 0;
+            if (direct != INVALID_SOCKET) closesocket(direct);
+            if (direct_error != WSAEACCES) fail("socket-share-direct-denial", direct_error);
+            WSAPROTOCOL_INFOW info = {0};
+            DWORD received = 0;
+            if (!ReadFile(socket_info_reader, &info, (DWORD)sizeof(info), &received, NULL))
+                fail("socket-share-info-read", GetLastError());
+            if (received != sizeof(info)) fail("socket-share-info-size", ERROR_INVALID_DATA);
+            CloseHandle(socket_info_reader); socket_info_reader = NULL;
+            SOCKET channel = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO,
+                &info, 0, WSA_FLAG_OVERLAPPED);
+            if (channel == INVALID_SOCKET) fail("socket-share-reconstruct", (DWORD)WSAGetLastError());
+            struct sockaddr_in peer = {0};
+            int peer_size = sizeof(peer);
+            if (getpeername(channel, (struct sockaddr *)&peer, &peer_size))
+                fail("socket-share-peer", (DWORD)WSAGetLastError());
+            if (peer_size != (int)sizeof(peer) || peer.sin_family != AF_INET ||
+                    peer.sin_addr.s_addr != htonl(INADDR_LOOPBACK) || !peer.sin_port)
+                fail("socket-share-loopback", ERROR_INVALID_DATA);
+            DWORD timeout = 3000;
+            if (setsockopt(channel, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout)) ||
+                    setsockopt(channel, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout)))
+                fail("socket-share-timeout", (DWORD)WSAGetLastError());
+            message(5, 0, "shared-socket-ready");
+            exchange(channel, "", 0, request, sizeof(request) - 1);
+            exchange(channel, response, sizeof(response) - 1, "", 0);
+            if (closesocket(channel)) fail("socket-share-close", (DWORD)WSAGetLastError());
+            message(3, 0, "complete");
+            WSACleanup();
+            return 0;
+        }
         if (socket_policy >= 0) {
             if (wcscmp(argv[1], L"socket")) fail("socket-role", ERROR_INVALID_PARAMETER);
             if (read_marker(L"private-input.txt") ||
@@ -700,7 +766,39 @@ int wmain(int argc, wchar_t **argv) {
     if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
         fail("kill-on-close-job", GetLastError());
     DWORD socket_observation = 0;
-    if (socket_policy >= 0) {
+    if (socket_share) {
+        unsigned short port = 0;
+        SOCKET server = listener(&port, FALSE);
+        shared_source = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (shared_source == INVALID_SOCKET) fail("socket-share-source", (DWORD)WSAGetLastError());
+        error = connect_bounded(shared_source, port);
+        if (error) fail("socket-share-connect", (DWORD)error);
+        shared_peer = accept(server, NULL, NULL);
+        if (shared_peer == INVALID_SOCKET) fail("socket-share-accept", (DWORD)WSAGetLastError());
+        if (closesocket(server)) fail("socket-share-listener-close", (DWORD)WSAGetLastError());
+        SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
+        if (!CreatePipe(&socket_info_reader, &socket_info_writer, &security, 0) ||
+                !SetHandleInformation(socket_info_writer, HANDLE_FLAG_INHERIT, 0))
+            fail("socket-share-info-pipe", GetLastError());
+        Child *child = spawn(0, L"socket-share", TRUE, 0, 0);
+        CloseHandle(socket_info_reader); socket_info_reader = NULL;
+        WSAPROTOCOL_INFOW info = {0};
+        if (WSADuplicateSocketW(shared_peer, child->process.dwProcessId, &info))
+            fail("socket-share-duplicate", (DWORD)WSAGetLastError());
+        DWORD written = 0;
+        if (!WriteFile(socket_info_writer, &info, (DWORD)sizeof(info), &written, NULL))
+            fail("socket-share-info-write", GetLastError());
+        if (written != sizeof(info)) fail("socket-share-info-size", ERROR_INVALID_DATA);
+        CloseHandle(socket_info_writer); socket_info_writer = NULL;
+        if (receive(child, 5)) fail("socket-share-ready", ERROR_INVALID_DATA);
+        // The originating descriptor stays open until the target reconstructs it.
+        if (closesocket(shared_peer)) fail("socket-share-origin-close", (DWORD)WSAGetLastError());
+        shared_peer = INVALID_SOCKET;
+        exchange(shared_source, request, sizeof(request) - 1, response, sizeof(response) - 1);
+        if (closesocket(shared_source)) fail("socket-share-source-close", (DWORD)WSAGetLastError());
+        shared_source = INVALID_SOCKET;
+        finished(child);
+    } else if (socket_policy >= 0) {
         Child *child = spawn(0, L"socket", socket_policy != 0, 0, 0);
         socket_observation = receive(child, 4);
         finished(child);
@@ -732,6 +830,22 @@ int wmain(int argc, wchar_t **argv) {
     if (FAILED(result)) fail("owned-profile-delete", (DWORD)result);
     profile_created = FALSE;
     cleanup(); WSACleanup();
+    if (socket_share) {
+        printf("{\"status\":\"pass\",\"gate\":\"lpac-socket-share-control\","
+            "\"outside_token_checks\":1,\"outside_restricted_token_checks\":1,"
+            "\"restricting_sid_count\":3,\"restricting_sid_policy\":\"world-users-private-nt\","
+            "\"private_sid_group_absence_checked\":true,\"private_sid_file_grants\":%lu,"
+            "\"private_sid_default_dacl_checked\":true,\"privilege_allowlist_checked\":true,"
+            "\"capability_count\":1,\"capability\":\"registryRead\",\"inherited_handle_count\":2,"
+            "\"environment_allowlist_count\":%zu,\"environment_canary_not_inherited\":true,"
+            "\"lpac_opt_out_file_denied\":true,\"private_file_positive\":true,"
+            "\"host_registry_baseline\":true,\"host_environment_read_error\":5,\"host_environment_write_open_error\":5,"
+            "\"direct_socket_error\":10013,\"pid_bound_socket_share\":true,\"parent_child_http_positive\":true,"
+            "\"profile_deleted\":true,\"network_qualification\":\"not_run\","
+            "\"full_isolation\":\"not_run\",\"product\":\"not_run\"}\n",
+            private_sid_file_grants, ARRAYSIZE(environment_names));
+        return 0;
+    }
     if (socket_policy >= 0) {
         printf("{\"status\":\"observed\",\"gate\":\"lpac-socket-availability-control\","
             "\"mode\":\"%ls\",\"socket_error\":%lu,\"network\":\"not_run\","
