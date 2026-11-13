@@ -97,7 +97,9 @@ static void inspect_restrictions(HANDLE token, const char *role) {
     TOKEN_GROUPS *sids = token_info(token, TokenRestrictedSids);
     TOKEN_PRIVILEGES *privileges = token_info(token, TokenPrivileges);
     TOKEN_USER *user = token_info(token, TokenUser);
+    TOKEN_DEFAULT_DACL *defaults = token_info(token, TokenDefaultDacl);
     BOOL seen[3] = {0};
+    BOOL private_default = FALSE;
     LUID traverse;
     if (sids->GroupCount != 3 || !EqualSid(user->User.Sid, owner->User.Sid))
         fail_restriction(role, "identity-or-count", ERROR_INVALID_DATA);
@@ -117,12 +119,27 @@ static void inspect_restrictions(HANDLE token, const char *role) {
                 (item.Luid.LowPart != traverse.LowPart || item.Luid.HighPart != traverse.HighPart))
             fail_restriction(role, "enabled-privilege", ERROR_INVALID_DATA);
     }
-    free(sids); free(privileges); free(user);
+    if (!defaults->DefaultDacl || !IsValidAcl(defaults->DefaultDacl))
+        fail_restriction(role, "default-dacl", ERROR_INVALID_ACL);
+    for (DWORD i = 0; i < defaults->DefaultDacl->AceCount; ++i) {
+        void *item = NULL;
+        if (!GetAce(defaults->DefaultDacl, i, &item))
+            fail_restriction(role, "default-dacl-query", GetLastError());
+        ACCESS_ALLOWED_ACE *ace = item;
+        if (ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE && EqualSid(&ace->SidStart, private_sid)) {
+            if (private_default || ace->Mask != GENERIC_ALL || ace->Header.AceFlags)
+                fail_restriction(role, "default-dacl-policy", ERROR_INVALID_ACL);
+            private_default = TRUE;
+        }
+    }
+    if (!private_default) fail_restriction(role, "default-dacl-private", ERROR_INVALID_ACL);
+    free(sids); free(privileges); free(user); free(defaults);
 }
 
 static void prepare_restricted_token(void) {
     HANDLE token = NULL;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY, &token))
+    if (!OpenProcessToken(GetCurrentProcess(),
+            TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT, &token))
         fail("restricted-source-token", GetLastError());
     TOKEN_GROUPS *existing = token_info(token, TokenRestrictedSids);
     if (existing->GroupCount) fail("restricted-source-intersection", ERROR_INVALID_DATA);
@@ -168,6 +185,21 @@ static void prepare_restricted_token(void) {
         fail("restricted-token-create", creation_error);
     }
     CloseHandle(token);
+    TOKEN_DEFAULT_DACL *defaults = token_info(restricted_base, TokenDefaultDacl);
+    if (!defaults->DefaultDacl || !IsValidAcl(defaults->DefaultDacl)) fail("base-default-dacl", ERROR_INVALID_ACL);
+    EXPLICIT_ACCESSW entry = {0};
+    PACL acl = NULL;
+    entry.grfAccessPermissions = GENERIC_ALL;
+    entry.grfAccessMode = GRANT_ACCESS;
+    entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    entry.Trustee.ptstrName = (LPWSTR)private_sid;
+    DWORD error = SetEntriesInAclW(1, &entry, defaults->DefaultDacl, &acl);
+    if (error) fail("base-default-dacl-build", error);
+    TOKEN_DEFAULT_DACL updated = {acl};
+    BOOL applied = SetTokenInformation(restricted_base, TokenDefaultDacl, &updated, sizeof(updated));
+    error = applied ? ERROR_SUCCESS : GetLastError();
+    LocalFree(acl); free(defaults);
+    if (error) fail("base-default-dacl-set", error);
     inspect_restrictions(restricted_base, "base");
 }
 
@@ -637,6 +669,7 @@ int wmain(int argc, wchar_t **argv) {
             "\"outside_token_checks\":3,\"outside_restricted_token_checks\":2,"
             "\"restricting_sid_count\":3,\"restricting_sid_policy\":\"world-users-private-nt\","
             "\"private_sid_group_absence_checked\":true,\"private_sid_file_grants\":%lu,"
+            "\"private_sid_default_dacl_checked\":true,"
             "\"privilege_allowlist_checked\":true,\"capability_count\":1,\"capability\":\"registryRead\","
             "\"ordinary_file_positive\":true,\"environment_allowlist_count\":%zu,"
             "\"environment_canary_not_inherited\":true,\"lpac_opt_out_file_denied\":true,"
