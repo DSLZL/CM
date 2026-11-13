@@ -21,7 +21,8 @@ typedef struct { PROCESS_INFORMATION process; HANDLE reader; } Child;
 static HANDLE job, report_pipe, restricted_base;
 static Child children[3];
 static wchar_t profile[64], executable[MAX_PATH], root[MAX_PATH];
-static PSID package_sid;
+static PSID package_sid, private_sid;
+static DWORD private_sid_file_grants;
 static PSID registry_sid;
 static TOKEN_USER *owner;
 static BOOL profile_created;
@@ -52,6 +53,7 @@ static void cleanup(void) {
         if (FAILED(result)) fprintf(stderr, "Owned profile cleanup failed; error=%lu\n", (DWORD)result);
     }
     if (package_sid) FreeSid(package_sid);
+    if (private_sid) FreeSid(private_sid);
     LocalFree(registry_sid); registry_sid = NULL;
     free(owner);
 }
@@ -102,7 +104,7 @@ static void inspect_restrictions(HANDLE token, const char *role) {
     for (DWORD i = 0; i < sids->GroupCount; ++i) {
         PSID sid = sids->Groups[i].Sid;
         int index = IsWellKnownSid(sid, WinWorldSid) ? 0 :
-            IsWellKnownSid(sid, WinBuiltinUsersSid) ? 1 : EqualSid(sid, package_sid) ? 2 : -1;
+            IsWellKnownSid(sid, WinBuiltinUsersSid) ? 1 : EqualSid(sid, private_sid) ? 2 : -1;
         if (index < 0 || seen[index] || (sids->Groups[i].Attributes & SE_GROUP_USE_FOR_DENY_ONLY))
             fail_restriction(role, "sid-policy", ERROR_INVALID_DATA);
         seen[index] = TRUE;
@@ -125,12 +127,26 @@ static void prepare_restricted_token(void) {
     TOKEN_GROUPS *existing = token_info(token, TokenRestrictedSids);
     if (existing->GroupCount) fail("restricted-source-intersection", ERROR_INVALID_DATA);
     free(existing);
+    SID_IDENTIFIER_AUTHORITY authority = SECURITY_NT_AUTHORITY;
+    DWORD random[4];
+    if (BCryptGenRandom(NULL, (PUCHAR)random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG))
+        fail("private-sid-random", ERROR_GEN_FAILURE);
+    // Keep the file restriction identity separate from the AppContainer package namespace.
+    if (!AllocateAndInitializeSid(&authority, 5, SECURITY_NT_NON_UNIQUE,
+            random[0], random[1], random[2], random[3], 0, 0, 0, &private_sid))
+        fail("private-sid-create", GetLastError());
+    if (!IsValidSid(private_sid) || EqualSid(private_sid, owner->User.Sid))
+        fail("private-sid-identity", ERROR_INVALID_SID);
+    TOKEN_GROUPS *groups = token_info(token, TokenGroups);
+    for (DWORD i = 0; i < groups->GroupCount; ++i)
+        if (EqualSid(private_sid, groups->Groups[i].Sid)) fail("private-sid-source-group", ERROR_INVALID_DATA);
+    free(groups);
     BYTE world[SECURITY_MAX_SID_SIZE], users[SECURITY_MAX_SID_SIZE];
     DWORD world_size = sizeof(world), users_size = sizeof(users);
     if (!CreateWellKnownSid(WinWorldSid, NULL, world, &world_size) ||
             !CreateWellKnownSid(WinBuiltinUsersSid, NULL, users, &users_size))
         fail("restricted-well-known-sids", GetLastError());
-    SID_AND_ATTRIBUTES sids[3] = {{world, 0}, {users, 0}, {package_sid, 0}};
+    SID_AND_ATTRIBUTES sids[3] = {{world, 0}, {users, 0}, {private_sid, 0}};
     for (DWORD i = 0; i < ARRAYSIZE(sids); ++i)
         if (!IsValidSid(sids[i].Sid)) fail("restricted-input-sid", ERROR_INVALID_SID);
     if (!CreateRestrictedToken(token, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL, 3, sids, &restricted_base)) {
@@ -145,7 +161,7 @@ static void prepare_restricted_token(void) {
             if (created && !diagnostic) fail("restricted-diagnostic-handle", ERROR_INVALID_HANDLE);
             if (diagnostic && !CloseHandle(diagnostic)) fail("restricted-diagnostic-close", GetLastError());
             fprintf(stderr, "Restricted-token diagnostic: policy=%s; created=%s; error=%lu; handle=%s\n",
-                i ? "package" : "world-users", created ? "true" : "false", error,
+                i ? "private-nt" : "world-users", created ? "true" : "false", error,
                 diagnostic ? "closed" : "not-created");
         }
         CloseHandle(token);
@@ -217,7 +233,8 @@ static void check_child_environment(void) {
 }
 
 static void private_acl(wchar_t *path, PSID allowed, DWORD access) {
-    EXPLICIT_ACCESSW entries[2] = {0};
+    EXPLICIT_ACCESSW entries[3] = {0};
+    BOOL private_grant = restricted_mode && EqualSid(allowed, package_sid);
     PACL acl = NULL;
     for (size_t i = 0; i < ARRAYSIZE(entries); ++i) {
         entries[i].grfAccessMode = GRANT_ACCESS;
@@ -227,12 +244,17 @@ static void private_acl(wchar_t *path, PSID allowed, DWORD access) {
     entries[0].Trustee.ptstrName = (LPWSTR)owner->User.Sid;
     entries[1].grfAccessPermissions = access;
     entries[1].Trustee.ptstrName = (LPWSTR)allowed;
-    DWORD error = SetEntriesInAclW(2, entries, NULL, &acl);
+    if (private_grant) {
+        entries[2].grfAccessPermissions = access;
+        entries[2].Trustee.ptstrName = (LPWSTR)private_sid;
+    }
+    DWORD error = SetEntriesInAclW(private_grant ? 3 : 2, entries, NULL, &acl);
     if (error) fail("owned-acl-build", error);
     error = SetNamedSecurityInfoW(path, SE_FILE_OBJECT,
         DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, NULL, NULL, acl, NULL);
     LocalFree(acl);
     if (error) fail("owned-acl-set", error);
+    if (private_grant) ++private_sid_file_grants;
 }
 
 static void path_for(wchar_t *out, const wchar_t *name) {
@@ -574,6 +596,7 @@ int wmain(int argc, wchar_t **argv) {
     create_marker(L"private-input.txt", package_sid);
     create_marker(L"all-packages.txt", all_packages);
     if (read_marker(L"private-input.txt") || read_marker(L"all-packages.txt")) fail("outside-file-baseline", ERROR_INVALID_DATA);
+    if (restricted_mode && private_sid_file_grants != 3) fail("private-sid-file-grants", ERROR_INVALID_DATA);
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
     job = CreateJobObjectW(NULL, NULL);
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -610,7 +633,8 @@ int wmain(int argc, wchar_t **argv) {
     if (restricted_mode) {
         printf("{\"status\":\"pass\",\"gate\":\"lpac-restricted-registry-control\","
             "\"outside_token_checks\":3,\"outside_restricted_token_checks\":2,"
-            "\"restricting_sid_count\":3,\"restricting_sid_policy\":\"world-users-package\","
+            "\"restricting_sid_count\":3,\"restricting_sid_policy\":\"world-users-private-nt\","
+            "\"private_sid_group_absence_checked\":true,\"private_sid_file_grants\":%lu,"
             "\"privilege_allowlist_checked\":true,\"capability_count\":1,\"capability\":\"registryRead\","
             "\"ordinary_file_positive\":true,\"environment_allowlist_count\":%zu,"
             "\"environment_canary_not_inherited\":true,\"lpac_opt_out_file_denied\":true,"
@@ -618,7 +642,7 @@ int wmain(int argc, wchar_t **argv) {
             "\"host_registry_baseline\":true,\"host_environment_read_error\":5,"
             "\"host_environment_write_open_error\":5,\"profile_deleted\":true,"
             "\"network\":\"not_run\",\"full_isolation\":\"not_run\",\"product\":\"not_run\"}\n",
-            ARRAYSIZE(environment_names));
+            private_sid_file_grants, ARRAYSIZE(environment_names));
         return 0;
     }
     printf("{\"status\":\"pass\",\"gate\":\"%s\","

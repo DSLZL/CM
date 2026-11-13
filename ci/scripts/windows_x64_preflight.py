@@ -115,7 +115,8 @@ def lpac_registry_record(text):
 def lpac_restricted_registry_record(text):
     return exact_record(text, {"status": "pass", "gate": "lpac-restricted-registry-control",
         "outside_token_checks": 3, "outside_restricted_token_checks": 2,
-        "restricting_sid_count": 3, "restricting_sid_policy": "world-users-package",
+        "restricting_sid_count": 3, "restricting_sid_policy": "world-users-private-nt",
+        "private_sid_group_absence_checked": True, "private_sid_file_grants": 3,
         "privilege_allowlist_checked": True, "capability_count": 1, "capability": "registryRead",
         "ordinary_file_positive": True, "environment_allowlist_count": 8,
         "environment_canary_not_inherited": True, "lpac_opt_out_file_denied": True,
@@ -142,7 +143,7 @@ def main():
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
     report = {"schema_version": 1, "status": "running",
-        "scope": "V01e-restricted-registry-fixture-only" if restricted else "V01d-system-dependency-fixture-only" if registry else
+        "scope": "V01f-private-sid-registry-fixture-only" if restricted else "V01d-system-dependency-fixture-only" if registry else
             "V01c-lpac-network-fixture-only" if lpac else "V01a-loader-terminal-fixtures-only",
         "platform": KEY, "target": TARGET, "source_sha": os.environ["CM_SOURCE_SHA"],
         "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"], "run_id": int(os.environ["GITHUB_RUN_ID"]),
@@ -475,7 +476,8 @@ def self_check():
         raise AssertionError("Named capability accepted as the zero-capability mode")
     restricted = {"status": "pass", "gate": "lpac-restricted-registry-control",
         "outside_token_checks": 3, "outside_restricted_token_checks": 2,
-        "restricting_sid_count": 3, "restricting_sid_policy": "world-users-package",
+        "restricting_sid_count": 3, "restricting_sid_policy": "world-users-private-nt",
+        "private_sid_group_absence_checked": True, "private_sid_file_grants": 3,
         "privilege_allowlist_checked": True, "capability_count": 1, "capability": "registryRead",
         "ordinary_file_positive": True, "environment_allowlist_count": 8,
         "environment_canary_not_inherited": True, "lpac_opt_out_file_denied": True,
@@ -487,6 +489,9 @@ def self_check():
         ("outside_token_checks", True), ("outside_restricted_token_checks", 0), ("outside_restricted_token_checks", True),
         ("restricting_sid_count", 0), ("restricting_sid_count", 2), ("restricting_sid_count", 4), ("restricting_sid_count", True),
         ("restricting_sid_policy", "world-users-owner"), ("restricting_sid_policy", "registryRead"),
+        ("restricting_sid_policy", "world-users-package"),
+        ("private_sid_file_grants", 0), ("private_sid_file_grants", 2),
+        ("private_sid_file_grants", 4), ("private_sid_file_grants", True),
         ("capability_count", 0), ("capability_count", 2), ("capability_count", True), ("capability", "internetClient"),
         ("environment_allowlist_count", 7), ("environment_allowlist_count", True),
         ("child_winsock_startup_checks", 0), ("child_winsock_startup_checks", True),
