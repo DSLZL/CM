@@ -67,10 +67,35 @@ static void message(DWORD kind, DWORD value, const char *gate) {
         ExitProcess(3);
 }
 
+static void socket_access_diagnostic(void) {
+    HANDLE device = CreateFileW(L"\\\\?\\GLOBALROOT\\Device\\Afd", READ_CONTROL,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (device == INVALID_HANDLE_VALUE) {
+        fprintf(stderr, "Read-only AFD device open failed; error=%lu\n", GetLastError());
+        return;
+    }
+    PSECURITY_DESCRIPTOR descriptor = NULL;
+    DWORD error = GetSecurityInfo(device, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+        NULL, NULL, NULL, NULL, &descriptor);
+    CloseHandle(device);
+    wchar_t *text = NULL;
+    DWORD length = 0;
+    if (!error && (!descriptor || !IsValidSecurityDescriptor(descriptor))) error = ERROR_INVALID_SECURITY_DESCR;
+    if (!error && !ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, SDDL_REVISION_1,
+            DACL_SECURITY_INFORMATION, &text, &length)) error = GetLastError();
+    if (!error && (!text || !length || length > 8192 || wcsnlen_s(text, length) >= length))
+        error = ERROR_INVALID_DATA;
+    if (error) fprintf(stderr, "Read-only AFD device DACL query failed; error=%lu\n", error);
+    else fprintf(stderr, "Read-only AFD device DACL; sddl=%ls\n", text);
+    LocalFree(text); LocalFree(descriptor);
+}
+
 static void fail(const char *gate, DWORD error) {
     if (report_pipe) message(2, error, gate);
     else {
         fprintf(stderr, "LPAC mechanism failed at %s; error=%lu\n", gate, error);
+        if (restricted_network && !strcmp(gate, "provider-socket") && error == WSAEACCES)
+            socket_access_diagnostic();
         cleanup();
     }
     ExitProcess(2);
