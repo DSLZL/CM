@@ -131,8 +131,26 @@ static void prepare_restricted_token(void) {
             !CreateWellKnownSid(WinBuiltinUsersSid, NULL, users, &users_size))
         fail("restricted-well-known-sids", GetLastError());
     SID_AND_ATTRIBUTES sids[3] = {{world, 0}, {users, 0}, {package_sid, 0}};
-    if (!CreateRestrictedToken(token, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL, 3, sids, &restricted_base))
-        fail("restricted-token-create", GetLastError());
+    for (DWORD i = 0; i < ARRAYSIZE(sids); ++i)
+        if (!IsValidSid(sids[i].Sid)) fail("restricted-input-sid", ERROR_INVALID_SID);
+    if (!CreateRestrictedToken(token, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL, 3, sids, &restricted_base)) {
+        DWORD creation_error = GetLastError();
+        fprintf(stderr, "Restricted-token inputs: valid_sids=3; attributes=0; flags=%lu\n", (DWORD)DISABLE_MAX_PRIVILEGE);
+        // Failure-only controls isolate SID compatibility without running a weaker token.
+        for (DWORD i = 0; i < 2; ++i) {
+            HANDLE diagnostic = NULL;
+            BOOL created = CreateRestrictedToken(token, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL,
+                i ? 1 : 2, sids + (i ? 2 : 0), &diagnostic);
+            DWORD error = created ? ERROR_SUCCESS : GetLastError();
+            if (created && !diagnostic) fail("restricted-diagnostic-handle", ERROR_INVALID_HANDLE);
+            if (diagnostic && !CloseHandle(diagnostic)) fail("restricted-diagnostic-close", GetLastError());
+            fprintf(stderr, "Restricted-token diagnostic: policy=%s; created=%s; error=%lu; handle=%s\n",
+                i ? "package" : "world-users", created ? "true" : "false", error,
+                diagnostic ? "closed" : "not-created");
+        }
+        CloseHandle(token);
+        fail("restricted-token-create", creation_error);
+    }
     CloseHandle(token);
     inspect_restrictions(restricted_base, "base");
 }
