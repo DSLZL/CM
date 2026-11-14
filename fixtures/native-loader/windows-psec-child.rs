@@ -84,9 +84,10 @@ fn input_controls(work: &Path, inputs: &Value, denied: bool, job: Option<HANDLE>
     let expected = if denied { 5 } else { 0 };
     let mut trace = fs::File::create(work.join(format!("{role}.inputs.log"))).unwrap();
     let mut read_errors = Vec::new();
+    let mut hardlink_errors = Vec::new();
     for (index, target) in reads.iter().enumerate() {
         let aliases = [Path::new(target.as_str().unwrap()).to_owned(),
-            work.join(format!("read{index}-hard")), work.join(format!("read{index}-link"))];
+            work.join(format!("read{index}-link"))];
         for (method, path) in aliases.iter().enumerate() {
             let error = match fs::File::open(path).and_then(|mut file| file.read_exact(&mut [0u8; 1])) {
                 Ok(()) => 0,
@@ -96,6 +97,18 @@ fn input_controls(work: &Path, inputs: &Value, denied: bool, job: Option<HANDLE>
             assert_eq!(error, expected, "source/cache/SDK read index={index} method={method}");
             read_errors.push(error);
         }
+        let link = work.join(format!("{role}-new-hard{index}"));
+        let error = match fs::hard_link(target.as_str().unwrap(), &link) {
+            Ok(()) => {
+                if !denied { fs::File::open(&link).unwrap().read_exact(&mut [0u8; 1]).unwrap(); }
+                fs::remove_file(&link).unwrap();
+                0
+            }
+            Err(error) => u32::try_from(error.raw_os_error().unwrap_or(-1)).unwrap_or(u32::MAX),
+        };
+        writeln!(trace, "hardlink creation index={index} error={error}").unwrap();
+        assert_eq!(error, expected, "source/cache/SDK new hardlink index={index}");
+        hardlink_errors.push(error);
     }
     let previous_path = std::env::var_os("PATH");
     let mut compiler_errors = Vec::new();
@@ -115,7 +128,8 @@ fn input_controls(work: &Path, inputs: &Value, denied: bool, job: Option<HANDLE>
     unsafe {
         if let Some(previous) = previous_path { std::env::set_var("PATH", previous); } else { std::env::remove_var("PATH"); }
     }
-    json!({"read_count": 9, "read_errors": read_errors, "compiler_creation_count": 9,
+    json!({"read_count": 6, "read_errors": read_errors,
+        "hardlink_creation_count": 3, "hardlink_creation_errors": hardlink_errors, "compiler_creation_count": 9,
         "compiler_creation_errors": compiler_errors, "compiler_executed": false})
 }
 

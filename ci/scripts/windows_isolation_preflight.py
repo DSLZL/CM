@@ -153,9 +153,11 @@ def input_record(text):
         raise RuntimeError("Missing PSEC input gate identities/baselines")
 
     def check(record, expected):
-        exact_record(json.dumps(record), {"read_count": 9, "read_errors": [expected] * 9,
+        exact_record(json.dumps(record), {"read_count": 6, "read_errors": [expected] * 6,
+            "hardlink_creation_count": 3, "hardlink_creation_errors": [expected] * 3,
             "compiler_creation_count": 9, "compiler_creation_errors": [expected] * 9, "compiler_executed": False})
-        if any(type(error) is not int for name in ("read_errors", "compiler_creation_errors") for error in record[name]):
+        if any(type(error) is not int for name in ("read_errors", "hardlink_creation_errors", "compiler_creation_errors")
+                for error in record[name]):
             raise RuntimeError("Invalid native input error type")
 
     stripped = {}
@@ -254,7 +256,6 @@ def network_controls(run, probe, root, logs, *, inputs=None):
                     work = root / "work"
                     work.mkdir()
                     for index, target in enumerate(inputs["reads"]):
-                        os.link(target, work / f"read{index}-hard")
                         (work / f"read{index}-link").symlink_to(target)
                     for index, target in enumerate(inputs["tools"]):
                         (work / f"tool{index}-link.exe").symlink_to(target)
@@ -476,6 +477,28 @@ def main(*, key=KEY):
                 candidate = runtime / "psec-probe.exe"
                 shutil.copyfile(probe, candidate)
                 report["controlled_runtime_input"] = controlled_probe(runtime, report["native_probe"]["sha256"])
+                admission = {"status": "running", "hardlink_attacks": [], "before_native_execution": True}
+                report["runtime_admission"] = admission
+                with ci_progress.stage("runtime-input-admission"):
+                    for index, source in enumerate(inputs["reads"]):
+                        alias = runtime / f"source-cache-hardlink-{index}"
+                        os.link(source, alias)
+                        try:
+                            if not alias.samefile(source) or alias.stat().st_nlink < 2:
+                                raise RuntimeError("Admission attack must be an actual outside hardlink")
+                            try:
+                                controlled_probe(runtime, report["native_probe"]["sha256"])
+                            except RuntimeError as error:
+                                if str(error) != "Controlled runtime must contain exactly its precompiled probe":
+                                    raise
+                                admission["hardlink_attacks"].append({"source": source,
+                                    "same_file": True, "rejected": True, "reason": str(error)})
+                            else:
+                                raise RuntimeError("Source/cache hardlink runtime was accepted")
+                        finally:
+                            alias.unlink()
+                        controlled_probe(runtime, report["native_probe"]["sha256"])
+                    admission["status"] = "passed"
                 probe = candidate
             if network_probe:
                 result = network_controls(run, probe, temp / "network-controls", logs, inputs=inputs)
@@ -672,19 +695,23 @@ def self_check():
             pass
         else:
             raise AssertionError("Missing/extra/forbidden/unbound observer traffic accepted")
-    denied_inputs = {"read_count": 9, "read_errors": [5] * 9, "compiler_creation_count": 9,
+    denied_inputs = {"read_count": 6, "read_errors": [5] * 6,
+        "hardlink_creation_count": 3, "hardlink_creation_errors": [5] * 3, "compiler_creation_count": 9,
         "compiler_creation_errors": [5] * 9, "compiler_executed": False}
-    ordinary_inputs = {**denied_inputs, "read_errors": [0] * 9, "compiler_creation_errors": [0] * 9}
+    ordinary_inputs = {**denied_inputs, "read_errors": [0] * 6, "hardlink_creation_errors": [0] * 3,
+        "compiler_creation_errors": [0] * 9}
     input_value = {**network, "gate": "native-psec-precompiled-input-control",
         "network_controls": {role: {**controls, "inputs": denied_inputs} for role in ("child", "descendant")},
         "input_baselines": {"before": ordinary_inputs, "after": ordinary_inputs}}
     assert input_record(json.dumps(input_value)) == input_value
     for change in ({"gate": "native-psec-provider-network-control"}, {"input_baselines": {}},
             {"input_baselines": {"before": ordinary_inputs}}, {"child_pid": 3},
-            {"input_baselines": {"before": {**ordinary_inputs, "read_errors": [False] * 9}, "after": ordinary_inputs}},
+            {"input_baselines": {"before": {**ordinary_inputs, "read_errors": [False] * 6}, "after": ordinary_inputs}},
             *({"network_controls": {"child": {**controls, "inputs": {**denied_inputs, **bad}},
                                     "descendant": {**controls, "inputs": denied_inputs}}} for bad in
-                ({"read_count": 8}, {"read_errors": [5] * 8}, {"read_errors": [0] * 9},
+                ({"read_count": 5}, {"read_errors": [5] * 5}, {"read_errors": [0] * 6},
+                 {"hardlink_creation_count": 2}, {"hardlink_creation_errors": [5] * 2},
+                 {"hardlink_creation_errors": [0] * 3}, {"hardlink_creation_errors": [True] * 3},
                  {"compiler_creation_count": True}, {"compiler_creation_errors": [2] * 9},
                  {"compiler_executed": True}, {"extra": True})),
             {"network_controls": {"child": controls, "descendant": {**controls, "inputs": denied_inputs}}},
