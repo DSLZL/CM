@@ -96,7 +96,7 @@ fn broker(root: &Path) {
     spec.fs_read_only = Some(vec![system.clone(), text(exe.parent().unwrap())]);
     spec.fs_deny = Some(vec![text(&protected)]);
     let mut egress = EndpointPolicyT::default();
-    egress.default_action = FilterAction::Block;
+    egress.default_action = FilterAction::deny;
     let mut network = NetworkPolicyT::default();
     network.egress = Some(Box::new(egress));
     spec.network_policy = Some(Box::new(network));
