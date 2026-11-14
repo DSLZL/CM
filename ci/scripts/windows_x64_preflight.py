@@ -581,7 +581,7 @@ def main():
                                         "USERENV", "ADVAPI32", "WS2_32"))):
                             run(name + "-permissions", [system / "icacls.exe", path])
                     args = [candidate, mode, source_canary, cache_canary, cl]
-                if catalog_network_stage and not descendant_stage:
+                if catalog_network_stage:
                     with registry_failure_trace(temp, logs, label, run, report):
                         _, text = run(label, args, 120)
                 else:
