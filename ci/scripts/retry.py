@@ -323,6 +323,7 @@ def product_inputs(root, revision):
                       "fixtures/native-loader/windows-preflight.c",
                       "fixtures/native-loader/windows-lpac-network.c",
                       "ci/scripts/windows_isolation_preflight.py", "fixtures/native-loader/windows-isolation-probe.rs",
+                      "fixtures/native-loader/windows-psec-child.rs",
                       "ci/scripts/runtime_cases.py", "ci/scripts/acceptance_cache.py",
                       ".github/cm-build-routing.json", ".github/cm-platforms.json", "ci/scripts/cm_platforms.py",
                       *SUPPORT_RUNTIME_FILES, *INDEX_RUNTIME_FILES,

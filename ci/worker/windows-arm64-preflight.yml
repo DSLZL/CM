@@ -1,4 +1,4 @@
-name: CM Windows ARM64 API surface preflight
+name: CM Windows ARM64 mechanism preflight
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       stage:
-        description: Read-only native API surface observation
+        description: Reviewed native mechanism stage
         required: true
         default: isolation-surface
         type: choice
@@ -20,6 +20,7 @@ on:
           - isolation-surface
           - isolation-availability
           - loader-terminal
+          - isolation-process
 
 permissions:
   contents: read
@@ -68,7 +69,7 @@ jobs:
         env:
           CM_POLICY_TOKEN: ${{ github.token }}
         run: |
-          if ($env:CM_PREFLIGHT_STAGE -notin @('isolation-surface', 'isolation-availability', 'loader-terminal')) { throw 'Unknown mechanism stage' }
+          if ($env:CM_PREFLIGHT_STAGE -notin @('isolation-surface', 'isolation-availability', 'loader-terminal', 'isolation-process')) { throw 'Unknown mechanism stage' }
           python -B .github/scripts/worker_policy.py native-preflight-self-check
           if ($LASTEXITCODE -ne 0) { throw 'Native authority self-check failed' }
           python -B .github/scripts/worker_policy.py native-preflight
@@ -126,13 +127,17 @@ jobs:
         if: env.CM_PREFLIGHT_STAGE == 'loader-terminal'
         run: python -B -c "import sys; sys.path.insert(0, 'cm-source/ci/scripts'); import windows_x64_preflight; windows_x64_preflight.main(key='windows-arm64')"
 
+      - name: Probe real PSEC child and descendant file controls
+        if: env.CM_PREFLIGHT_STAGE == 'isolation-process'
+        run: python -B -c "import sys; sys.path.insert(0, 'cm-source/ci/scripts'); import windows_isolation_preflight; windows_isolation_preflight.main(key='windows-arm64')"
+
       - name: Record final native job status
         if: always() && steps.source.outcome == 'success'
         env:
           CM_JOB_STATUS: ${{ job.status }}
         run: python -B cm-source/ci/scripts/record_run.py "$env:CM_CI_LOG_DIR"
 
-      - name: Retain only text surface evidence
+      - name: Retain only text mechanism evidence
         if: always() && steps.policy.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hosted Windows PSEC availability gate; no product or isolation qualification."""
+"""Hosted Windows PSEC mechanism gates; no product or full isolation qualification."""
 import ctypes
 import hashlib
 import json
@@ -66,6 +66,24 @@ def probe_record(text):
                                "deny_paths": True, "full_isolation": "not_run"})
 
 
+def process_record(text):
+    if len(text) > 8192:
+        raise RuntimeError("Oversized PSEC process fixture record")
+    value = json.loads(text)
+    pids = ("broker_pid", "child_pid", "descendant_pid")
+    if not isinstance(value, dict) or any(type(value.get(name)) is not int or
+            not 1 <= value[name] <= 0xFFFFFFFF for name in pids) or len({value[name] for name in pids}) != 3:
+        raise RuntimeError("Invalid PSEC process identities")
+    return exact_record(text, {**{name: value[name] for name in pids},
+        "gate": "native-psec-process-file-control", "policy": "psec-only", "child_exit_code": 37,
+        "descendant_exit_code": 38, "file_positive_count": 2, "child_read_error": 5,
+        "child_write_open_error": 5, "descendant_read_error": 5, "descendant_write_open_error": 5,
+        "protected_bytes_preserved": True, "ordinary_file_baselines": 2, "environment_allowlist_count": 4,
+        "environment_canaries_absent": True, "inherited_handle_count": 0,
+        "suspended_job_assignment_checked": True, "legacy_fallback": False,
+        "network": "not_run", "full_isolation": "not_run"})
+
+
 def diagnose_exports():
     # Export presence after a failed gate cannot establish callable availability.
     names = (*EXPORTS, "Experimental_CreateProcessInSandbox", "Experimental_QuerySandboxSupport")
@@ -87,15 +105,20 @@ def main(*, key=KEY):
     entry = record_run.require_hosted_worker(enabled=False)
     authority(json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text()), entry, os.environ, key=key)
     target = entry["target"]
-    if os.environ.get("CM_PREFLIGHT_STAGE") != "isolation-availability" or \
+    stage = os.environ.get("CM_PREFLIGHT_STAGE")
+    if stage not in ("isolation-availability", "isolation-process") or \
             Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
         raise RuntimeError("Isolation probe requires its fixed stage and recorded source checkout")
+    process_probe = stage == "isolation-process"
+    if process_probe and key != "windows-arm64":
+        raise RuntimeError("Real PSEC process fixture requires native Windows ARM64")
     logs = Path(os.environ["CM_CI_LOG_DIR"]).resolve()
     if not logs.is_relative_to(Path(os.environ["RUNNER_TEMP"]).resolve()):
         raise RuntimeError("Isolation text evidence must stay in runner temporary storage")
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
-    report = {"schema_version": 1, "status": "running", "scope": "V01b-native-isolation-availability-only",
+    report = {"schema_version": 1, "status": "running", "scope":
+        "V01d-native-psec-process-file-controls-only" if process_probe else "V01b-native-isolation-availability-only",
         "platform": key, "target": target, "source_sha": os.environ["CM_SOURCE_SHA"],
         "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"], "run_id": int(os.environ["GITHUB_RUN_ID"]),
         "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]), "request_id": os.environ["CM_REQUEST_ID"],
@@ -148,8 +171,10 @@ def main(*, key=KEY):
                 raise RuntimeError("Fixed SDK commit or original lockfile mismatch")
             cfg = json.loads((root / ".github/cm-ci.json").read_text())
             toolchain = cfg["rust_toolchain"] + "-" + target
-            fixture = root / "fixtures/native-loader/windows-isolation-probe.rs"
-            example = sdk / "src/backends/appcontainer/common/examples/cm_native_availability.rs"
+            name = "cm_native_psec_child" if process_probe else "cm_native_availability"
+            fixture = root / "fixtures/native-loader" / (
+                "windows-psec-child.rs" if process_probe else "windows-isolation-probe.rs")
+            example = sdk / "src/backends/appcontainer/common/examples" / (name + ".rs")
             if example.exists():
                 raise RuntimeError("Private SDK example name already exists upstream")
             example.parent.mkdir(parents=True, exist_ok=True)
@@ -157,41 +182,52 @@ def main(*, key=KEY):
             report["sdk"] = {"repository": "microsoft/mxc", "commit": head, "lock_sha256": SDK_LOCK_SHA,
                 "cargo_config_sha256": hashlib.sha256((sdk / ".cargo/config.toml").read_bytes()).hexdigest(),
                 "example_sha256": hashlib.sha256(fixture.read_bytes()).hexdigest(), "declared_license": "MIT",
-                "toolchain": toolchain, "package": "appcontainer_common", "example": "cm_native_availability"}
+                "toolchain": toolchain, "package": "appcontainer_common", "example": name}
             run("sdk-toolchain", ["rustup", "toolchain", "install", toolchain, "--profile", "minimal", "--component", "rustfmt"], 180)
             rust = ["rustup", "run", toolchain]
             _, report["rustc"] = run("sdk-rustc", [*rust, "rustc", "-Vv"])
             if "host: " + target not in report["rustc"].splitlines():
                 raise RuntimeError("SDK probe compiler is not native " + key)
             _, report["cargo"] = run("sdk-cargo", [*rust, "cargo", "-V"])
+            if process_probe:
+                run("sdk-example-format-normalize", [*rust, "rustfmt", "--edition", "2021", example])
             run("sdk-example-format", [*rust, "rustfmt", "--check", "--edition", "2021", example])
+            report["sdk"]["compiled_example_sha256"] = hashlib.sha256(example.read_bytes()).hexdigest()
+            if process_probe:
+                shutil.copyfile(example, logs / "compiled-psec-example.rs.txt")
             report["sdk_compiler_invoked"] = True
             previous = Path.cwd()
             try:
                 os.chdir(sdk / "src")
                 run("sdk-example-build", [*rust, "cargo", "build", "--locked", "--package", "appcontainer_common",
-                    "--example", "cm_native_availability", "--target", target, "--target-dir", temp / "target"], 360)
+                    "--example", name, "--target", target, "--target-dir", temp / "target"], 360)
             finally:
                 os.chdir(previous)
-            if hashlib.sha256(lock.read_bytes()).hexdigest() != SDK_LOCK_SHA:
-                raise RuntimeError("SDK build changed the pinned lockfile")
+            if hashlib.sha256(lock.read_bytes()).hexdigest() != SDK_LOCK_SHA or \
+                    hashlib.sha256(example.read_bytes()).hexdigest() != report["sdk"]["compiled_example_sha256"]:
+                raise RuntimeError("SDK build changed the pinned lockfile or reviewed example")
             run("sdk-original-tree", [*git, "diff", "--exit-code"])
-            probe = temp / "target" / target / "debug/examples/cm_native_availability.exe"
+            probe = temp / "target" / target / "debug/examples" / (name + ".exe")
             report["native_probe"] = pe_fixture(probe.read_bytes(), False,
                 expected_machine={"X64": 0x8664, "ARM64": 0xAA64}[entry["runner_arch"]])
-            code, text = run("native-psec-create-close", [probe], 20, codes=(0, 2))
-            report["native_availability"] = json.loads(text)
-            print("PSEC SDK availability: " + text, flush=True)
-            probe_record(text)
-            if code != 0:
-                raise RuntimeError("Native PSEC create/close/startup-info availability failed")
-            report["status"] = "passed_availability_only"
+            if process_probe:
+                _, text = run("native-psec-process-file-controls", [probe, "--broker", temp / "process-controls"], 25)
+                report["native_process_file_controls"] = process_record(text)
+                report["status"] = "passed_process_file_controls_only"
+            else:
+                code, text = run("native-psec-create-close", [probe], 20, codes=(0, 2))
+                report["native_availability"] = json.loads(text)
+                print("PSEC SDK availability: " + text, flush=True)
+                probe_record(text)
+                if code != 0:
+                    raise RuntimeError("Native PSEC create/close/startup-info availability failed")
+                report["status"] = "passed_availability_only"
     except BaseException:
         report["status"] = "failed"
         raise
     finally:
-        (logs / (key + "-isolation-availability.json")).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    print("Native PSEC availability passed; full isolation and product qualification remain NOT_RUN", flush=True)
+        (logs / (key + "-" + stage + ".json")).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    print("Native PSEC mechanism passed; full isolation and product qualification remain NOT_RUN", flush=True)
 
 
 def self_check():
@@ -280,6 +316,40 @@ def self_check():
             pass
         else:
             raise AssertionError("Unavailable or unqualified PSEC accepted")
+    process = {"gate": "native-psec-process-file-control", "policy": "psec-only", "broker_pid": 1,
+        "child_pid": 2, "descendant_pid": 3, "child_exit_code": 37, "descendant_exit_code": 38,
+        "file_positive_count": 2, "child_read_error": 5, "child_write_open_error": 5,
+        "descendant_read_error": 5, "descendant_write_open_error": 5, "protected_bytes_preserved": True,
+        "ordinary_file_baselines": 2, "environment_allowlist_count": 4, "environment_canaries_absent": True,
+        "inherited_handle_count": 0, "suspended_job_assignment_checked": True, "legacy_fallback": False,
+        "network": "not_run", "full_isolation": "not_run"}
+    assert process_record(json.dumps(process)) == process
+    for change in ({"broker_pid": 0}, {"child_pid": True}, {"descendant_pid": 1},
+            {"descendant_pid": 1 << 32}, {"child_exit_code": True}, {"descendant_exit_code": 0},
+            {"child_read_error": 0}, {"descendant_write_open_error": 0}, {"legacy_fallback": True},
+            {"policy": "legacy"}, {"inherited_handle_count": False}, {"inherited_handle_count": 1},
+            {"environment_canaries_absent": False}, {"protected_bytes_preserved": False},
+            {"network": "pass"}, {"full_isolation": "pass"}, {"extra": True}):
+        try:
+            process_record(json.dumps({**process, **change}))
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Incomplete or unbound PSEC process control accepted")
+    with tempfile.TemporaryDirectory() as directory:
+        (Path(directory) / "cm-worker-preflight.json").write_text("{}")
+        env = {"RUNNER_TEMP": directory, "CM_SOURCE_DIR": str(Path(__file__).resolve().parents[2]),
+            "CM_PREFLIGHT_STAGE": "isolation-process"}
+        with patch.dict(os.environ, env), patch.object(record_run, "require_hosted_worker",
+                return_value={"target": "x86_64-pc-windows-msvc"}), patch(__name__ + ".authority"), \
+                patch.object(record_run, "record") as record:
+            try:
+                main()
+            except RuntimeError as error:
+                assert str(error) == "Real PSEC process fixture requires native Windows ARM64"
+            else:
+                raise AssertionError("ARM64-only PSEC process gate accepted x64")
+            record.assert_not_called()
 
 
 if __name__ == "__main__":
