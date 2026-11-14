@@ -182,7 +182,9 @@ def restricted_appcontainer_files_record(text, *, policy="users"):
                     private_catalog_read_checks=21, private_catalog_write_denials=10,
                     private_catalog_dacl_denials=10, private_catalog_create_denials=10)
                 if descendant:
+                    expected["lpac_opt_out_file_denied"] = expected.pop("all_packages_file_denied")
                     expected.update(gate="restricted-installer-private-descendant-control",
+                        all_application_packages_opt_out=True,
                         restricting_sid_count=5,
                         restricting_sid_policy="world-trusted-installer-private-nt-logon-restricted-code",
                         outside_token_checks=4, outside_restricted_token_checks=3, child_winsock_startup_checks=4,
@@ -1191,6 +1193,8 @@ def self_check():
             "descendant_job_membership_checked": True, "descendant_file_path_checks": 6,
             "descendant_compiler_creation_checks": 3, "descendant_http_positive": True,
             "descendant_normal_exit_checked": True, "descendant_inherited_handle_count": 2})
+    file_records[-1]["lpac_opt_out_file_denied"] = file_records[-1].pop("all_packages_file_denied")
+    file_records[-1]["all_application_packages_opt_out"] = True
     file_parsers = (restricted_appcontainer_files_record,
         lambda text: restricted_appcontainer_files_record(text, policy="restricted-code"),
         lambda text: restricted_appcontainer_files_record(text, policy="trusted-installer"),
@@ -1215,6 +1219,10 @@ def self_check():
         if record["gate"] == "restricted-installer-private-descendant-control":
             changed.append({**record, "restricting_sid_count": 3,
                 "restricting_sid_policy": "world-trusted-installer-private-nt"})
+            old_ordinary = {**record, "all_application_packages_opt_out": False,
+                "all_packages_file_denied": True}
+            del old_ordinary["lpac_opt_out_file_denied"]
+            changed.append(old_ordinary)
         changed += [{**record, key: value} for key, value in (("status", "observed"),
             ("gate", "restricted-appcontainer-network-control"), ("restricting_sid_policy", "world-users-owner"),
             ("capability", "registryRead"), ("network", "not_run" if record["network"] == "pass" else "pass"),

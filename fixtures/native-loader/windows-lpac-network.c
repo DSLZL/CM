@@ -928,11 +928,11 @@ static void inspect(Child *child, BOOL lpac, const wchar_t *role) {
     DWORD level = *GetSidSubAuthority(integrity->Label.Sid,
         (DWORD)(*GetSidSubAuthorityCount(integrity->Label.Sid) - 1));
     if (*container != 1 || !identity->TokenAppContainer || !EqualSid(identity->TokenAppContainer, package_sid) ||
-            capabilities->GroupCount != (DWORD)(lpac && registry_mode ? 1 : 0) ||
+            capabilities->GroupCount != (DWORD)(lpac && registry_mode && !catalog_descendant ? 1 : 0) ||
             !EqualSid(user->User.Sid, owner->User.Sid) || level != SECURITY_MANDATORY_LOW_RID ||
             !IsProcessInJob(child->process.hProcess, job, &member) || !member)
         fail("outside-token-or-job", ERROR_INVALID_DATA);
-    if (lpac && registry_mode && (!EqualSid(capabilities->Groups[0].Sid, registry_sid) ||
+    if (lpac && registry_mode && !catalog_descendant && (!EqualSid(capabilities->Groups[0].Sid, registry_sid) ||
             !(capabilities->Groups[0].Attributes & SE_GROUP_ENABLED) ||
             (capabilities->Groups[0].Attributes & SE_GROUP_USE_FOR_DENY_ONLY)))
         fail("outside-registry-capability", ERROR_INVALID_DATA);
@@ -1016,7 +1016,7 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
     if (!startup.lpAttributeList || !InitializeProcThreadAttributeList(startup.lpAttributeList, attributes, 0, &size))
         fail("child-attributes", GetLastError());
     capabilities.AppContainerSid = package_sid;
-    if (lpac && registry_mode) {
+    if (lpac && registry_mode && !catalog_descendant) {
         capabilities.Capabilities = &registry;
         capabilities.CapabilityCount = 1;
     }
@@ -1301,7 +1301,7 @@ static HANDLE inspect_descendant(Child *creator) {
     if (!thread) fail("descendant-thread-open", GetLastError());
     if (GetProcessIdOfThread(thread) != pid || GetThreadId(thread) != thread_id)
         fail("descendant-thread-owner", ERROR_INVALID_DATA);
-    inspect(&child, FALSE, L"client");
+    inspect(&child, TRUE, L"client");
     if (ResumeThread(thread) != 1) fail("descendant-resume", ERROR_INVALID_DATA);
     if (!CloseHandle(thread)) fail("descendant-thread-close", GetLastError());
     return child.process.hProcess;
@@ -1486,14 +1486,18 @@ int wmain(int argc, wchar_t **argv) {
             WSACleanup();
             return 0;
         }
-        if (registry_mode && (!wcscmp(argv[1], L"provider") || !wcscmp(argv[1], L"client"))) {
+        if (registry_mode && (!wcscmp(argv[1], L"provider") || !wcscmp(argv[1], L"client") ||
+                (catalog_descendant && !wcscmp(argv[1], L"descendant")))) {
             BOOL provider_role = !wcscmp(argv[1], L"provider");
+            BOOL descendant_role = catalog_descendant && !wcscmp(argv[1], L"descendant");
             LSTATUS access = open_host_environment(KEY_QUERY_VALUE);
             if (access != ERROR_ACCESS_DENIED)
-                fail(provider_role ? "provider-host-env-read-handle" : "client-host-env-read-handle", (DWORD)access);
+                fail(provider_role ? "provider-host-env-read-handle" : descendant_role ?
+                    "descendant-host-env-read-handle" : "client-host-env-read-handle", (DWORD)access);
             access = open_host_environment(KEY_SET_VALUE);
             if (access != ERROR_ACCESS_DENIED)
-                fail(provider_role ? "provider-host-env-write-handle" : "client-host-env-write-handle", (DWORD)access);
+                fail(provider_role ? "provider-host-env-write-handle" : descendant_role ?
+                    "descendant-host-env-write-handle" : "client-host-env-write-handle", (DWORD)access);
         }
         if (restricted_mode && (!wcscmp(argv[1], L"provider") || !wcscmp(argv[1], L"client"))) {
             if (read_marker(L"private-input.txt") || read_marker(L"all-packages.txt") != ERROR_ACCESS_DENIED)
@@ -1715,10 +1719,10 @@ int wmain(int argc, wchar_t **argv) {
         if (accepted == INVALID_SOCKET) fail("outside-baseline-accept", (DWORD)WSAGetLastError());
         closesocket(accepted); closesocket(baseline);
         finished(spawn(0, L"control", FALSE, 0, 0));
-        Child *provider = spawn(1, L"provider", !ordinary_restricted, 0, 0);
+        Child *provider = spawn(1, L"provider", catalog_descendant || !ordinary_restricted, 0, 0);
         DWORD port = receive(provider, 1);
         if (!port || port > 65535) fail("provider-port", ERROR_INVALID_DATA);
-        Child *client = spawn(2, L"client", !ordinary_restricted, (unsigned short)port, canary_port);
+        Child *client = spawn(2, L"client", catalog_descendant || !ordinary_restricted, (unsigned short)port, canary_port);
         HANDLE descendant = NULL;
         if (catalog_network) {
             if (receive(client, 9) != file_path_checks || receive(client, 10) != compiler_creation_checks)
@@ -1839,7 +1843,8 @@ int wmain(int argc, wchar_t **argv) {
                 restricted_code_files ? "world-restricted-code-private-nt" : "world-users-private-nt",
             private_sid_file_grants, ordinary_restricted ? 0u : 1u,
             ordinary_restricted ? "" : ",\"capability\":\"registryRead\"",
-            ARRAYSIZE(environment_names), ordinary_restricted ? "all_packages_file_denied" : "lpac_opt_out_file_denied",
+            ARRAYSIZE(environment_names), ordinary_restricted && !catalog_descendant ?
+                "all_packages_file_denied" : "lpac_opt_out_file_denied",
             catalog_descendant ? 4u : 3u,
             restricted_network ? "pass" : "not_run",
             restricted_network ? ordinary_restricted ?
@@ -1848,7 +1853,8 @@ int wmain(int argc, wchar_t **argv) {
                 "\"outside_unexpected_accepts\":0" :
                 ",\"provider_http_positive\":true,\"outside_listener_positive\":true,"
                 "\"outside_connect_error\":10013,\"outside_unexpected_accepts\":0" : "",
-            ordinary_restricted ? ",\"all_application_packages_opt_out\":false" : "",
+            catalog_descendant ? ",\"all_application_packages_opt_out\":true" :
+                ordinary_restricted ? ",\"all_application_packages_opt_out\":false" : "",
             file_controls_stage ? ",\"outside_file_baselines\":6,\"file_path_checks\":6,\"file_read_error\":5,"
                 "\"outside_compiler_creation_baselines\":3,\"compiler_creation_checks\":3,\"compiler_creation_error\":5,"
                 "\"source_cache_aliases_checked\":true,\"compiler_executed\":false" : "",
