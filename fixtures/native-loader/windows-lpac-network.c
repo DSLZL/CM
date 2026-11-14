@@ -62,7 +62,8 @@ static const char *startup_gates[] = {
 };
 static const char *descendant_creation_gates[] = {
     "descendant-create-api", "descendant-image-access", "descendant-directory-access",
-    "descendant-process-access", "descendant-token-access"
+    "descendant-process-access", "descendant-token-access", "descendant-policy-query",
+    "descendant-policy-flags", "descendant-basic-create"
 };
 static const wchar_t *file_inputs[3];
 static const wchar_t *file_aliases[] = {
@@ -1063,7 +1064,7 @@ static void creation_handle_diagnostic(HANDLE handle, const char *gate) {
     if (valid && !CloseHandle(handle)) fail("descendant-diagnostic-close", GetLastError());
 }
 
-static void descendant_creation_diagnostics(void) {
+static void descendant_creation_diagnostics(wchar_t *environment) {
     creation_handle_diagnostic(CreateFileW(executable, GENERIC_READ | GENERIC_EXECUTE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL),
         "descendant-image-access");
@@ -1075,6 +1076,33 @@ static void descendant_creation_diagnostics(void) {
     HANDLE token = NULL;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &token)) token = NULL;
     creation_handle_diagnostic(token, "descendant-token-access");
+    PROCESS_MITIGATION_CHILD_PROCESS_POLICY policy = {0};
+    BOOL queried = GetProcessMitigationPolicy(GetCurrentProcess(), ProcessChildProcessPolicy,
+        &policy, sizeof(policy));
+    message(16, queried ? ERROR_SUCCESS : GetLastError(), "descendant-policy-query");
+    if (queried) message(16, policy.Flags, "descendant-policy-flags");
+    wchar_t command[MAX_PATH + 3];
+    if (_snwprintf_s(command, ARRAYSIZE(command), _TRUNCATE, L"\"%ls\"", executable) < 0)
+        fail("descendant-basic-command", ERROR_INVALID_DATA);
+    STARTUPINFOW startup = {0};
+    PROCESS_INFORMATION process = {0};
+    startup.cb = sizeof(startup);
+    // Failure-only comparison: the same image never runs and inherits no handles.
+    BOOL created = CreateProcessW(executable, command, NULL, NULL, FALSE,
+        CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+        environment, root, &startup, &process);
+    message(16, created ? ERROR_SUCCESS : GetLastError(), "descendant-basic-create");
+    if (created) {
+        DWORD code = 0;
+        if (!TerminateProcess(process.hProcess, 2)) fail("descendant-basic-terminate", GetLastError());
+        DWORD wait = WaitForSingleObject(process.hProcess, 30000);
+        if (wait != WAIT_OBJECT_0)
+            fail("descendant-basic-wait", wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError());
+        if (!GetExitCodeProcess(process.hProcess, &code)) fail("descendant-basic-exit", GetLastError());
+        if (code != 2) fail("descendant-basic-exit-code", ERROR_INVALID_DATA);
+        if (!CloseHandle(process.hThread) || !CloseHandle(process.hProcess))
+            fail("descendant-basic-close", GetLastError());
+    }
 }
 
 static void run_descendant(unsigned short provider, unsigned short canary) {
@@ -1107,7 +1135,7 @@ static void run_descendant(unsigned short provider, unsigned short canary) {
             environment, root, &startup.StartupInfo, &child.process)) {
         DWORD create_error = GetLastError();
         message(16, create_error, "descendant-create-api");
-        descendant_creation_diagnostics();
+        descendant_creation_diagnostics(environment);
         fail("descendant-create", create_error);
     }
     DeleteProcThreadAttributeList(startup.lpAttributeList);
