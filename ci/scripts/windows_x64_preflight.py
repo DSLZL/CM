@@ -341,25 +341,29 @@ def sxs_failure_trace(temp, logs, label, run, report):
 
 
 @contextmanager
-def registry_failure_trace(temp, logs, label, run, report):
+def kernel_failure_trace(temp, logs, label, run, report, *, kind="registry"):
     system = Path(os.environ["SystemRoot"]) / "System32"
-    session = "CM-WX-Q-" + hashlib.sha256(str(temp).encode()).hexdigest()[:20]
-    trace = temp / "registry.etl"
-    state = {"diagnostic_only": True, "provider": "Microsoft-Windows-Kernel-Registry",
+    provider = {"registry": "Microsoft-Windows-Kernel-Registry", "file": "Microsoft-Windows-Kernel-File"}[kind]
+    prefix = kind + "-trace-"
+    session = ("CM-WX-Q-" if kind == "registry" else "CM-WX-R-F-") + hashlib.sha256(str(temp).encode()).hexdigest()[:20]
+    trace = temp / (kind + ".etl")
+    state = {"diagnostic_only": True, "provider": provider,
         "maximum_trace_megabytes": 8, "automatic_stop_seconds": 20,
         "automatic_stop_method": "controller-timer", "child_policy_changed": False}
+    if kind == "file":
+        state["cross_header_pid_completion_correlation"] = "not_joined"
     started = False
     timer = None
 
     def expire():
         try:
-            state["deadline_stop_code"], _ = run("registry-trace-deadline-stop",
+            state["deadline_stop_code"], _ = run(prefix + "deadline-stop",
                 [system / "logman.exe", "stop", session, "-ets"], 15, codes=None)
         except Exception as error:
             state["deadline_stop_error"] = type(error).__name__
 
     try:
-        code, _ = run("registry-trace-start", [system / "logman.exe", "create", "trace", session,
+        code, _ = run(prefix + "start", [system / "logman.exe", "create", "trace", session,
             "-ets", "-p", state["provider"], "0xffffffffffffffff", "0xff", "-o", trace,
             "-f", "bincirc", "-max", "8"], 15, codes=None)
         state["start_code"], started = code, code == 0
@@ -373,7 +377,7 @@ def registry_failure_trace(temp, logs, label, run, report):
         yield
     finally:
         try:
-            state["stop_code"], _ = run("registry-trace-stop",
+            state["stop_code"], _ = run(prefix + "stop",
                 [system / "logman.exe", "stop", session, "-ets"], 15, codes=None)
         except Exception as error:
             state["stop_error"] = type(error).__name__
@@ -391,15 +395,20 @@ def registry_failure_trace(temp, logs, label, run, report):
                 if (failure.is_file() and trace.is_file() and 0 < trace.stat().st_size <= 8 * 1024 * 1024
                         and "Native diagnostic child:" in failure.read_text(encoding="utf-8", errors="strict")):
                     pids = diagnostic_child_pids(failure.read_text(encoding="utf-8", errors="strict"))
-                    script = temp / "read-registry-trace.ps1"
-                    script.write_text(r'''param([string]$Trace,[string]$Output,[string]$TargetIds)
+                    script = temp / ("read-" + kind + "-trace.ps1")
+                    script.write_text(r'''param([string]$Trace,[string]$Output,[string]$TargetIds,[ValidateSet('registry','file')][string]$Kind)
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Diagnostics\Microsoft.PowerShell.Diagnostics.psd1') -ErrorAction Stop
 if($TargetIds -notmatch '^[1-9][0-9]{0,9}(,[1-9][0-9]{0,9}){0,2}$'){throw 'Invalid child IDs'}
 $ids=@($TargetIds.Split(',')|ForEach-Object{[long]$_})
-function Select-ChildEvents($Events,$ChildIds){
+$limit=if($Kind -ceq 'file'){256}else{64}
+$allowed=if($Kind -ceq 'file'){
+    @('FileName','FilePath','FileObject','FileKey','Irp','IrpPtr','Status','NtStatus','DesiredAccess',
+      'CreateOptions','CreateAttributes','ShareAccess','IssuingThreadId','ThreadId','ExtraInformation')
+}else{@('KeyName','RelativeName','Status','KeyObject','BaseObject','ObjectName','KeyHandle','DesiredAccess')}
+function Select-ChildEvents($Events,$ChildIds,$Limit=64){
     foreach($childId in $ChildIds){
-        $Events|Where-Object{[long]$_.ProcessId -eq $childId}|Select-Object -Last 64
+        $Events|Where-Object{[long]$_.ProcessId -eq $childId}|Select-Object -Last $Limit
     }
 }
 $sample=@(0..399|ForEach-Object{[pscustomobject]@{ProcessId=1;Sequence=$_}})+
@@ -412,40 +421,43 @@ if($check.Count -ne 128 -or $check[0].Sequence -ne 336 -or $check[63].Sequence -
     @(Select-ChildEvents @() @(1)).Count -ne 0 -or @(Select-ChildEvents $sample @(3)).Count -ne 1){
     throw 'Child trace tail selection self-check failed'
 }
+$wide=@(Select-ChildEvents $sample @(1,2,9) 256)
+if($wide.Count -ne 336 -or $wide[0].Sequence -ne 144 -or $wide[255].Sequence -ne 399 -or
+    $wide[256].Sequence -ne 0 -or $wide[-1].Sequence -ne 79){throw 'File trace tail selection self-check failed'}
 $scanned=@(Get-WinEvent -Path $Trace -Oldest -MaxEvents 20000 -ErrorAction Stop)
 $matched=@($scanned|Where-Object{$ids -contains [long]$_.ProcessId})
-$selected=@(Select-ChildEvents $matched $ids)
+$selected=@(Select-ChildEvents $matched $ids $limit)
 $counts=@(foreach($childId in $ids){
     $count=@($matched|Where-Object{[long]$_.ProcessId -eq $childId}).Count
-    [pscustomobject]@{pid=$childId;matched_count=$count;selected_count=[Math]::Min(64,$count);truncated=($count -gt 64)}
+    [pscustomobject]@{pid=$childId;matched_count=$count;selected_count=[Math]::Min($limit,$count);truncated=($count -gt $limit)}
 })
 $events=@($selected|ForEach-Object{
     $event=$_; $xml=[xml]$event.ToXml(); $fields=@{}; $names=@()
     foreach($item in $xml.Event.EventData.Data){
         $name=[string]$item.Name
         if($names.Count -lt 32){$names+= $name.Substring(0,[Math]::Min($name.Length,64))}
-        if($name -cin @('KeyName','RelativeName','Status','KeyObject','BaseObject','ObjectName','KeyHandle','DesiredAccess')){
+        if($name -cin $allowed){
             $value=[string]$item.'#text'; $fields[$name]=$value.Substring(0,[Math]::Min($value.Length,256))
         }
     }
     [pscustomobject]@{pid=$event.ProcessId;id=$event.Id;opcode=$event.Opcode;field_names=$names;fields=$fields}
 })
 $result=[pscustomobject]@{diagnostic_only=$true;child_pids=$ids;scan_limit=20000;scan_limit_reached=($scanned.Count -eq 20000);
-    selected_limit=192;per_child_limit=64;child_event_counts=$counts;selection_self_check='pass';
+    selected_limit=($limit*3);per_child_limit=$limit;child_event_counts=$counts;selection_self_check='pass';
     truncated=(@($counts|Where-Object truncated).Count -gt 0);events=$events}
 $text=$result|ConvertTo-Json -Depth 8 -Compress
 $utf8=New-Object Text.UTF8Encoding($false)
 if($utf8.GetByteCount($text) -gt 524288){throw 'Oversized filtered trace'}
 [IO.File]::WriteAllText($Output,$text,$utf8)
 ''', encoding="utf-8")
-                    output = logs / "registry-trace-diagnostic.json"
-                    state["extract_code"], _ = run("registry-trace-extract", [system / "WindowsPowerShell/v1.0/powershell.exe",
+                    output = logs / (kind + "-trace-diagnostic.json")
+                    state["extract_code"], _ = run(prefix + "extract", [system / "WindowsPowerShell/v1.0/powershell.exe",
                         "-NoLogo", "-NoProfile", "-NonInteractive", "-File", script, "-Trace", trace,
-                        "-Output", output, "-TargetIds", ",".join(map(str, pids))], 30, codes=None)
+                        "-Output", output, "-TargetIds", ",".join(map(str, pids)), "-Kind", kind], 30, codes=None)
                     state["filtered_output_written"] = output.is_file()
             except Exception as error:
                 state["decode_error"] = type(error).__name__
-        report["registry_trace_diagnostic"] = state
+        report[kind + "_trace_diagnostic"] = state
 
 
 def main():
@@ -646,10 +658,11 @@ def main():
                             run(name + "-permissions", [system / "icacls.exe", path])
                     args = [candidate, mode, source_canary, cache_canary, cl]
                 if descendant_stage:
-                    with sxs_failure_trace(temp, logs, label, run, report), registry_failure_trace(temp, logs, label, run, report):
+                    with sxs_failure_trace(temp, logs, label, run, report), kernel_failure_trace(temp, logs, label, run, report), \
+                            kernel_failure_trace(temp, logs, label, run, report, kind="file"):
                         _, text = run(label, args, 120)
                 elif catalog_network_stage:
-                    with registry_failure_trace(temp, logs, label, run, report):
+                    with kernel_failure_trace(temp, logs, label, run, report):
                         _, text = run(label, args, 120)
                 else:
                     _, text = run(label, args, 120)
@@ -779,26 +792,29 @@ def self_check():
             raise AssertionError("Invalid trace child identity accepted")
     with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"SystemRoot": "C:/Windows"}):
         temp = Path(directory)
-        for start_code, stop_error, expired in ((0, False, False), (1, False, False), (0, True, False),
-                (None, False, False), (0, False, True)):
+        for kind, start_code, stop_error, expired in (
+                (kind, *case) for kind in ("registry", "file") for case in
+                ((0, False, False), (1, False, False), (0, True, False), (None, False, False), (0, False, True))):
             calls, report = [], {}
+            prefix = kind + "-trace-"
 
             def trace_run(label, args, timeout, codes=None):
                 calls.append(label)
-                if label == "registry-trace-start":
+                if label == prefix + "start":
                     assert "-ets" in args and "-rf" not in args
-                if start_code is None and label == "registry-trace-start":
+                    assert args[6] == "Microsoft-Windows-Kernel-" + kind.title()
+                if start_code is None and label == prefix + "start":
                     raise OSError("diagnostic start failure")
-                if stop_error and label == "registry-trace-stop":
+                if stop_error and label == prefix + "stop":
                     raise OSError("diagnostic stop failure")
-                return (start_code if label == "registry-trace-start" else 0), ""
+                return (start_code if label == prefix + "start" else 0), ""
 
             with patch.object(threading, "Timer") as timer_factory:
                 timer_factory.return_value.is_alive.return_value = False
                 if expired:
                     timer_factory.return_value.start.side_effect = lambda: timer_factory.call_args.args[1]()
                 try:
-                    with registry_failure_trace(temp, temp, "probe", trace_run, report):
+                    with kernel_failure_trace(temp, temp, "probe", trace_run, report, kind=kind):
                         raise RuntimeError("original native failure")
                 except RuntimeError as error:
                     assert str(error) == "original native failure"
@@ -810,15 +826,14 @@ def self_check():
                     timer_factory.return_value.join.assert_called_once_with(timeout=20)
                 else:
                     timer_factory.assert_not_called()
-            assert calls == ["registry-trace-start", *(["registry-trace-deadline-stop"] if expired else []),
-                "registry-trace-stop"]
+            assert calls == [prefix + "start", *([prefix + "deadline-stop"] if expired else []), prefix + "stop"]
             if expired:
-                assert report["registry_trace_diagnostic"]["deadline_stop_code"] == 0
-            assert report["registry_trace_diagnostic"]["child_policy_changed"] is False
+                assert report[kind + "_trace_diagnostic"]["deadline_stop_code"] == 0
+            assert report[kind + "_trace_diagnostic"]["child_policy_changed"] is False
             if stop_error:
-                assert report["registry_trace_diagnostic"]["stop_error"] == "OSError"
+                assert report[kind + "_trace_diagnostic"]["stop_error"] == "OSError"
             if start_code is None:
-                assert report["registry_trace_diagnostic"]["start_error"] == "OSError"
+                assert report[kind + "_trace_diagnostic"]["start_error"] == "OSError"
         for start_code, stop_code, expired, data in ((0, 0, False, b"SxS diagnostic\n"),
                 (0, 0, True, "SxS diagnostic\n".encode("utf-16")), (1, 0, False, b"unused"),
                 (None, 0, False, b"unused"), (0, None, False, b"unused"), (0, 1, False, b"unused"),
