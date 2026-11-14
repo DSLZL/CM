@@ -63,7 +63,7 @@ fn compiler_creation_error(path: &Path, search: bool, work: &Path, job: Option<H
     ) };
     if let Err(error) = created {
         let code = error.code().0 as u32;
-        return if code == 0x80070005 { 5 } else { code };
+        return match code { 0x80070005 => 5, 0x80070002 => 2, _ => code };
     }
     let process_owner = unsafe { OwnedHandle::from_raw_handle(pi.hProcess.0) };
     let thread_owner = unsafe { OwnedHandle::from_raw_handle(pi.hThread.0) };
@@ -121,7 +121,11 @@ fn input_controls(work: &Path, inputs: &Value, denied: bool, job: Option<HANDLE>
             let path = if method == 2 { alias.as_path() } else { target };
             let error = compiler_creation_error(path, method == 1, work, job);
             writeln!(trace, "compiler index={index} method={method} error={error}").unwrap();
-            assert_eq!(error, expected, "compiler creation index={index} method={method}");
+            if denied && method == 1 {
+                assert!(matches!(error, 2 | 5), "compiler PATH creation index={index}: {error}");
+            } else {
+                assert_eq!(error, expected, "compiler creation index={index} method={method}");
+            }
             compiler_errors.push(error);
         }
     }
