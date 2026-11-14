@@ -63,10 +63,11 @@ static const char *startup_gates[] = {
 static const char *descendant_creation_gates[] = {
     "descendant-create-api", "descendant-image-access", "descendant-directory-access",
     "descendant-process-access", "descendant-token-access", "descendant-policy-query",
-    "descendant-policy-flags", "descendant-basic-create", "descendant-process-all-access",
+    "descendant-policy-flags", "descendant-explicit-create", "descendant-process-all-access",
     "descendant-token-assign-primary", "descendant-token-impersonate", "descendant-token-adjust-default",
     "descendant-section-file", "descendant-image-section",
-    "descendant-sxs-control-read", "descendant-sxs-client-read"
+    "descendant-sxs-control-read", "descendant-sxs-client-read",
+    "descendant-default-package-count", "descendant-default-package-mask", "descendant-explicit-dacl"
 };
 static const wchar_t *file_inputs[3];
 static const wchar_t *file_aliases[] = {
@@ -1124,17 +1125,55 @@ static void descendant_creation_diagnostics(wchar_t *environment) {
         &policy, sizeof(policy));
     message(16, queried ? ERROR_SUCCESS : GetLastError(), "descendant-policy-query");
     if (queried) message(16, policy.Flags, "descendant-policy-flags");
+    token = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        fail("descendant-default-token", GetLastError());
+    TOKEN_DEFAULT_DACL *defaults = token_info(token, TokenDefaultDacl);
+    TOKEN_APPCONTAINER_INFORMATION *identity = token_info(token, TokenAppContainerSid);
+    if (!defaults->DefaultDacl || !IsValidAcl(defaults->DefaultDacl) ||
+            !identity->TokenAppContainer || !IsValidSid(identity->TokenAppContainer))
+        fail("descendant-default-security", ERROR_INVALID_DATA);
+    DWORD package_count = 0, package_mask = 0;
+    for (DWORD i = 0; i < defaults->DefaultDacl->AceCount; ++i) {
+        void *item = NULL;
+        if (!GetAce(defaults->DefaultDacl, i, &item)) fail("descendant-default-ace", GetLastError());
+        ACCESS_ALLOWED_ACE *ace = item;
+        if (ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE &&
+                EqualSid(&ace->SidStart, identity->TokenAppContainer)) {
+            ++package_count;
+            package_mask |= ace->Mask;
+        }
+    }
+    message(16, package_count, "descendant-default-package-count");
+    message(16, package_mask, "descendant-default-package-mask");
+    EXPLICIT_ACCESSW entry = {0};
+    PACL acl = NULL;
+    entry.grfAccessPermissions = GENERIC_ALL;
+    entry.grfAccessMode = GRANT_ACCESS;
+    entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    entry.Trustee.ptstrName = (LPWSTR)identity->TokenAppContainer;
+    DWORD error = SetEntriesInAclW(1, &entry, defaults->DefaultDacl, &acl);
+    free(defaults); free(identity);
+    if (!CloseHandle(token)) fail("descendant-default-token-close", GetLastError());
+    message(16, error, "descendant-explicit-dacl");
+    if (error) { LocalFree(acl); return; }
+    if (!acl || !IsValidAcl(acl)) fail("descendant-explicit-acl", ERROR_INVALID_ACL);
+    SECURITY_DESCRIPTOR descriptor;
+    if (!InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
+            !SetSecurityDescriptorDacl(&descriptor, TRUE, acl, FALSE))
+        fail("descendant-explicit-descriptor", GetLastError());
+    SECURITY_ATTRIBUTES security = {sizeof(security), &descriptor, FALSE};
     wchar_t command[MAX_PATH + 3];
     if (_snwprintf_s(command, ARRAYSIZE(command), _TRUNCATE, L"\"%ls\"", executable) < 0)
         fail("descendant-basic-command", ERROR_INVALID_DATA);
     STARTUPINFOW startup = {0};
     PROCESS_INFORMATION process = {0};
     startup.cb = sizeof(startup);
-    // Failure-only comparison: the same image never runs and inherits no handles.
-    BOOL created = CreateProcessW(executable, command, NULL, NULL, FALSE,
+    // Failure-only comparison grants the current package access only to these new objects.
+    BOOL created = CreateProcessW(executable, command, &security, &security, FALSE,
         CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
         environment, root, &startup, &process);
-    message(16, created ? ERROR_SUCCESS : GetLastError(), "descendant-basic-create");
+    message(16, created ? ERROR_SUCCESS : GetLastError(), "descendant-explicit-create");
     if (created) {
         DWORD code = 0;
         if (!TerminateProcess(process.hProcess, 2)) fail("descendant-basic-terminate", GetLastError());
@@ -1146,6 +1185,7 @@ static void descendant_creation_diagnostics(wchar_t *environment) {
         if (!CloseHandle(process.hThread) || !CloseHandle(process.hProcess))
             fail("descendant-basic-close", GetLastError());
     }
+    LocalFree(acl);
 }
 
 static void run_descendant(unsigned short provider, unsigned short canary) {
