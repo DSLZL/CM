@@ -11,7 +11,7 @@ import tempfile
 
 import ci_progress
 import record_run
-from windows_x64_preflight import KEY, TARGET, authority, exact_record, pe_fixture
+from windows_x64_preflight import KEY, authority, exact_record, pe_fixture
 
 SDK_REV = "6cd3d58f05d3447e67109cfb75e042803b843ca4"
 SDK_LOCK_SHA = "60fce5417115280ff1ecf0a17934c2799d8e99a3a8d5c7d4cda56c8d3fb7dde9"
@@ -82,10 +82,11 @@ def diagnose_exports():
     return value
 
 
-def main():
+def main(*, key=KEY):
     root = Path(__file__).resolve().parents[2]
     entry = record_run.require_hosted_worker(enabled=False)
-    authority(json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text()), entry, os.environ)
+    authority(json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text()), entry, os.environ, key=key)
+    target = entry["target"]
     if os.environ.get("CM_PREFLIGHT_STAGE") != "isolation-availability" or \
             Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
         raise RuntimeError("Isolation probe requires its fixed stage and recorded source checkout")
@@ -95,7 +96,7 @@ def main():
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
     report = {"schema_version": 1, "status": "running", "scope": "V01b-native-isolation-availability-only",
-        "platform": KEY, "target": TARGET, "source_sha": os.environ["CM_SOURCE_SHA"],
+        "platform": key, "target": target, "source_sha": os.environ["CM_SOURCE_SHA"],
         "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"], "run_id": int(os.environ["GITHUB_RUN_ID"]),
         "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]), "request_id": os.environ["CM_REQUEST_ID"],
         "cache_mode": "none", "cache_writes": 0, "sdk_compiler_invoked": False,
@@ -125,7 +126,16 @@ def main():
                 print("Diagnostic exports (not callable availability): " +
                       json.dumps(report["export_diagnostics"], sort_keys=True), flush=True)
                 raise RuntimeError("Native PSEC prerequisites unavailable; no SDK or CLI compilation")
-        with tempfile.TemporaryDirectory(prefix="cm-wx-isolation-", dir=os.environ["RUNNER_TEMP"]) as directory:
+        cl = Path(shutil.which("cl.exe") or "")
+        tools = {"X64": ("hostx64", "x64"), "ARM64": ("hostarm64", "arm64")}[entry["runner_arch"]]
+        if not cl.is_absolute() or not cl.is_file() or tuple(part.lower() for part in cl.parts[-3:]) != (*tools, "cl.exe"):
+            raise RuntimeError("SDK probe requires the exact installed native MSVC tools for " + key)
+        tool_identity = {name: os.environ.get(name) for name in
+            ("VCToolsVersion", "WindowsSDKVersion", "WindowsSdkDir", "VCToolsInstallDir")}
+        report["environment"].update(cl=str(cl), **tool_identity)
+        if not all(tool_identity.values()):
+            raise RuntimeError("SDK probe requires recorded MSVC/Windows SDK identity")
+        with tempfile.TemporaryDirectory(prefix="cm-" + key + "-isolation-", dir=os.environ["RUNNER_TEMP"]) as directory:
             temp = Path(directory).resolve()
             sdk = temp / "mxc"
             run("sdk-init", ["git", "init", "--quiet", sdk])
@@ -137,7 +147,7 @@ def main():
             if head != SDK_REV or hashlib.sha256(lock.read_bytes()).hexdigest() != SDK_LOCK_SHA:
                 raise RuntimeError("Fixed SDK commit or original lockfile mismatch")
             cfg = json.loads((root / ".github/cm-ci.json").read_text())
-            toolchain = cfg["rust_toolchain"] + "-" + TARGET
+            toolchain = cfg["rust_toolchain"] + "-" + target
             fixture = root / "fixtures/native-loader/windows-isolation-probe.rs"
             example = sdk / "src/backends/appcontainer/common/examples/cm_native_availability.rs"
             if example.exists():
@@ -151,8 +161,8 @@ def main():
             run("sdk-toolchain", ["rustup", "toolchain", "install", toolchain, "--profile", "minimal", "--component", "rustfmt"], 180)
             rust = ["rustup", "run", toolchain]
             _, report["rustc"] = run("sdk-rustc", [*rust, "rustc", "-Vv"])
-            if "host: " + TARGET not in report["rustc"].splitlines():
-                raise RuntimeError("SDK probe compiler is not native Windows x64")
+            if "host: " + target not in report["rustc"].splitlines():
+                raise RuntimeError("SDK probe compiler is not native " + key)
             _, report["cargo"] = run("sdk-cargo", [*rust, "cargo", "-V"])
             run("sdk-example-format", [*rust, "rustfmt", "--check", "--edition", "2021", example])
             report["sdk_compiler_invoked"] = True
@@ -160,14 +170,15 @@ def main():
             try:
                 os.chdir(sdk / "src")
                 run("sdk-example-build", [*rust, "cargo", "build", "--locked", "--package", "appcontainer_common",
-                    "--example", "cm_native_availability", "--target", TARGET, "--target-dir", temp / "target"], 360)
+                    "--example", "cm_native_availability", "--target", target, "--target-dir", temp / "target"], 360)
             finally:
                 os.chdir(previous)
             if hashlib.sha256(lock.read_bytes()).hexdigest() != SDK_LOCK_SHA:
                 raise RuntimeError("SDK build changed the pinned lockfile")
             run("sdk-original-tree", [*git, "diff", "--exit-code"])
-            probe = temp / "target" / TARGET / "debug/examples/cm_native_availability.exe"
-            report["native_probe"] = pe_fixture(probe.read_bytes(), False)
+            probe = temp / "target" / target / "debug/examples/cm_native_availability.exe"
+            report["native_probe"] = pe_fixture(probe.read_bytes(), False,
+                expected_machine={"X64": 0x8664, "ARM64": 0xAA64}[entry["runner_arch"]])
             code, text = run("native-psec-create-close", [probe], 20, codes=(0, 2))
             report["native_availability"] = json.loads(text)
             print("PSEC SDK availability: " + text, flush=True)
@@ -179,7 +190,7 @@ def main():
         report["status"] = "failed"
         raise
     finally:
-        (logs / "windows-x64-isolation-availability.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        (logs / (key + "-isolation-availability.json")).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print("Native PSEC availability passed; full isolation and product qualification remain NOT_RUN", flush=True)
 
 

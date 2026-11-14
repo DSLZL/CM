@@ -18,6 +18,7 @@ on:
         type: choice
         options:
           - isolation-surface
+          - isolation-availability
 
 permissions:
   contents: read
@@ -66,6 +67,7 @@ jobs:
         env:
           CM_POLICY_TOKEN: ${{ github.token }}
         run: |
+          if ($env:CM_PREFLIGHT_STAGE -notin @('isolation-surface', 'isolation-availability')) { throw 'Unknown mechanism stage' }
           python -B .github/scripts/worker_policy.py native-preflight-self-check
           if ($LASTEXITCODE -ne 0) { throw 'Native authority self-check failed' }
           python -B .github/scripts/worker_policy.py native-preflight
@@ -93,7 +95,31 @@ jobs:
         run: python -B cm-source/ci/scripts/record_run.py "$env:CM_CI_LOG_DIR"
 
       - name: Observe native isolation API surface
+        if: env.CM_PREFLIGHT_STAGE == 'isolation-surface'
         run: python -B cm-source/ci/scripts/windows_arm64_preflight.py
+
+      - name: Select installed native ARM64 MSVC and Windows SDK
+        if: env.CM_PREFLIGHT_STAGE == 'isolation-availability'
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or @($installation).Count -ne 1) { throw 'Missing unique native ARM64 MSVC installation' }
+          $devcmd = Join-Path $installation 'Common7/Tools/VsDevCmd.bat'
+          if (-not (Test-Path -LiteralPath $devcmd -PathType Leaf)) { throw 'Missing installed VsDevCmd' }
+          $commandLine = '"' + $devcmd + '" -no_logo -arch=arm64 -host_arch=arm64 >nul && set'
+          $selected = & $env:ComSpec /d /s /c $commandLine
+          if ($LASTEXITCODE -ne 0) { throw 'Native ARM64 developer environment failed' }
+          $allowed = @('PATH', 'INCLUDE', 'LIB', 'LIBPATH', 'VCToolsInstallDir', 'VCToolsVersion', 'VCINSTALLDIR',
+              'WindowsSdkDir', 'WindowsSDKVersion', 'UniversalCRTSdkDir', 'UCRTVersion', 'VSINSTALLDIR')
+          foreach ($line in $selected) {
+            if ($line -match '^([^=]+)=(.*)$' -and $Matches[1] -in $allowed) {
+              $line | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+            }
+          }
+
+      - name: Probe fixed SDK native PSEC create close and startup info
+        if: env.CM_PREFLIGHT_STAGE == 'isolation-availability'
+        run: python -B -c "import sys; sys.path.insert(0, 'cm-source/ci/scripts'); import windows_isolation_preflight; windows_isolation_preflight.main(key='windows-arm64')"
 
       - name: Record final native job status
         if: always() && steps.source.outcome == 'success'

@@ -158,9 +158,14 @@ jobs:
           assert "CM_PLATFORM: windows-arm64" in win_arm_recipe and "CM_TARGET: aarch64-pc-windows-msvc" in win_arm_recipe
           assert "default: isolation-surface" in win_arm_recipe and "cancel-in-progress: false" in win_arm_recipe
           assert "python -B cm-source/ci/scripts/windows_arm64_preflight.py" in win_arm_recipe
+          assert "if: env.CM_PREFLIGHT_STAGE == 'isolation-surface'" in win_arm_recipe
+          assert win_arm_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'isolation-availability'") == 2
+          assert "-notin @('isolation-surface', 'isolation-availability')" in win_arm_recipe
+          assert "windows_isolation_preflight.main(key='windows-arm64')" in win_arm_recipe
+          assert "-arch=arm64 -host_arch=arm64" in win_arm_recipe
           assert "shell: pwsh" in win_arm_recipe and "CM_POLICY_TOKEN:" in win_arm_recipe
           assert not any(value in win_arm_recipe for value in ("actions/cache/", "cache-save", "secrets.",
-              "attestations: write", "id-token: write", "cargo ", "rustup ", "cl.exe", "VSDevCmd", "vswhere",
+              "attestations: write", "id-token: write", "cargo ", "rustup ", "cl.exe",
               "netsh ", "New-NetFirewallRule"))
           cfg = json.loads(Path(".github/cm-ci.json").read_text())
           if cfg["task_id"] == "CM-G05":

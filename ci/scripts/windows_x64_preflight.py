@@ -44,7 +44,9 @@ def authority(policy, entry, env, *, key=KEY):
         raise RuntimeError("Windows probe differs from its exact cache-none native preflight authority")
 
 
-def pe_fixture(data, dll):
+def pe_fixture(data, dll, *, expected_machine=0x8664):
+    if type(expected_machine) is not int or expected_machine not in (0x8664, 0xAA64):
+        raise RuntimeError("Unreviewed native PE machine")
     if not 128 <= len(data) <= 32 * 1024 * 1024 or data[:2] != b"MZ":
         raise RuntimeError("Expected bounded native PE fixture")
     header = struct.unpack_from("<I", data, 60)[0]
@@ -52,7 +54,7 @@ def pe_fixture(data, dll):
         raise RuntimeError("Invalid PE fixture header")
     machine, count = struct.unpack_from("<HH", data, header + 4)
     optional, flags = struct.unpack_from("<HH", data, header + 20)
-    if (machine != 0x8664 or not 1 <= count <= 32 or optional != 240
+    if (machine != expected_machine or not 1 <= count <= 32 or optional != 240
             or not flags & 2 or bool(flags & 0x2000) != dll
             or struct.unpack_from("<H", data, header + 24)[0] != 0x20B):
         raise RuntimeError("Wrong PE fixture architecture/kind")
@@ -958,6 +960,22 @@ def self_check():
     struct.pack_into("<II", data, 408, 512, 512)
     struct.pack_into("<I", data, 428, 0x60000020)
     assert pe_fixture(bytes(data), True)["machine"] == 0x8664
+    arm_data = bytearray(data)
+    struct.pack_into("<H", arm_data, 132, 0xAA64)
+    assert pe_fixture(bytes(arm_data), True, expected_machine=0xAA64)["machine"] == 0xAA64
+    for wrong in (0x8664, 0xA641, True, float(0xAA64)):
+        try:
+            pe_fixture(bytes(arm_data), True, expected_machine=wrong)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Cross-architecture or unknown PE machine accepted")
+    try:
+        pe_fixture(bytes(data), True, expected_machine=0xAA64)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("x64 PE accepted for native ARM64")
     for offset, format_string, value in ((60, "<I", 0xFFFFFFF0), (132, "<H", 0xAA64),
             (134, "<H", 99), (148, "<H", 239), (150, "<H", 2), (152, "<H", 0x10B),
             (408, "<I", 0xFFFFFF00), (412, "<I", 100), (428, "<I", 0xE0000020)):
