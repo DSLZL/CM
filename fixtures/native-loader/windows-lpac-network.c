@@ -65,7 +65,8 @@ static const char *descendant_creation_gates[] = {
     "descendant-process-access", "descendant-token-access", "descendant-policy-query",
     "descendant-policy-flags", "descendant-basic-create", "descendant-process-all-access",
     "descendant-token-assign-primary", "descendant-token-impersonate", "descendant-token-adjust-default",
-    "descendant-section-file", "descendant-image-section"
+    "descendant-section-file", "descendant-image-section",
+    "descendant-sxs-control-read", "descendant-sxs-client-read"
 };
 static const wchar_t *file_inputs[3];
 static const wchar_t *file_aliases[] = {
@@ -266,6 +267,29 @@ static void startup_diagnostics(BOOL outside) {
         if (library && !FreeLibrary(library)) fail("wsa-diagnostic-dll-close", GetLastError());
         message(11, error, startup_gates[catalog_count + i]);
     }
+}
+
+static void creation_registry_diagnostic(const char *gate, BOOL outside) {
+    HKEY key = NULL;
+    LSTATUS access = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\SideBySide", 0, KEY_READ, &key);
+    if (outside) {
+        PSECURITY_DESCRIPTOR descriptor = NULL;
+        wchar_t *text = NULL;
+        DWORD length = 0, error = (DWORD)access;
+        if (!error) error = GetSecurityInfo(key, SE_REGISTRY_KEY, DACL_SECURITY_INFORMATION,
+            NULL, NULL, NULL, NULL, &descriptor);
+        if (!error && (!descriptor || !IsValidSecurityDescriptor(descriptor)))
+            error = ERROR_INVALID_SECURITY_DESCR;
+        if (!error && !ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, SDDL_REVISION_1,
+                DACL_SECURITY_INFORMATION, &text, &length)) error = GetLastError();
+        if (!error && (!text || !length || length > 8192 || wcsnlen_s(text, length) >= length))
+            error = ERROR_INVALID_DATA;
+        fprintf(stderr, "Creation registry diagnostic: %s; access=%lu; dacl_error=%lu\n", gate, (DWORD)access, error);
+        if (!error) fprintf(stderr, "Creation registry DACL: %s; sddl=%ls\n", gate, text);
+        LocalFree(text); LocalFree(descriptor);
+    } else message(16, (DWORD)access, gate);
+    if (key && RegCloseKey(key)) fail("creation-registry-key-close", ERROR_INVALID_HANDLE);
 }
 
 static void *token_info(HANDLE token, TOKEN_INFORMATION_CLASS kind) {
@@ -1067,6 +1091,7 @@ static void creation_handle_diagnostic(HANDLE handle, const char *gate) {
 }
 
 static void descendant_creation_diagnostics(wchar_t *environment) {
+    creation_registry_diagnostic("descendant-sxs-client-read", FALSE);
     creation_handle_diagnostic(CreateFileW(executable, GENERIC_READ | GENERIC_EXECUTE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL),
         "descendant-image-access");
@@ -1291,6 +1316,7 @@ int wmain(int argc, wchar_t **argv) {
     if (restricted_code_files || installer_files) check_delayed_imports();
 #endif
     if (installer_files && !private_catalog && !report_pipe) startup_diagnostics(TRUE);
+    if (catalog_descendant && !report_pipe) creation_registry_diagnostic("outside-side-by-side", TRUE);
     if (installer_files && report_pipe && (!wcscmp(argv[1], L"client") ||
             (catalog_descendant && !wcscmp(argv[1], L"descendant")))) {
         check_file_controls(TRUE);
@@ -1309,6 +1335,7 @@ int wmain(int argc, wchar_t **argv) {
         LSTATUS restored = RegOverridePredefKey(HKEY_LOCAL_MACHINE, NULL);
         if (restored) fail("catalog-original-view-restore", (DWORD)restored);
         if (wcscmp(argv[1], L"control")) check_real_catalog_denials();
+        else if (catalog_descendant) creation_registry_diagnostic("descendant-sxs-control-read", FALSE);
     }
     if (report_pipe) {
         if (socket_share) {
