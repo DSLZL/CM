@@ -21,15 +21,21 @@ SOCKET_MODES = ("socket-ordinary", "socket-lpac", "socket-restricted")
 PEER_MODES = ("peer-outside", "peer-ordinary", "peer-lpac", "peer-restricted")
 
 
-def authority(policy, entry, env):
+def authority(policy, entry, env, *, key=KEY):
+    targets = {KEY: TARGET, "windows-arm64": "aarch64-pc-windows-msvc"}
+    if key not in targets:
+        raise RuntimeError("Unreviewed Windows native preflight target")
+    target = targets[key]
     expected = {"source_repository": "DSLZL/CM", "source_sha": env.get("CM_SOURCE_SHA"),
         "observed_source_default_sha": env.get("CM_SOURCE_SHA"), "source_default_branch": "main",
         "builder_repository": entry["repository"], "workflow_sha": env.get("GITHUB_WORKFLOW_SHA"),
         "worker_default_branch": "main", "request_id": env.get("CM_REQUEST_ID"),
-        "platform": KEY, "target": TARGET, "cache_mode": "none", "execution_role": "platform_preflight",
+        "platform": key, "target": target, "cache_mode": "none", "execution_role": "platform_preflight",
         "build_kind": "qualification", "consumer_required": "false",
         "distribution_required": "false", "index_required": "false"}
-    if (entry["key"] != KEY or any(policy.get(key) != value for key, value in expected.items())
+    if (entry["key"] != key or entry["target"] != target
+            or env.get("CM_PLATFORM", key) != key or env.get("CM_TARGET", target) != target
+            or any(policy.get(field) != value for field, value in expected.items())
             or env.get("CM_EXECUTION_ROLE") != "platform_preflight"
             or env.get("GITHUB_JOB") != "native-preflight" or env.get("GITHUB_REF") != "refs/heads/main"
             or env.get("CM_BUILD_KIND") != "qualification" or env.get("CM_HOST_ORIGIN")
@@ -922,6 +928,28 @@ def self_check():
             pass
         else:
             raise AssertionError("Cross-platform native authority accepted")
+    arm = cm_platforms.select("windows-arm64")
+    arm_env = {**env, "CM_PLATFORM": arm["key"], "CM_TARGET": arm["target"],
+        "GITHUB_WORKFLOW_REF": arm["repository"] + "/.github/workflows/native-preflight.yml@refs/heads/main"}
+    arm_policy = {**policy, "builder_repository": arm["repository"], "platform": arm["key"], "target": arm["target"]}
+    authority(arm_policy, arm, arm_env, key=arm["key"])
+    for field in arm_policy:
+        try:
+            authority({**arm_policy, field: "wrong"}, arm, arm_env, key=arm["key"])
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Changed ARM64 preflight identity accepted: " + field)
+    for wrong_entry, changes, requested in (
+            (entry, {}, arm["key"]), ({**arm, "target": TARGET}, {}, arm["key"]),
+            (arm, {"CM_PLATFORM": KEY}, arm["key"]), (arm, {"CM_TARGET": TARGET}, arm["key"]),
+            (arm, {}, "linux-arm64")):
+        try:
+            authority(arm_policy, wrong_entry, {**arm_env, **changes}, key=requested)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Cross-architecture Windows authority accepted")
     data = bytearray(1024)
     data[:2] = b"MZ"; struct.pack_into("<I", data, 60, 128)
     data[128:132] = b"PE\0\0"

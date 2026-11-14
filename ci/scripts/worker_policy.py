@@ -290,7 +290,7 @@ def preflight(*, mechanism_only=False):
     source, worker, sha, workflow_sha, request = identities(enabled=not mechanism_only)
     entry = cm_platforms.worker(enabled=not mechanism_only)
     kind, origin = build_request()
-    if mechanism_only and (entry["key"] not in {"linux-arm64", "macos-arm64", "windows-x64"} or os.environ.get("GITHUB_JOB") != "native-preflight"
+    if mechanism_only and (entry["key"] not in {"linux-arm64", "macos-arm64", "windows-x64", "windows-arm64"} or os.environ.get("GITHUB_JOB") != "native-preflight"
             or kind != "qualification" or origin is not None
             or os.environ.get("CM_CACHE_MODE") != "none" or os.environ.get("ACTIONS_CACHE_MODE") != "none"):
         raise RuntimeError("Only the reviewed cache-none native mechanism preflights may inspect a disabled target")
@@ -346,7 +346,7 @@ def native_preflight():
 
 
 def native_preflight_self_check():
-    for key in ("linux-arm64", "macos-arm64", "windows-x64"):
+    for key in ("linux-arm64", "macos-arm64", "windows-x64", "windows-arm64"):
         check_native_preflight_authority(key)
     print("CM native mechanism authority self-check passed; product routing still requires an enabled exact native worker", flush=True)
 
@@ -390,7 +390,7 @@ def check_native_preflight_authority(key):
                     pass
                 else:
                     raise AssertionError("Changed mechanism preflight origin accepted")
-        for wrong in set(cm_platforms.load()["platforms"]) - {"linux-arm64", "macos-arm64", "windows-x64"}:
+        for wrong in set(cm_platforms.load()["platforms"]) - {"linux-arm64", "macos-arm64", "windows-x64", "windows-arm64"}:
             with patch.object(cm_platforms, "worker", return_value=cm_platforms.select(wrong)):
                 try:
                     native_preflight()
