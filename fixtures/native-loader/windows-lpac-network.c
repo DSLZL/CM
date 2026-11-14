@@ -60,6 +60,10 @@ static const char *startup_gates[] = {
     "wsa-reg-parameters", "wsa-reg-protocol", "wsa-reg-namespace", "wsa-dll-mswsock",
     "wsa-dll-nsi", "wsa-dll-dnsapi", "wsa-dll-nlaapi", "wsa-dll-winrnr"
 };
+static const char *descendant_creation_gates[] = {
+    "descendant-create-api", "descendant-image-access", "descendant-directory-access",
+    "descendant-process-access", "descendant-token-access"
+};
 static const wchar_t *file_inputs[3];
 static const wchar_t *file_aliases[] = {
     L"source-hard.txt", L"source-link.txt", L"cache-hard.txt", L"cache-link.txt", L"compiler-link.exe"
@@ -997,6 +1001,7 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
 
 static DWORD receive(Child *child, DWORD kind) {
     BOOL seen[ARRAYSIZE(startup_gates)] = {0};
+    BOOL creation_seen[ARRAYSIZE(descendant_creation_gates)] = {0};
     for (;;) {
         Message item = {0};
         DWORD size = 0;
@@ -1009,6 +1014,16 @@ static DWORD receive(Child *child, DWORD kind) {
             if (index == ARRAYSIZE(startup_gates) || seen[index]) fail("startup-diagnostic-kind", ERROR_INVALID_DATA);
             seen[index] = TRUE;
             fprintf(stderr, "Winsock startup diagnostic: %s; result=%lu\n", item.gate, item.value);
+            continue;
+        }
+        if (catalog_descendant && item.kind == 16) {
+            size_t index = 0;
+            while (index < ARRAYSIZE(descendant_creation_gates) &&
+                    strcmp(item.gate, descendant_creation_gates[index])) ++index;
+            if (index == ARRAYSIZE(descendant_creation_gates) || creation_seen[index])
+                fail("descendant-diagnostic-kind", ERROR_INVALID_DATA);
+            creation_seen[index] = TRUE;
+            fprintf(stderr, "Descendant creation diagnostic: %s; result=%lu\n", item.gate, item.value);
             continue;
         }
         if (item.kind == 2) fail(item.gate, item.value);
@@ -1041,6 +1056,27 @@ static void finished(Child *child) {
     CloseHandle(child->reader); child->reader = NULL;
 }
 
+static void creation_handle_diagnostic(HANDLE handle, const char *gate) {
+    BOOL valid = handle && handle != INVALID_HANDLE_VALUE;
+    DWORD error = valid ? ERROR_SUCCESS : GetLastError();
+    message(16, error, gate);
+    if (valid && !CloseHandle(handle)) fail("descendant-diagnostic-close", GetLastError());
+}
+
+static void descendant_creation_diagnostics(void) {
+    creation_handle_diagnostic(CreateFileW(executable, GENERIC_READ | GENERIC_EXECUTE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL),
+        "descendant-image-access");
+    creation_handle_diagnostic(CreateFileW(root, FILE_LIST_DIRECTORY | FILE_TRAVERSE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS, NULL), "descendant-directory-access");
+    creation_handle_diagnostic(OpenProcess(PROCESS_CREATE_PROCESS | PROCESS_DUP_HANDLE |
+        PROCESS_QUERY_LIMITED_INFORMATION, FALSE, GetCurrentProcessId()), "descendant-process-access");
+    HANDLE token = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &token)) token = NULL;
+    creation_handle_diagnostic(token, "descendant-token-access");
+}
+
 static void run_descendant(unsigned short provider, unsigned short canary) {
     Child child = {0};
     HANDLE writer = NULL;
@@ -1068,7 +1104,12 @@ static void run_descendant(unsigned short provider, unsigned short canary) {
     // Inherit the actual caller token and Job; the outside controller verifies them before resuming.
     if (!CreateProcessW(executable, command, NULL, NULL, TRUE,
             EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
-            environment, root, &startup.StartupInfo, &child.process)) fail("descendant-create", GetLastError());
+            environment, root, &startup.StartupInfo, &child.process)) {
+        DWORD create_error = GetLastError();
+        message(16, create_error, "descendant-create-api");
+        descendant_creation_diagnostics();
+        fail("descendant-create", create_error);
+    }
     DeleteProcThreadAttributeList(startup.lpAttributeList);
     free(startup.lpAttributeList);
     if (!CloseHandle(writer) || !CloseHandle(child.process.hThread)) fail("descendant-create-close", GetLastError());
