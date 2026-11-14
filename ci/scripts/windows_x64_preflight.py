@@ -277,6 +277,70 @@ def diagnostic_child_pids(text):
 
 
 @contextmanager
+def sxs_failure_trace(temp, logs, label, run, report):
+    tool = Path(os.environ["SystemRoot"]) / "System32/sxstrace.exe"
+    trace, parsed = temp / "sxs.etl", temp / "sxs.txt"
+    state = {"diagnostic_only": True, "automatic_stop_seconds": 20, "child_policy_changed": False,
+        "raw_input_limit_bytes": 8 * 1024 * 1024, "parsed_input_limit_bytes": 524288,
+        "filter": "native-probe.exe", "pid_binding": False}
+    started, timer = False, None
+    lock = threading.Lock()
+
+    def stop():
+        with lock:
+            if "stop_attempted" in state:
+                return
+            state["stop_attempted"] = True
+            try:
+                state["stop_code"], _ = run("sxs-trace-stop", [tool, "stoptrace"], 15, codes=None)
+            except Exception as error:
+                state["stop_error"] = type(error).__name__
+
+    try:
+        state["start_code"], _ = run("sxs-trace-start",
+            [tool, "trace", "-logfile:" + str(trace), "-nostop"], 15, codes=None)
+        started = state["start_code"] == 0
+        if started:
+            timer = threading.Timer(20, stop)
+            timer.daemon = True
+            timer.start()
+    except Exception as error:
+        state["start_error"] = type(error).__name__
+    try:
+        yield
+    finally:
+        if started:
+            stop()
+        if timer is not None:
+            try:
+                timer.cancel()
+                timer.join(timeout=20)
+                if timer.is_alive():
+                    state["timer_cleanup_error"] = "still_alive"
+            except Exception as error:
+                state["timer_cleanup_error"] = type(error).__name__
+        try:
+            failure = logs / (label + ".log")
+            if (started and state.get("stop_code") == 0 and failure.is_file() and trace.is_file()
+                    and 0 < trace.stat().st_size <= state["raw_input_limit_bytes"]
+                    and "Native diagnostic child:" in failure.read_text(encoding="utf-8", errors="strict")):
+                state["parse_code"], _ = run("sxs-trace-parse", [tool, "parse", "-logfile:" + str(trace),
+                    "-outfile:" + str(parsed), "-filter:native-probe.exe"], 30, codes=None)
+                if state["parse_code"] == 0 and parsed.is_file():
+                    if not 0 < parsed.stat().st_size <= state["parsed_input_limit_bytes"]:
+                        raise RuntimeError("Oversized or empty SxS diagnostic")
+                    data = parsed.read_bytes()
+                    text = data.decode("utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8", errors="strict")
+                    if "\0" in text:
+                        raise RuntimeError("NUL in SxS diagnostic")
+                    (logs / "sxs-trace-diagnostic.log").write_text(text, encoding="utf-8")
+                    state["filtered_output_written"] = True
+        except Exception as error:
+            state["decode_error"] = type(error).__name__
+        report["sxs_trace_diagnostic"] = state
+
+
+@contextmanager
 def registry_failure_trace(temp, logs, label, run, report):
     system = Path(os.environ["SystemRoot"]) / "System32"
     session = "CM-WX-Q-" + hashlib.sha256(str(temp).encode()).hexdigest()[:20]
@@ -581,7 +645,10 @@ def main():
                                         "USERENV", "ADVAPI32", "WS2_32"))):
                             run(name + "-permissions", [system / "icacls.exe", path])
                     args = [candidate, mode, source_canary, cache_canary, cl]
-                if catalog_network_stage:
+                if descendant_stage:
+                    with sxs_failure_trace(temp, logs, label, run, report), registry_failure_trace(temp, logs, label, run, report):
+                        _, text = run(label, args, 120)
+                elif catalog_network_stage:
                     with registry_failure_trace(temp, logs, label, run, report):
                         _, text = run(label, args, 120)
                 else:
@@ -752,6 +819,57 @@ def self_check():
                 assert report["registry_trace_diagnostic"]["stop_error"] == "OSError"
             if start_code is None:
                 assert report["registry_trace_diagnostic"]["start_error"] == "OSError"
+        for start_code, stop_code, expired, data in ((0, 0, False, b"SxS diagnostic\n"),
+                (0, 0, True, "SxS diagnostic\n".encode("utf-16")), (1, 0, False, b"unused"),
+                (None, 0, False, b"unused"), (0, None, False, b"unused"), (0, 1, False, b"unused"),
+                (0, 0, False, b"bad\0text"), (0, 0, False, b"x" * 524289),
+                (0, 0, False, b"\xff"), (0, 0, False, b"")):
+            calls, report = [], {}
+            (temp / "probe.log").write_text(child, encoding="utf-8")
+            output = temp / "sxs-trace-diagnostic.log"
+            output.unlink(missing_ok=True)
+
+            def sxs_run(label, args, timeout, codes=None):
+                calls.append(label)
+                if label == "sxs-trace-start":
+                    assert "-nostop" in args and timeout == 15
+                    if start_code is None:
+                        raise OSError("diagnostic start failure")
+                    (temp / "sxs.etl").write_bytes(b"bounded mocked ETL")
+                    return start_code, ""
+                if label == "sxs-trace-stop":
+                    if stop_code is None:
+                        raise OSError("diagnostic stop failure")
+                    return stop_code, ""
+                assert label == "sxs-trace-parse" and "-filter:native-probe.exe" in args and timeout == 30
+                (temp / "sxs.txt").write_bytes(data)
+                return 0, ""
+
+            with patch.object(threading, "Timer") as timer_factory:
+                timer_factory.return_value.is_alive.return_value = False
+                if expired:
+                    timer_factory.return_value.start.side_effect = lambda: timer_factory.call_args.args[1]()
+                try:
+                    with sxs_failure_trace(temp, temp, "probe", sxs_run, report):
+                        raise RuntimeError("original native failure")
+                except RuntimeError as error:
+                    assert str(error) == "original native failure"
+                else:
+                    raise AssertionError("Optional SxS trace hid the native failure")
+                if start_code == 0:
+                    assert timer_factory.call_args.args[0] == 20
+                    timer_factory.return_value.cancel.assert_called_once()
+                    timer_factory.return_value.join.assert_called_once_with(timeout=20)
+                else:
+                    timer_factory.assert_not_called()
+            state = report["sxs_trace_diagnostic"]
+            assert calls == ["sxs-trace-start", *(["sxs-trace-stop"] if start_code == 0 else []),
+                *(["sxs-trace-parse"] if start_code == 0 and stop_code == 0 else [])]
+            assert state["child_policy_changed"] is False and state["pid_binding"] is False
+            valid = start_code == 0 and stop_code == 0 and data in (b"SxS diagnostic\n", "SxS diagnostic\n".encode("utf-16"))
+            assert output.is_file() is valid
+            if valid:
+                assert output.read_text(encoding="utf-8") == "SxS diagnostic\n"
     entry = cm_platforms.select(KEY)
     env = {"CM_SOURCE_SHA": "a" * 40, "GITHUB_WORKFLOW_SHA": "b" * 40, "CM_REQUEST_ID": "windows-controls",
         "CM_EXECUTION_ROLE": "platform_preflight", "GITHUB_JOB": "native-preflight", "GITHUB_REF": "refs/heads/main",

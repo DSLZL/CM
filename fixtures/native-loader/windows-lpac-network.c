@@ -63,7 +63,9 @@ static const char *startup_gates[] = {
 static const char *descendant_creation_gates[] = {
     "descendant-create-api", "descendant-image-access", "descendant-directory-access",
     "descendant-process-access", "descendant-token-access", "descendant-policy-query",
-    "descendant-policy-flags", "descendant-basic-create"
+    "descendant-policy-flags", "descendant-basic-create", "descendant-process-all-access",
+    "descendant-token-assign-primary", "descendant-token-impersonate", "descendant-token-adjust-default",
+    "descendant-section-file", "descendant-image-section"
 };
 static const wchar_t *file_inputs[3];
 static const wchar_t *file_aliases[] = {
@@ -1076,6 +1078,22 @@ static void descendant_creation_diagnostics(wchar_t *environment) {
     HANDLE token = NULL;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &token)) token = NULL;
     creation_handle_diagnostic(token, "descendant-token-access");
+    creation_handle_diagnostic(OpenProcess(PROCESS_ALL_ACCESS, FALSE, GetCurrentProcessId()),
+        "descendant-process-all-access");
+    DWORD rights[] = {TOKEN_ASSIGN_PRIMARY, TOKEN_IMPERSONATE, TOKEN_ADJUST_DEFAULT};
+    const char *gates[] = {"descendant-token-assign-primary", "descendant-token-impersonate",
+        "descendant-token-adjust-default"};
+    for (size_t i = 0; i < ARRAYSIZE(rights); ++i) {
+        token = NULL;
+        if (!OpenProcessToken(GetCurrentProcess(), rights[i], &token)) token = NULL;
+        creation_handle_diagnostic(token, gates[i]);
+    }
+    HANDLE image = CreateFileW(executable, GENERIC_READ | GENERIC_EXECUTE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+    if (image != INVALID_HANDLE_VALUE)
+        creation_handle_diagnostic(CreateFileMappingW(image, NULL, PAGE_READONLY | SEC_IMAGE, 0, 0, NULL),
+            "descendant-image-section");
+    creation_handle_diagnostic(image, "descendant-section-file");
     PROCESS_MITIGATION_CHILD_PROCESS_POLICY policy = {0};
     BOOL queried = GetProcessMitigationPolicy(GetCurrentProcess(), ProcessChildProcessPolicy,
         &policy, sizeof(policy));
