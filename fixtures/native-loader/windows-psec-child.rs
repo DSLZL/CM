@@ -296,8 +296,18 @@ fn broker(root: &Path, network_probe: bool) {
         )
     }
     .expect("set kill-on-close before creating a child");
+    // Ordinary controls must not establish the PSEC child's nested Job hierarchy.
+    let compiler_job = network_config.as_ref().and_then(|config| config.get("inputs")).map(|_| {
+        let handle = unsafe { CreateJobObjectW(None, PCWSTR::null()) }.unwrap();
+        let owner = unsafe { OwnedHandle::from_raw_handle(handle.0) };
+        unsafe { SetInformationJobObject(handle, JobObjectExtendedLimitInformation,
+            (&raw const limits).cast(), std::mem::size_of_val(&limits) as u32) }
+            .expect("set kill-on-close for ordinary compiler controls");
+        assert_ne!(handle, job);
+        (handle, owner)
+    });
     let inputs_before = network_config.as_ref().and_then(|config| config.get("inputs"))
-        .map(|inputs| input_controls(&work, inputs, false, Some(job), "outside-before"));
+        .map(|inputs| input_controls(&work, inputs, false, Some(compiler_job.as_ref().unwrap().0), "outside-before"));
     let exe_wide: Vec<u16> = text(&exe).encode_utf16().chain([0]).collect();
     let child_mode = if network_probe { "--network-child" } else { "--child" };
     let mut command: Vec<u16> = format!("\"{}\" {child_mode} \"{}\"", text(&exe), text(root))
@@ -358,7 +368,8 @@ fn broker(root: &Path, network_probe: bool) {
     }
     assert_eq!(exit, 37, "real PSEC child did not finish file controls");
     let inputs_after = network_config.as_ref().and_then(|config| config.get("inputs"))
-        .map(|inputs| input_controls(&work, inputs, false, Some(job), "outside-after"));
+        .map(|inputs| input_controls(&work, inputs, false, Some(compiler_job.as_ref().unwrap().0), "outside-after"));
+    drop(compiler_job);
     drop(thread_owner);
     drop(process_owner);
     drop(job_owner);
