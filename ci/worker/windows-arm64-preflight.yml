@@ -19,6 +19,7 @@ on:
         options:
           - isolation-surface
           - isolation-availability
+          - loader-terminal
 
 permissions:
   contents: read
@@ -67,7 +68,7 @@ jobs:
         env:
           CM_POLICY_TOKEN: ${{ github.token }}
         run: |
-          if ($env:CM_PREFLIGHT_STAGE -notin @('isolation-surface', 'isolation-availability')) { throw 'Unknown mechanism stage' }
+          if ($env:CM_PREFLIGHT_STAGE -notin @('isolation-surface', 'isolation-availability', 'loader-terminal')) { throw 'Unknown mechanism stage' }
           python -B .github/scripts/worker_policy.py native-preflight-self-check
           if ($LASTEXITCODE -ne 0) { throw 'Native authority self-check failed' }
           python -B .github/scripts/worker_policy.py native-preflight
@@ -99,7 +100,7 @@ jobs:
         run: python -B cm-source/ci/scripts/windows_arm64_preflight.py
 
       - name: Select installed native ARM64 MSVC and Windows SDK
-        if: env.CM_PREFLIGHT_STAGE == 'isolation-availability'
+        if: env.CM_PREFLIGHT_STAGE != 'isolation-surface'
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
           $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
@@ -120,6 +121,10 @@ jobs:
       - name: Probe fixed SDK native PSEC create close and startup info
         if: env.CM_PREFLIGHT_STAGE == 'isolation-availability'
         run: python -B -c "import sys; sys.path.insert(0, 'cm-source/ci/scripts'); import windows_isolation_preflight; windows_isolation_preflight.main(key='windows-arm64')"
+
+      - name: Probe native ARM64 pinned loader and ConPTY controls
+        if: env.CM_PREFLIGHT_STAGE == 'loader-terminal'
+        run: python -B -c "import sys; sys.path.insert(0, 'cm-source/ci/scripts'); import windows_x64_preflight; windows_x64_preflight.main(key='windows-arm64')"
 
       - name: Record final native job status
         if: always() && steps.source.outcome == 'success'

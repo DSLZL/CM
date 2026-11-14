@@ -472,10 +472,11 @@ if($utf8.GetByteCount($text) -gt 524288){throw 'Oversized filtered trace'}
         report[kind + "_trace_diagnostic"] = state
 
 
-def main():
+def main(*, key=KEY):
     root = Path(__file__).resolve().parents[2]
     entry = record_run.require_hosted_worker(enabled=False)
-    authority(json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text()), entry, os.environ)
+    authority(json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text()), entry, os.environ, key=key)
+    target = entry["target"]
     mechanism = os.environ.get("CM_PREFLIGHT_STAGE", "loader-terminal")
     if mechanism not in ("loader-terminal", "lpac-network", "lpac-registry-read", "lpac-registry-restricted",
             "lpac-restricted-network", "lpac-socket-availability", "lpac-socket-share", "lpac-shared-peer-observation",
@@ -483,6 +484,8 @@ def main():
             "restricted-code-appcontainer-files", "restricted-installer-appcontainer-files", "restricted-installer-private-catalog",
             "restricted-installer-private-network", "restricted-installer-private-descendant"):
         raise RuntimeError("Unknown Windows native mechanism stage")
+    if key == "windows-arm64" and mechanism != "loader-terminal":
+        raise RuntimeError("ARM64 fixture entry requires loader-terminal only")
     socket_stage = mechanism == "lpac-socket-availability"
     socket_share_stage = mechanism == "lpac-socket-share"
     peer_stage = mechanism == "lpac-shared-peer-observation"
@@ -520,7 +523,7 @@ def main():
             "V01g-restricted-network-fixture-only" if restricted_network else
             "V01f-private-sid-registry-fixture-only" if restricted else "V01d-system-dependency-fixture-only" if registry else
             "V01c-lpac-network-fixture-only" if lpac else "V01a-loader-terminal-fixtures-only",
-        "platform": KEY, "target": TARGET, "source_sha": os.environ["CM_SOURCE_SHA"],
+        "platform": key, "target": target, "source_sha": os.environ["CM_SOURCE_SHA"],
         "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"], "run_id": int(os.environ["GITHUB_RUN_ID"]),
         "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]), "request_id": os.environ["CM_REQUEST_ID"],
         "cache_mode": "none", "cache_writes": 0, "product_build": "not_run", "qualification": "not_run",
@@ -581,11 +584,13 @@ def main():
                 process.stdout.close()
 
     try:
-        with tempfile.TemporaryDirectory(prefix="cm-wx-mechanisms-", dir=os.environ["RUNNER_TEMP"]) as directory:
+        with tempfile.TemporaryDirectory(prefix="cm-" + key + "-mechanisms-", dir=os.environ["RUNNER_TEMP"]) as directory:
             temp = Path(directory).resolve()
             cl = Path(shutil.which("cl.exe") or "")
-            if not cl.is_absolute() or not cl.is_file() or tuple(part.lower() for part in cl.parts[-3:]) != ("hostx64", "x64", "cl.exe"):
-                raise RuntimeError("Missing exact native x64 MSVC compiler")
+            tools = {"X64": ("hostx64", "x64"), "ARM64": ("hostarm64", "arm64")}[entry["runner_arch"]]
+            machine = {"X64": 0x8664, "ARM64": 0xAA64}[entry["runner_arch"]]
+            if not cl.is_absolute() or not cl.is_file() or tuple(part.lower() for part in cl.parts[-3:]) != (*tools, "cl.exe"):
+                raise RuntimeError("Missing exact native MSVC compiler for " + key)
             sdk = {key: os.environ.get(key) for key in ("VCToolsVersion", "WindowsSDKVersion", "WindowsSdkDir", "VCToolsInstallDir")}
             if not all(sdk.values()) or not os.environ.get("ImageOS") or not os.environ.get("ImageVersion"):
                 raise RuntimeError("Missing MSVC/SDK/hosted image identity")
@@ -602,7 +607,7 @@ def main():
             run("compile-native-probe", [cl, *flags, source, "/Fo" + str(temp / "probe.obj"),
                 "/Fe" + str(probe), "/link", *libraries, "/INCREMENTAL:NO"], 120)
             if lpac:
-                report["inputs"] = {"probe": pe_fixture(probe.read_bytes(), False)}
+                report["inputs"] = {"probe": pe_fixture(probe.read_bytes(), False, expected_machine=machine)}
                 run("probe-dependencies", [cl.with_name("dumpbin.exe"), "/nologo", "/dependents", probe])
                 if socket_stage or peer_stage:
                     for mode in (PEER_MODES if peer_stage else SOCKET_MODES):
@@ -690,7 +695,8 @@ def main():
             run("compile-sentinel-dll", [cl, *flags, "/DCM_PAYLOAD", "/LD", source,
                 "/Fo" + str(temp / "payload.obj"), "/Fe" + str(payload), "/link",
                 "/IMPLIB:" + str(temp / "sentinel.lib"), "/INCREMENTAL:NO"], 120)
-            report["inputs"] = {"probe": pe_fixture(probe.read_bytes(), False), "payload": pe_fixture(payload.read_bytes(), True)}
+            report["inputs"] = {"probe": pe_fixture(probe.read_bytes(), False, expected_machine=machine),
+                "payload": pe_fixture(payload.read_bytes(), True, expected_machine=machine)}
             for name, path in (("probe", probe), ("payload", payload)):
                 run(name + "-dependencies", [cl.with_name("dumpbin.exe"), "/nologo", "/dependents", path])
             digest = report["inputs"]["payload"]["sha256"]
@@ -782,7 +788,7 @@ def main():
             "windows-x64-lpac-socket-availability.json" if socket_stage else
             "windows-x64-lpac-restricted-network.json" if restricted_network else
             "windows-x64-lpac-registry-restricted.json" if restricted else "windows-x64-lpac-registry-read.json" if registry else
-            "windows-x64-lpac-network.json" if lpac else "windows-x64-mechanisms.json")
+            "windows-x64-lpac-network.json" if lpac else key + "-mechanisms.json")
         (logs / name).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print("Windows V01a fixture controls passed; isolation, full dependency closure and product qualification remain NOT_RUN", flush=True)
 
@@ -952,6 +958,20 @@ def self_check():
             pass
         else:
             raise AssertionError("Cross-architecture Windows authority accepted")
+    with tempfile.TemporaryDirectory() as directory:
+        (Path(directory) / "cm-worker-preflight.json").write_text(json.dumps(arm_policy), encoding="utf-8")
+        with patch.object(record_run, "require_hosted_worker", return_value=arm), \
+                patch.object(record_run, "record") as record:
+            for stage in ("isolation-surface", "isolation-availability", "lpac-network", "unknown"):
+                with patch.dict(os.environ, {**arm_env, "RUNNER_TEMP": directory, "CM_PREFLIGHT_STAGE": stage}, clear=True):
+                    try:
+                        main(key=arm["key"])
+                    except RuntimeError as error:
+                        assert str(error) == ("Unknown Windows native mechanism stage" if stage == "unknown" else
+                            "ARM64 fixture entry requires loader-terminal only")
+                    else:
+                        raise AssertionError("Unreviewed ARM64 fixture stage executed")
+            record.assert_not_called()
     data = bytearray(1024)
     data[:2] = b"MZ"; struct.pack_into("<I", data, 60, 128)
     data[128:132] = b"PE\0\0"

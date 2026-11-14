@@ -366,10 +366,17 @@ done:
 
 int wmain(int argc, wchar_t **argv) {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#if defined(_M_ARM64) && !defined(_M_ARM64EC)
+    const USHORT expected_machine = IMAGE_FILE_MACHINE_ARM64;
+#elif defined(_M_X64) && !defined(_M_ARM64EC)
+    const USHORT expected_machine = IMAGE_FILE_MACHINE_AMD64;
+#else
+#error Native ARM64 or AMD64 MSVC is required
+#endif
     USHORT process_machine, native_machine;
     if (!IsWow64Process2(GetCurrentProcess(), &process_machine, &native_machine)
-        || process_machine != IMAGE_FILE_MACHINE_UNKNOWN || native_machine != IMAGE_FILE_MACHINE_AMD64)
-        return rejected("native-x64", ERROR_BAD_EXE_FORMAT);
+        || process_machine != IMAGE_FILE_MACHINE_UNKNOWN || native_machine != expected_machine)
+        return rejected("native-architecture", ERROR_BAD_EXE_FORMAT);
     if (argc == 2 && !wcscmp(argv[1], L"terminal-child")) return terminal_child();
     if (argc == 2 && !wcscmp(argv[1], L"conpty")) return terminal();
     if (argc == 3 && (!wcscmp(argv[1], L"pin-only") || !wcscmp(argv[1], L"pin-held"))) {
