@@ -118,7 +118,7 @@ jobs:
               for row in mac_worker["files"]]
           assert all(row["source"] in paths for row in win_worker["files"])
           win_recipe = Path("ci/worker/windows-x64-preflight.yml").read_text()
-          assert "runs-on: windows-2022" in win_recipe and "timeout-minutes: 15" in win_recipe
+          assert "runs-on: windows-2025" in win_recipe and "timeout-minutes: 15" in win_recipe
           assert win_recipe.count("cache-mode: none") == 2 and "CM_CACHE_MODE: none" in win_recipe
           assert "windows_x64_preflight.py" in win_recipe and "cancel-in-progress: false" in win_recipe
           assert "windows_isolation_preflight.py" in win_recipe and "default: loader-terminal" in win_recipe

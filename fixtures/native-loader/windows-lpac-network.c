@@ -312,22 +312,34 @@ static void fail_restriction(const char *role, const char *operation, DWORD erro
     fail(gate, error);
 }
 
+static TOKEN_GROUPS *logon_info(HANDLE token) {
+    TOKEN_GROUPS *logon = token_info(token, TokenLogonSid);
+    if (logon->GroupCount != 1 || !IsValidSid(logon->Groups[0].Sid) ||
+            (logon->Groups[0].Attributes & SE_GROUP_LOGON_ID) != SE_GROUP_LOGON_ID ||
+            !(logon->Groups[0].Attributes & SE_GROUP_ENABLED) ||
+            (logon->Groups[0].Attributes & SE_GROUP_USE_FOR_DENY_ONLY))
+        fail("logon-sid-policy", ERROR_INVALID_SID);
+    return logon;
+}
+
 static void inspect_restrictions(HANDLE token, const char *role) {
     TOKEN_GROUPS *sids = token_info(token, TokenRestrictedSids);
     TOKEN_PRIVILEGES *privileges = token_info(token, TokenPrivileges);
     TOKEN_USER *user = token_info(token, TokenUser);
     TOKEN_DEFAULT_DACL *defaults = token_info(token, TokenDefaultDacl);
-    BOOL seen[3] = {0};
+    TOKEN_GROUPS *logon = catalog_descendant ? logon_info(token) : NULL;
+    BOOL seen[4] = {0};
     BOOL private_default = FALSE;
     LUID traverse;
-    if (sids->GroupCount != 3 || !EqualSid(user->User.Sid, owner->User.Sid))
+    if (sids->GroupCount != (catalog_descendant ? 4u : 3u) || !EqualSid(user->User.Sid, owner->User.Sid))
         fail_restriction(role, "identity-or-count", ERROR_INVALID_DATA);
     for (DWORD i = 0; i < sids->GroupCount; ++i) {
         PSID sid = sids->Groups[i].Sid;
         int index = IsWellKnownSid(sid, WinWorldSid) ? 0 :
             (installer_files ? EqualSid(sid, installer_sid) :
                 IsWellKnownSid(sid, restricted_code_files ? WinRestrictedCodeSid : WinBuiltinUsersSid)) ? 1 :
-            EqualSid(sid, private_sid) ? 2 : -1;
+            EqualSid(sid, private_sid) ? 2 :
+            (catalog_descendant && EqualSid(sid, logon->Groups[0].Sid)) ? 3 : -1;
         if (index < 0 || seen[index] || (sids->Groups[i].Attributes & SE_GROUP_USE_FOR_DENY_ONLY))
             fail_restriction(role, "sid-policy", ERROR_INVALID_DATA);
         seen[index] = TRUE;
@@ -361,7 +373,7 @@ static void inspect_restrictions(HANDLE token, const char *role) {
         }
     }
     if (!private_default) fail_restriction(role, "default-dacl-private", ERROR_INVALID_ACL);
-    free(sids); free(privileges); free(user); free(defaults);
+    free(sids); free(privileges); free(user); free(defaults); free(logon);
 }
 
 static void prepare_restricted_token(void) {
@@ -395,12 +407,17 @@ static void prepare_restricted_token(void) {
             !CreateWellKnownSid(restricted_code_files ? WinRestrictedCodeSid : WinBuiltinUsersSid,
                 NULL, system_sid, &system_size))
         fail("restricted-well-known-sids", GetLastError());
-    SID_AND_ATTRIBUTES sids[3] = {{world, 0}, {installer_files ? installer_sid : system_sid, 0}, {private_sid, 0}};
-    for (DWORD i = 0; i < ARRAYSIZE(sids); ++i)
+    TOKEN_GROUPS *logon = catalog_descendant ? logon_info(token) : NULL;
+    // The logon SID permits session kernel objects without granting the user's file SID.
+    SID_AND_ATTRIBUTES sids[4] = {{world, 0}, {installer_files ? installer_sid : system_sid, 0},
+        {private_sid, 0}, {logon ? logon->Groups[0].Sid : NULL, 0}};
+    DWORD sid_count = catalog_descendant ? 4u : 3u;
+    for (DWORD i = 0; i < sid_count; ++i)
         if (!IsValidSid(sids[i].Sid)) fail("restricted-input-sid", ERROR_INVALID_SID);
-    if (!CreateRestrictedToken(token, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL, 3, sids, &restricted_base)) {
+    if (!CreateRestrictedToken(token, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL, sid_count, sids, &restricted_base)) {
         DWORD creation_error = GetLastError();
-        fprintf(stderr, "Restricted-token inputs: valid_sids=3; attributes=0; flags=%lu\n", (DWORD)DISABLE_MAX_PRIVILEGE);
+        fprintf(stderr, "Restricted-token inputs: valid_sids=%lu; attributes=0; flags=%lu\n",
+            sid_count, (DWORD)DISABLE_MAX_PRIVILEGE);
         // Failure-only controls isolate SID compatibility without running a weaker token.
         for (DWORD i = 0; i < 2; ++i) {
             HANDLE diagnostic = NULL;
@@ -418,6 +435,7 @@ static void prepare_restricted_token(void) {
         CloseHandle(token);
         fail("restricted-token-create", creation_error);
     }
+    free(logon);
     CloseHandle(token);
     TOKEN_DEFAULT_DACL *defaults = token_info(restricted_base, TokenDefaultDacl);
     if (!defaults->DefaultDacl || !IsValidAcl(defaults->DefaultDacl)) fail("base-default-dacl", ERROR_INVALID_ACL);
