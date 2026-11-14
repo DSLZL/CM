@@ -162,9 +162,10 @@ jobs:
           assert win_arm_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'isolation-availability'") == 1
           assert "if: env.CM_PREFLIGHT_STAGE != 'isolation-surface'" in win_arm_recipe
           assert "if: env.CM_PREFLIGHT_STAGE == 'loader-terminal'" in win_arm_recipe
-          assert "-notin @('isolation-surface', 'isolation-availability', 'loader-terminal', 'isolation-process', 'isolation-network')" in win_arm_recipe
+          assert "-notin @('isolation-surface', 'isolation-availability', 'loader-terminal', 'isolation-process', 'isolation-network', 'isolation-inputs')" in win_arm_recipe
           assert win_arm_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'isolation-process'") == 1
           assert win_arm_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'isolation-network'") == 1
+          assert win_arm_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'isolation-inputs'") == 1
           assert "fixtures/native-loader/windows-psec-child.rs" in paths
           assert "windows_isolation_preflight.main(key='windows-arm64')" in win_arm_recipe
           assert "windows_x64_preflight.main(key='windows-arm64')" in win_arm_recipe

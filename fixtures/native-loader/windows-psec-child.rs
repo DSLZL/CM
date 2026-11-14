@@ -18,7 +18,7 @@ use std::path::Path;
 use std::process::{self, Command};
 use std::time::Duration;
 use windows_core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::WAIT_OBJECT_0;
+use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
     SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -48,6 +48,77 @@ fn network_error(error: Option<std::io::Error>) -> Value {
     }
 }
 
+fn compiler_creation_error(path: &Path, search: bool, work: &Path, job: Option<HANDLE>) -> u32 {
+    let application: Vec<u16> = text(path).encode_utf16().chain([0]).collect();
+    let name = if search { path.file_name().unwrap().to_str().unwrap().to_owned() } else { text(path) };
+    let mut command: Vec<u16> = format!("\"{name}\" --version").encode_utf16().chain([0]).collect();
+    let cwd: Vec<u16> = text(work).encode_utf16().chain([0]).collect();
+    let mut startup = STARTUPINFOW::default();
+    startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    let mut pi = PROCESS_INFORMATION::default();
+    let created = unsafe { CreateProcessW(
+        if search { PCWSTR::null() } else { PCWSTR(application.as_ptr()) },
+        Some(PWSTR(command.as_mut_ptr())), None, None, false,
+        CREATE_SUSPENDED | CREATE_NO_WINDOW, None, PCWSTR(cwd.as_ptr()), &startup, &mut pi,
+    ) };
+    if let Err(error) = created {
+        let code = error.code().0 as u32;
+        return if code == 0x80070005 { 5 } else { code };
+    }
+    let process_owner = unsafe { OwnedHandle::from_raw_handle(pi.hProcess.0) };
+    let thread_owner = unsafe { OwnedHandle::from_raw_handle(pi.hThread.0) };
+    let assignment = job.map(|job| unsafe { AssignProcessToJobObject(job, pi.hProcess) }).transpose();
+    unsafe { TerminateProcess(pi.hProcess, 97) }.expect("terminate suspended compiler control without executing it");
+    assert_eq!(unsafe { WaitForSingleObject(pi.hProcess, 5000) }, WAIT_OBJECT_0);
+    drop(thread_owner);
+    drop(process_owner);
+    assignment.expect("assign ordinary compiler control to owned Job");
+    0
+}
+
+fn input_controls(work: &Path, inputs: &Value, denied: bool, job: Option<HANDLE>, role: &str) -> Value {
+    let reads = inputs["reads"].as_array().unwrap();
+    let tools = inputs["tools"].as_array().unwrap();
+    assert_eq!(reads.len(), 3);
+    assert_eq!(tools.len(), 3);
+    let expected = if denied { 5 } else { 0 };
+    let mut trace = fs::File::create(work.join(format!("{role}.inputs.log"))).unwrap();
+    let mut read_errors = Vec::new();
+    for (index, target) in reads.iter().enumerate() {
+        let aliases = [Path::new(target.as_str().unwrap()).to_owned(),
+            work.join(format!("read{index}-hard")), work.join(format!("read{index}-link"))];
+        for (method, path) in aliases.iter().enumerate() {
+            let error = match fs::File::open(path).and_then(|mut file| file.read_exact(&mut [0u8; 1])) {
+                Ok(()) => 0,
+                Err(error) => u32::try_from(error.raw_os_error().unwrap_or(-1)).unwrap_or(u32::MAX),
+            };
+            writeln!(trace, "read index={index} method={method} error={error}").unwrap();
+            assert_eq!(error, expected, "source/cache/SDK read index={index} method={method}");
+            read_errors.push(error);
+        }
+    }
+    let previous_path = std::env::var_os("PATH");
+    let mut compiler_errors = Vec::new();
+    for (index, target) in tools.iter().enumerate() {
+        let target = Path::new(target.as_str().unwrap());
+        // Windows environment updates are thread-safe; restore PATH after the control.
+        unsafe { std::env::set_var("PATH", target.parent().unwrap()); }
+        for method in 0..3 {
+            let alias = work.join(format!("tool{index}-link.exe"));
+            let path = if method == 2 { alias.as_path() } else { target };
+            let error = compiler_creation_error(path, method == 1, work, job);
+            writeln!(trace, "compiler index={index} method={method} error={error}").unwrap();
+            assert_eq!(error, expected, "compiler creation index={index} method={method}");
+            compiler_errors.push(error);
+        }
+    }
+    unsafe {
+        if let Some(previous) = previous_path { std::env::set_var("PATH", previous); } else { std::env::remove_var("PATH"); }
+    }
+    json!({"read_count": 9, "read_errors": read_errors, "compiler_creation_count": 9,
+        "compiler_creation_errors": compiler_errors, "compiler_executed": false})
+}
+
 fn network_controls(work: &Path, role: &str) -> Value {
     let bytes = fs::read(work.join("network.json")).unwrap();
     assert!(bytes.len() <= 4096);
@@ -58,6 +129,7 @@ fn network_controls(work: &Path, role: &str) -> Value {
         .unwrap_err().raw_os_error().unwrap();
     assert_eq!(audit_read_error, 5);
     assert_eq!(audit_write_open_error, 5);
+    let input_result = config.get("inputs").map(|inputs| input_controls(work, inputs, true, None, role));
     let host: Ipv4Addr = config["host"].as_str().unwrap().parse().unwrap();
     assert!(!host.is_loopback() && !host.is_unspecified() && !host.is_link_local());
     let port = |name: &str| u16::try_from(config[name].as_u64().unwrap()).unwrap();
@@ -100,8 +172,10 @@ fn network_controls(work: &Path, role: &str) -> Value {
         assert!(denied(&error), "forbidden UDP endpoint {endpoint}: {error}");
         udp_errors.push(error);
     }
-    json!({"provider": true, "tcp_errors": tcp_errors, "udp_errors": udp_errors,
-        "audit_read_error": audit_read_error, "audit_write_open_error": audit_write_open_error})
+    let mut result = json!({"provider": true, "tcp_errors": tcp_errors, "udp_errors": udp_errors,
+        "audit_read_error": audit_read_error, "audit_write_open_error": audit_write_open_error});
+    if let Some(inputs) = input_result { result["inputs"] = inputs; }
+    result
 }
 
 fn child(root: &Path, role: &str, network_probe: bool) -> ! {
@@ -184,6 +258,11 @@ fn broker(root: &Path, network_probe: bool) {
         network.allowed_appcontainer_peer = Some("MXC-Loopback".to_owned());
         spec.capabilities = Some("privateNetworkClientServer,networkLoopback".to_owned());
         spec.fs_deny.as_mut().unwrap().push(text(Path::new(config["audit_dir"].as_str().unwrap())));
+        if let Some(inputs) = config.get("inputs") {
+            for path in inputs["deny_roots"].as_array().unwrap() {
+                spec.fs_deny.as_mut().unwrap().push(text(Path::new(path.as_str().unwrap())));
+            }
+        }
     } else {
         network.egress = Some(Box::new(egress));
     }
@@ -217,6 +296,8 @@ fn broker(root: &Path, network_probe: bool) {
         )
     }
     .expect("set kill-on-close before creating a child");
+    let inputs_before = network_config.as_ref().and_then(|config| config.get("inputs"))
+        .map(|inputs| input_controls(&work, inputs, false, Some(job), "outside-before"));
     let exe_wide: Vec<u16> = text(&exe).encode_utf16().chain([0]).collect();
     let child_mode = if network_probe { "--network-child" } else { "--child" };
     let mut command: Vec<u16> = format!("\"{}\" {child_mode} \"{}\"", text(&exe), text(root))
@@ -268,7 +349,7 @@ fn broker(root: &Path, network_probe: bool) {
     unsafe { GetExitCodeProcess(pi.hProcess, &mut exit) }.unwrap();
     if exit != 37 {
         for role in ["child", "descendant"] {
-            for kind in ["failure", "network"] {
+            for kind in ["failure", "network", "inputs"] {
                 if let Ok(detail) = fs::read_to_string(work.join(format!("{role}.{kind}.log"))) {
                     eprintln!("{role} {kind}: {}", detail.chars().take(4096).collect::<String>());
                 }
@@ -276,6 +357,8 @@ fn broker(root: &Path, network_probe: bool) {
         }
     }
     assert_eq!(exit, 37, "real PSEC child did not finish file controls");
+    let inputs_after = network_config.as_ref().and_then(|config| config.get("inputs"))
+        .map(|inputs| input_controls(&work, inputs, false, Some(job), "outside-after"));
     drop(thread_owner);
     drop(process_owner);
     drop(job_owner);
@@ -320,6 +403,10 @@ fn broker(root: &Path, network_probe: bool) {
         result["gate"] = json!("native-psec-provider-network-control");
         result["network"] = json!("passed_provider_and_canary_controls");
         result["network_controls"] = json!({"child": child["network"], "descendant": descendant["network"]});
+        if let Some(before) = inputs_before {
+            result["gate"] = json!("native-psec-precompiled-input-control");
+            result["input_baselines"] = json!({"before": before, "after": inputs_after.unwrap()});
+        }
     }
     println!("{result}");
 }

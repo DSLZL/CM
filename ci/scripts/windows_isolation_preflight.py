@@ -12,6 +12,7 @@ import shutil
 import ipaddress
 import socket
 import socketserver
+import stat
 import tempfile
 import threading
 
@@ -142,7 +143,46 @@ def network_observation(events, config, value):
         "exact_observation": True, "remote_internet": "not_run", "inbound_isolation": "not_run"}
 
 
-def network_controls(run, probe, root, logs):
+def input_record(text):
+    if len(text) > 8192:
+        raise RuntimeError("Oversized PSEC input fixture record")
+    value = json.loads(text)
+    if not isinstance(value, dict) or value.get("gate") != "native-psec-precompiled-input-control" or \
+            not isinstance(value.get("input_baselines"), dict) or set(value["input_baselines"]) != {"before", "after"} or \
+            not isinstance(value.get("network_controls"), dict) or set(value["network_controls"]) != {"child", "descendant"}:
+        raise RuntimeError("Missing PSEC input gate identities/baselines")
+
+    def check(record, expected):
+        exact_record(json.dumps(record), {"read_count": 9, "read_errors": [expected] * 9,
+            "compiler_creation_count": 9, "compiler_creation_errors": [expected] * 9, "compiler_executed": False})
+        if any(type(error) is not int for name in ("read_errors", "compiler_creation_errors") for error in record[name]):
+            raise RuntimeError("Invalid native input error type")
+
+    stripped = {}
+    for role, record in value["network_controls"].items():
+        if not isinstance(record, dict) or "inputs" not in record:
+            raise RuntimeError("Missing real inherited input controls")
+        check(record["inputs"], 5)
+        stripped[role] = {name: item for name, item in record.items() if name != "inputs"}
+    for baseline in value["input_baselines"].values():
+        check(baseline, 0)
+    base = {name: item for name, item in value.items() if name != "input_baselines"}
+    network_record(json.dumps({**base, "gate": "native-psec-provider-network-control", "network_controls": stripped}))
+    return value
+
+
+def controlled_probe(directory, expected_sha):
+    path = directory / "psec-probe.exe"
+    if list(directory.iterdir()) != [path]:
+        raise RuntimeError("Controlled runtime must contain exactly its precompiled probe")
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or getattr(info, "st_file_attributes", 0) & 0x400 or \
+            hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha:
+        raise RuntimeError("Runtime probe must be an independent regular file with its verified bytes")
+    return {"path": str(path), "sha256": expected_sha, "bytes": info.st_size, "link_count": 1, "entry_count": 1}
+
+
+def network_controls(run, probe, root, logs, *, inputs=None):
     response = b"HTTP/1.0 200 OK\r\nContent-Length: 14\r\nConnection: close\r\n\r\ncm-provider-ok"
     events, lock = [], threading.Lock()
     observer = {"status": "running"}
@@ -209,6 +249,17 @@ def network_controls(run, probe, root, logs):
                     raise RuntimeError("Provider and canary ports must differ")
                 observer["config"] = config
                 root.mkdir()
+                if inputs is not None:
+                    config["inputs"] = inputs
+                    work = root / "work"
+                    work.mkdir()
+                    for index, target in enumerate(inputs["reads"]):
+                        os.link(target, work / f"read{index}-hard")
+                        (work / f"read{index}-link").symlink_to(target)
+                    for index, target in enumerate(inputs["tools"]):
+                        (work / f"tool{index}-link.exe").symlink_to(target)
+                if len(json.dumps(config).encode("utf-8")) > 4096:
+                    raise RuntimeError("Oversized bounded PSEC fixture configuration")
                 (root / "network.json").write_text(json.dumps(config), encoding="utf-8")
                 (logs / "network-config.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
                 for server in servers:
@@ -244,7 +295,7 @@ def network_controls(run, probe, root, logs):
                 baseline("before")
                 try:
                     _, text = run("native-psec-provider-network-controls", [probe, "--network", root], 25)
-                    value = network_record(text)
+                    value = (input_record if inputs is not None else network_record)(text)
                 finally:
                     baseline("after")
             observer.update(network_observation(events, config, value), status="passed", audit_bytes_preserved=True)
@@ -278,11 +329,12 @@ def main(*, key=KEY):
     authority(json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text()), entry, os.environ, key=key)
     target = entry["target"]
     stage = os.environ.get("CM_PREFLIGHT_STAGE")
-    if stage not in ("isolation-availability", "isolation-process", "isolation-network") or \
+    if stage not in ("isolation-availability", "isolation-process", "isolation-network", "isolation-inputs") or \
             Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
         raise RuntimeError("Isolation probe requires its fixed stage and recorded source checkout")
-    network_probe = stage == "isolation-network"
-    process_probe = stage in ("isolation-process", "isolation-network")
+    input_probe = stage == "isolation-inputs"
+    network_probe = stage in ("isolation-network", "isolation-inputs")
+    process_probe = stage in ("isolation-process", "isolation-network", "isolation-inputs")
     if process_probe and key != "windows-arm64":
         raise RuntimeError("Real PSEC process fixture requires native Windows ARM64")
     logs = Path(os.environ["CM_CI_LOG_DIR"]).resolve()
@@ -291,6 +343,7 @@ def main(*, key=KEY):
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
     report = {"schema_version": 1, "status": "running", "scope":
+        "V01f-native-psec-precompiled-input-controls-only" if input_probe else
         "V01e-native-psec-provider-network-controls-only" if network_probe else
         "V01d-native-psec-process-file-controls-only" if process_probe else "V01b-native-isolation-availability-only",
         "platform": key, "target": target, "source_sha": os.environ["CM_SOURCE_SHA"],
@@ -384,9 +437,54 @@ def main(*, key=KEY):
             probe = temp / "target" / target / "debug/examples" / (name + ".exe")
             report["native_probe"] = pe_fixture(probe.read_bytes(), False,
                 expected_machine={"X64": 0x8664, "ARM64": 0xAA64}[entry["runner_arch"]])
+            inputs, identities = None, []
+            if input_probe:
+                tools = [cl]
+                for name in ("rustc", "cargo"):
+                    _, path = run("sdk-" + name + "-path", ["rustup", "which", "--toolchain", toolchain, name])
+                    tool = Path(path)
+                    if not tool.is_absolute() or not tool.is_file() or tool.name.lower() != name + ".exe":
+                        raise RuntimeError("Missing exact installed native tool: " + name)
+                    tools.append(tool.resolve())
+                cargo_home = Path(os.environ.get("CARGO_HOME") or Path.home() / ".cargo").resolve()
+                cached = list(cargo_home.glob("registry/src/*/serde-1.0.228/Cargo.toml"))
+                if len(cached) != 1:
+                    raise RuntimeError("Missing unique actual downloaded Cargo cache canary")
+                reads = [root / "crates/cm/src/lib.rs", cached[0], sdk / "src/backends/appcontainer/common/Cargo.toml"]
+                denied = [Path(os.environ["GITHUB_WORKSPACE"]), sdk, cargo_home,
+                    Path(os.environ.get("RUSTUP_HOME") or Path.home() / ".rustup"),
+                    Path(os.environ["ProgramFiles"]), Path(os.environ["ProgramFiles(x86)"]),
+                    Path(os.environ["SystemRoot"]) / "Microsoft.NET", *(tool.parent for tool in tools)]
+                if os.environ.get("RUNNER_TOOL_CACHE"):
+                    denied.append(Path(os.environ["RUNNER_TOOL_CACHE"]))
+                denied_roots = []
+                for path in sorted({path.resolve() for path in denied if path.exists()}, key=lambda path: len(path.parts)):
+                    if not any(path.is_relative_to(parent) for parent in denied_roots):
+                        denied_roots.append(path)
+                inputs = {"reads": [str(path.resolve(strict=True)) for path in reads],
+                    "tools": [str(path) for path in tools], "deny_roots": sorted(str(path) for path in denied_roots)}
+                for path in inputs["reads"] + inputs["tools"]:
+                    source = Path(path)
+                    if not source.is_file() or source.stat().st_size == 0:
+                        raise RuntimeError("Ordinary input/tool canary is not a real nonempty file")
+                    with source.open("rb") as stream:
+                        identities.append({"path": path, "sha256": hashlib.file_digest(stream, "sha256").hexdigest()})
+                report["input_control_identities"] = identities
+                report["input_control_spec"] = inputs
+                runtime = temp / "runtime-inputs"
+                runtime.mkdir()
+                candidate = runtime / "psec-probe.exe"
+                shutil.copyfile(probe, candidate)
+                report["controlled_runtime_input"] = controlled_probe(runtime, report["native_probe"]["sha256"])
+                probe = candidate
             if network_probe:
-                report["native_provider_network_controls"] = network_controls(run, probe, temp / "network-controls", logs)
-                report["status"] = "passed_provider_network_controls_only"
+                result = network_controls(run, probe, temp / "network-controls", logs, inputs=inputs)
+                for identity in identities:
+                    with Path(identity["path"]).open("rb") as stream:
+                        if hashlib.file_digest(stream, "sha256").hexdigest() != identity["sha256"]:
+                            raise RuntimeError("Actual source/cache/tool bytes changed")
+                report["native_input_controls" if input_probe else "native_provider_network_controls"] = result
+                report["status"] = "passed_precompiled_input_controls_only" if input_probe else "passed_provider_network_controls_only"
             elif process_probe:
                 _, text = run("native-psec-process-file-controls", [probe, "--broker", temp / "process-controls"], 25)
                 report["native_process_file_controls"] = process_record(text)
@@ -516,7 +614,7 @@ def self_check():
             raise AssertionError("Incomplete or unbound PSEC process control accepted")
     with tempfile.TemporaryDirectory() as directory:
         (Path(directory) / "cm-worker-preflight.json").write_text("{}")
-        for stage in ("isolation-process", "isolation-network"):
+        for stage in ("isolation-process", "isolation-network", "isolation-inputs"):
             env = {"RUNNER_TEMP": directory, "CM_SOURCE_DIR": str(Path(__file__).resolve().parents[2]),
                 "CM_PREFLIGHT_STAGE": stage}
             with patch.dict(os.environ, env), patch.object(record_run, "require_hosted_worker",
@@ -574,6 +672,61 @@ def self_check():
             pass
         else:
             raise AssertionError("Missing/extra/forbidden/unbound observer traffic accepted")
+    denied_inputs = {"read_count": 9, "read_errors": [5] * 9, "compiler_creation_count": 9,
+        "compiler_creation_errors": [5] * 9, "compiler_executed": False}
+    ordinary_inputs = {**denied_inputs, "read_errors": [0] * 9, "compiler_creation_errors": [0] * 9}
+    input_value = {**network, "gate": "native-psec-precompiled-input-control",
+        "network_controls": {role: {**controls, "inputs": denied_inputs} for role in ("child", "descendant")},
+        "input_baselines": {"before": ordinary_inputs, "after": ordinary_inputs}}
+    assert input_record(json.dumps(input_value)) == input_value
+    for change in ({"gate": "native-psec-provider-network-control"}, {"input_baselines": {}},
+            {"input_baselines": {"before": ordinary_inputs}}, {"child_pid": 3},
+            {"input_baselines": {"before": {**ordinary_inputs, "read_errors": [False] * 9}, "after": ordinary_inputs}},
+            *({"network_controls": {"child": {**controls, "inputs": {**denied_inputs, **bad}},
+                                    "descendant": {**controls, "inputs": denied_inputs}}} for bad in
+                ({"read_count": 8}, {"read_errors": [5] * 8}, {"read_errors": [0] * 9},
+                 {"compiler_creation_count": True}, {"compiler_creation_errors": [2] * 9},
+                 {"compiler_executed": True}, {"extra": True})),
+            {"network_controls": {"child": controls, "descendant": {**controls, "inputs": denied_inputs}}},
+            {"extra": True}):
+        try:
+            input_record(json.dumps({**input_value, **change}))
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Missing/allowed/incorrect input/tool controls accepted")
+    with tempfile.TemporaryDirectory() as directory:
+        temp = Path(directory)
+        runtime = temp / "runtime"
+        runtime.mkdir()
+        candidate = runtime / "psec-probe.exe"
+        candidate.write_bytes(b"precompiled-probe")
+        expected = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        assert controlled_probe(runtime, expected)["entry_count"] == 1
+        for attack in ("hash", "extra", "symlink", "hardlink"):
+            if attack == "hash":
+                candidate.write_bytes(b"changed")
+            elif attack == "extra":
+                (runtime / "source.rs").write_text("source")
+            else:
+                candidate.unlink()
+                source = temp / (attack + ".exe")
+                source.write_bytes(b"precompiled-probe")
+                if attack == "symlink":
+                    candidate.symlink_to(source)
+                else:
+                    os.link(source, candidate)
+            try:
+                controlled_probe(runtime, expected)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Untrusted runtime input accepted: " + attack)
+            if attack == "extra":
+                (runtime / "source.rs").unlink()
+            if candidate.exists() or candidate.is_symlink():
+                candidate.unlink()
+            candidate.write_bytes(b"precompiled-probe")
 
 
 if __name__ == "__main__":
