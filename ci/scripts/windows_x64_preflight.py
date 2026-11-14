@@ -967,8 +967,8 @@ def self_check():
                     try:
                         main(key=arm["key"])
                     except RuntimeError as error:
-                        assert str(error) == ("Unknown Windows native mechanism stage" if stage == "unknown" else
-                            "ARM64 fixture entry requires loader-terminal only")
+                        assert str(error) == ("ARM64 fixture entry requires loader-terminal only" if stage == "lpac-network" else
+                            "Unknown Windows native mechanism stage")
                     else:
                         raise AssertionError("Unreviewed ARM64 fixture stage executed")
             record.assert_not_called()
