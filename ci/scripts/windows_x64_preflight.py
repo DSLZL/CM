@@ -183,6 +183,8 @@ def restricted_appcontainer_files_record(text, *, policy="users"):
                     private_catalog_dacl_denials=10, private_catalog_create_denials=10)
                 if descendant:
                     expected.update(gate="restricted-installer-private-descendant-control",
+                        restricting_sid_count=5,
+                        restricting_sid_policy="world-trusted-installer-private-nt-logon-restricted-code",
                         outside_token_checks=4, outside_restricted_token_checks=3, child_winsock_startup_checks=4,
                         startup_view_restorations=4, socket_view_restorations=5,
                         inherited_catalog_write_denials=4, real_catalog_read_denials=30,
@@ -1169,7 +1171,9 @@ def self_check():
             "outside_connect_error": 10060, "outside_unexpected_accepts": 0,
             "outside_denial_observation": "bounded_timeout_3_seconds", "outside_listener_post_positive": True},
         {**files, "gate": "restricted-installer-private-descendant-control",
-            "restricting_sid_policy": "world-trusted-installer-private-nt", "system_sid_group_absence_checked": True,
+            "restricting_sid_count": 5,
+            "restricting_sid_policy": "world-trusted-installer-private-nt-logon-restricted-code",
+            "system_sid_group_absence_checked": True,
             "outside_token_checks": 4, "outside_restricted_token_checks": 3, "child_winsock_startup_checks": 4,
             "private_registry_view": "winsock-provider-inputs-scoped", "catalog_copy_bounded": True,
             "copied_registry_root_count": 5, "real_hklm_restored_before_network_io": True,
@@ -1208,6 +1212,9 @@ def self_check():
                 changed += [{**record, key: item} for item in (not value, int(value))]
             elif type(value) is int:
                 changed += [{**record, key: item} for item in (True, float(value), str(value), value + 1, value - 1)]
+        if record["gate"] == "restricted-installer-private-descendant-control":
+            changed.append({**record, "restricting_sid_count": 3,
+                "restricting_sid_policy": "world-trusted-installer-private-nt"})
         changed += [{**record, key: value} for key, value in (("status", "observed"),
             ("gate", "restricted-appcontainer-network-control"), ("restricting_sid_policy", "world-users-owner"),
             ("capability", "registryRead"), ("network", "not_run" if record["network"] == "pass" else "pass"),

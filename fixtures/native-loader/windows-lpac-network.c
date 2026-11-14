@@ -328,10 +328,10 @@ static void inspect_restrictions(HANDLE token, const char *role) {
     TOKEN_USER *user = token_info(token, TokenUser);
     TOKEN_DEFAULT_DACL *defaults = token_info(token, TokenDefaultDacl);
     TOKEN_GROUPS *logon = catalog_descendant ? logon_info(token) : NULL;
-    BOOL seen[4] = {0};
+    BOOL seen[5] = {0};
     BOOL private_default = FALSE;
     LUID traverse;
-    if (sids->GroupCount != (catalog_descendant ? 4u : 3u) || !EqualSid(user->User.Sid, owner->User.Sid))
+    if (sids->GroupCount != (catalog_descendant ? 5u : 3u) || !EqualSid(user->User.Sid, owner->User.Sid))
         fail_restriction(role, "identity-or-count", ERROR_INVALID_DATA);
     for (DWORD i = 0; i < sids->GroupCount; ++i) {
         PSID sid = sids->Groups[i].Sid;
@@ -339,7 +339,8 @@ static void inspect_restrictions(HANDLE token, const char *role) {
             (installer_files ? EqualSid(sid, installer_sid) :
                 IsWellKnownSid(sid, restricted_code_files ? WinRestrictedCodeSid : WinBuiltinUsersSid)) ? 1 :
             EqualSid(sid, private_sid) ? 2 :
-            (catalog_descendant && EqualSid(sid, logon->Groups[0].Sid)) ? 3 : -1;
+            (catalog_descendant && EqualSid(sid, logon->Groups[0].Sid)) ? 3 :
+            (catalog_descendant && IsWellKnownSid(sid, WinRestrictedCodeSid)) ? 4 : -1;
         if (index < 0 || seen[index] || (sids->Groups[i].Attributes & SE_GROUP_USE_FOR_DENY_ONLY))
             fail_restriction(role, "sid-policy", ERROR_INVALID_DATA);
         seen[index] = TRUE;
@@ -408,10 +409,14 @@ static void prepare_restricted_token(void) {
                 NULL, system_sid, &system_size))
         fail("restricted-well-known-sids", GetLastError());
     TOKEN_GROUPS *logon = catalog_descendant ? logon_info(token) : NULL;
-    // The logon SID permits session kernel objects without granting the user's file SID.
-    SID_AND_ATTRIBUTES sids[4] = {{world, 0}, {installer_files ? installer_sid : system_sid, 0},
-        {private_sid, 0}, {logon ? logon->Groups[0].Sid : NULL, 0}};
-    DWORD sid_count = catalog_descendant ? 4u : 3u;
+    BYTE restricted_code[SECURITY_MAX_SID_SIZE];
+    DWORD restricted_code_size = sizeof(restricted_code);
+    if (catalog_descendant && !CreateWellKnownSid(WinRestrictedCodeSid, NULL,
+            restricted_code, &restricted_code_size)) fail("restricted-code-sid", GetLastError());
+    // Compare Chromium's RestrictedCode/logon combination without adding normal groups.
+    SID_AND_ATTRIBUTES sids[5] = {{world, 0}, {installer_files ? installer_sid : system_sid, 0},
+        {private_sid, 0}, {logon ? logon->Groups[0].Sid : NULL, 0}, {restricted_code, 0}};
+    DWORD sid_count = catalog_descendant ? 5u : 3u;
     for (DWORD i = 0; i < sid_count; ++i)
         if (!IsValidSid(sids[i].Sid)) fail("restricted-input-sid", ERROR_INVALID_SID);
     if (!CreateRestrictedToken(token, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL, sid_count, sids, &restricted_base)) {
@@ -1810,7 +1815,7 @@ int wmain(int argc, wchar_t **argv) {
     if (restricted_mode) {
         printf("{\"status\":\"pass\",\"gate\":\"%s\","
             "\"outside_token_checks\":%u,\"outside_restricted_token_checks\":%u,"
-            "\"restricting_sid_count\":3,\"restricting_sid_policy\":\"%s\","
+            "\"restricting_sid_count\":%u,\"restricting_sid_policy\":\"%s\","
             "\"private_sid_group_absence_checked\":true,\"private_sid_file_grants\":%lu,"
             "\"private_sid_default_dacl_checked\":true,"
             "\"privilege_allowlist_checked\":true,\"capability_count\":%u%s,"
@@ -1828,7 +1833,9 @@ int wmain(int argc, wchar_t **argv) {
                 file_controls_stage ? "restricted-appcontainer-files-control" : ordinary_restricted ? "restricted-appcontainer-network-control" :
                 restricted_network ? "lpac-restricted-network-control" : "lpac-restricted-registry-control",
             catalog_descendant ? 4u : 3u, catalog_descendant ? 3u : 2u,
-            installer_files ? "world-trusted-installer-private-nt" :
+            catalog_descendant ? 5u : 3u,
+            catalog_descendant ? "world-trusted-installer-private-nt-logon-restricted-code" :
+                installer_files ? "world-trusted-installer-private-nt" :
                 restricted_code_files ? "world-restricted-code-private-nt" : "world-users-private-nt",
             private_sid_file_grants, ordinary_restricted ? 0u : 1u,
             ordinary_restricted ? "" : ",\"capability\":\"registryRead\"",
