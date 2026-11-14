@@ -78,7 +78,7 @@ def process_record(text):
         "gate": "native-psec-process-file-control", "policy": "psec-only", "child_exit_code": 37,
         "descendant_exit_code": 38, "file_positive_count": 2, "child_read_error": 5,
         "child_write_open_error": 5, "descendant_read_error": 5, "descendant_write_open_error": 5,
-        "protected_bytes_preserved": True, "ordinary_file_baselines": 2, "environment_allowlist_count": 4,
+        "protected_bytes_preserved": True, "ordinary_file_baselines": 2, "environment_allowlist_count": 5,
         "environment_canaries_absent": True, "inherited_handle_count": 0,
         "suspended_job_assignment_checked": True, "legacy_fallback": False,
         "network": "not_run", "full_isolation": "not_run"})
@@ -320,7 +320,7 @@ def self_check():
         "child_pid": 2, "descendant_pid": 3, "child_exit_code": 37, "descendant_exit_code": 38,
         "file_positive_count": 2, "child_read_error": 5, "child_write_open_error": 5,
         "descendant_read_error": 5, "descendant_write_open_error": 5, "protected_bytes_preserved": True,
-        "ordinary_file_baselines": 2, "environment_allowlist_count": 4, "environment_canaries_absent": True,
+        "ordinary_file_baselines": 2, "environment_allowlist_count": 5, "environment_canaries_absent": True,
         "inherited_handle_count": 0, "suspended_job_assignment_checked": True, "legacy_fallback": False,
         "network": "not_run", "full_isolation": "not_run"}
     assert process_record(json.dumps(process)) == process
@@ -328,7 +328,8 @@ def self_check():
             {"descendant_pid": 1 << 32}, {"child_exit_code": True}, {"descendant_exit_code": 0},
             {"child_read_error": 0}, {"descendant_write_open_error": 0}, {"legacy_fallback": True},
             {"policy": "legacy"}, {"inherited_handle_count": False}, {"inherited_handle_count": 1},
-            {"environment_canaries_absent": False}, {"protected_bytes_preserved": False},
+            {"environment_allowlist_count": 4}, {"environment_canaries_absent": False},
+            {"protected_bytes_preserved": False},
             {"network": "pass"}, {"full_isolation": "pass"}, {"extra": True}):
         try:
             process_record(json.dumps({**process, **change}))

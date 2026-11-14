@@ -53,6 +53,7 @@ fn child(root: &Path, role: &str) -> ! {
     assert_eq!(write_error, 5, "protected write-open was not denied");
     assert!(std::env::var_os("CM_SOURCE_DIR").is_none());
     assert!(std::env::var_os("GITHUB_WORKSPACE").is_none());
+    assert!(!std::env::var_os("LOCALAPPDATA").unwrap().is_empty());
     let mut record = json!({
         "role": role, "pid": process::id(), "read_error": read_error,
         "write_error": write_error, "positive": true, "environment_clean": true,
@@ -136,7 +137,8 @@ fn broker(root: &Path) {
         .collect();
     let cwd: Vec<u16> = text(&work).encode_utf16().chain([0]).collect();
     let environment_block: Vec<u16> = format!(
-        "SystemRoot={system}\0TEMP={}\0TMP={}\0WINDIR={system}\0\0",
+        "LOCALAPPDATA={}\0SystemRoot={system}\0TEMP={}\0TMP={}\0WINDIR={system}\0\0",
+        text(&work),
         text(&work),
         text(&work)
     )
@@ -222,7 +224,7 @@ fn broker(root: &Path) {
             "child_read_error": 5, "child_write_open_error": 5,
             "descendant_read_error": 5, "descendant_write_open_error": 5,
             "protected_bytes_preserved": true, "ordinary_file_baselines": 2,
-            "environment_allowlist_count": 4, "environment_canaries_absent": true,
+            "environment_allowlist_count": 5, "environment_canaries_absent": true,
             "inherited_handle_count": 0, "suspended_job_assignment_checked": true,
             "legacy_fallback": false, "network": "not_run", "full_isolation": "not_run",
         })
