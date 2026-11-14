@@ -67,7 +67,8 @@ static const char *descendant_creation_gates[] = {
     "descendant-token-assign-primary", "descendant-token-impersonate", "descendant-token-adjust-default",
     "descendant-section-file", "descendant-image-section",
     "descendant-sxs-control-read", "descendant-sxs-client-read",
-    "descendant-default-package-count", "descendant-default-package-mask", "descendant-explicit-dacl"
+    "descendant-default-package-count", "descendant-default-package-mask", "descendant-explicit-dacl",
+    "descendant-ordinary-create", "descendant-ordinary-cleanup"
 };
 static const wchar_t *file_inputs[3];
 static const wchar_t *file_aliases[] = {
@@ -1091,6 +1092,31 @@ static void creation_handle_diagnostic(HANDLE handle, const char *gate) {
     if (valid && !CloseHandle(handle)) fail("descendant-diagnostic-close", GetLastError());
 }
 
+static BOOL suspended_creation_comparison(wchar_t *environment, SECURITY_ATTRIBUTES *security, const char *gate) {
+    wchar_t command[MAX_PATH + 3];
+    if (_snwprintf_s(command, ARRAYSIZE(command), _TRUNCATE, L"\"%ls\"", executable) < 0)
+        fail("descendant-basic-command", ERROR_INVALID_DATA);
+    STARTUPINFOW startup = {0};
+    PROCESS_INFORMATION process = {0};
+    startup.cb = sizeof(startup);
+    BOOL created = CreateProcessW(executable, command, security, security, FALSE,
+        CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+        environment, root, &startup, &process);
+    message(16, created ? ERROR_SUCCESS : GetLastError(), gate);
+    if (created) {
+        DWORD code = 0;
+        if (!TerminateProcess(process.hProcess, 2)) fail("descendant-basic-terminate", GetLastError());
+        DWORD wait = WaitForSingleObject(process.hProcess, 30000);
+        if (wait != WAIT_OBJECT_0)
+            fail("descendant-basic-wait", wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError());
+        if (!GetExitCodeProcess(process.hProcess, &code)) fail("descendant-basic-exit", GetLastError());
+        if (code != 2) fail("descendant-basic-exit-code", ERROR_INVALID_DATA);
+        if (!CloseHandle(process.hThread) || !CloseHandle(process.hProcess))
+            fail("descendant-basic-close", GetLastError());
+    }
+    return created;
+}
+
 static void descendant_creation_diagnostics(wchar_t *environment) {
     creation_registry_diagnostic("descendant-sxs-client-read", FALSE);
     creation_handle_diagnostic(CreateFileW(executable, GENERIC_READ | GENERIC_EXECUTE,
@@ -1163,28 +1189,8 @@ static void descendant_creation_diagnostics(wchar_t *environment) {
             !SetSecurityDescriptorDacl(&descriptor, TRUE, acl, FALSE))
         fail("descendant-explicit-descriptor", GetLastError());
     SECURITY_ATTRIBUTES security = {sizeof(security), &descriptor, FALSE};
-    wchar_t command[MAX_PATH + 3];
-    if (_snwprintf_s(command, ARRAYSIZE(command), _TRUNCATE, L"\"%ls\"", executable) < 0)
-        fail("descendant-basic-command", ERROR_INVALID_DATA);
-    STARTUPINFOW startup = {0};
-    PROCESS_INFORMATION process = {0};
-    startup.cb = sizeof(startup);
     // Failure-only comparison grants the current package access only to these new objects.
-    BOOL created = CreateProcessW(executable, command, &security, &security, FALSE,
-        CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
-        environment, root, &startup, &process);
-    message(16, created ? ERROR_SUCCESS : GetLastError(), "descendant-explicit-create");
-    if (created) {
-        DWORD code = 0;
-        if (!TerminateProcess(process.hProcess, 2)) fail("descendant-basic-terminate", GetLastError());
-        DWORD wait = WaitForSingleObject(process.hProcess, 30000);
-        if (wait != WAIT_OBJECT_0)
-            fail("descendant-basic-wait", wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError());
-        if (!GetExitCodeProcess(process.hProcess, &code)) fail("descendant-basic-exit", GetLastError());
-        if (code != 2) fail("descendant-basic-exit-code", ERROR_INVALID_DATA);
-        if (!CloseHandle(process.hThread) || !CloseHandle(process.hProcess))
-            fail("descendant-basic-close", GetLastError());
-    }
+    suspended_creation_comparison(environment, &security, "descendant-explicit-create");
     LocalFree(acl);
 }
 
@@ -1483,6 +1489,12 @@ int wmain(int argc, wchar_t **argv) {
         if (!wcscmp(argv[1], L"control")) {
             if (read_marker(L"all-packages.txt") || read_marker(L"private-input.txt"))
                 fail("ordinary-container-file-positive", ERROR_ACCESS_DENIED);
+            if (catalog_descendant) {
+                wchar_t environment[4096];
+                child_environment(environment, ARRAYSIZE(environment));
+                if (suspended_creation_comparison(environment, NULL, "descendant-ordinary-create"))
+                    message(16, 0, "descendant-ordinary-cleanup");
+            }
             if (catalog_network) {
                 SOCKET private_probe = network_socket();
                 if (private_probe == INVALID_SOCKET) fail("control-private-socket", (DWORD)WSAGetLastError());
