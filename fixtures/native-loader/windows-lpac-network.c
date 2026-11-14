@@ -2,6 +2,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <windows.h>
+#include <tlhelp32.h>
 #include <aclapi.h>
 #include <sddl.h>
 #include <bcrypt.h>
@@ -40,7 +41,7 @@ static BOOL restricted_code_files;
 static BOOL installer_files;
 static PSID installer_sid;
 static BOOL file_diagnostic_done;
-static BOOL private_catalog, catalog_network, catalog_created;
+static BOOL private_catalog, catalog_network, catalog_descendant, catalog_created;
 static HKEY catalog_writer, catalog_reader;
 static wchar_t catalog_path[128];
 static DWORD catalog_keys, catalog_values, catalog_bytes;
@@ -886,6 +887,26 @@ static void inspect(Child *child, BOOL lpac, const wchar_t *role) {
     CloseHandle(token);
 }
 
+static void child_environment(wchar_t *environment, size_t capacity) {
+    size_t used = 0;
+    for (size_t i = 0; i < ARRAYSIZE(environment_names); ++i) {
+        if (capacity - used <= wcslen(environment_names[i]) + 2)
+            fail("child-env-name-bound", ERROR_INSUFFICIENT_BUFFER);
+        int count = swprintf_s(environment + used, capacity - used, L"%ls=", environment_names[i]);
+        if (count < 0) fail("child-env-name-bound", ERROR_INVALID_DATA);
+        used += (size_t)count;
+        DWORD space = (DWORD)(capacity - used - 1);
+        if (!space) fail("child-env-value-bound", ERROR_INVALID_DATA);
+        // AppContainer creation redirects profile/temp variables; never inherit the runner's full environment.
+        DWORD length = (!wcscmp(environment_names[i], L"SystemRoot") || !wcscmp(environment_names[i], L"windir")) ?
+            GetWindowsDirectoryW(environment + used, space) :
+            GetEnvironmentVariableW(environment_names[i], environment + used, space);
+        if (!length || length >= space) fail("child-env-value", length ? ERROR_INSUFFICIENT_BUFFER : GetLastError());
+        used += (size_t)length + 1;
+    }
+    environment[used] = L'\0';
+}
+
 static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short provider, unsigned short canary) {
     Child *child = &children[index];
     HANDLE writer = NULL;
@@ -898,24 +919,9 @@ static Child *spawn(size_t index, const wchar_t *role, BOOL lpac, unsigned short
     wchar_t command[2048], environment[4096];
     if (!CreatePipe(&child->reader, &writer, &security, 0) ||
             !SetHandleInformation(child->reader, HANDLE_FLAG_INHERIT, 0)) fail("report-pipe", GetLastError());
-    size_t used = 0;
-    for (size_t i = 0; i < ARRAYSIZE(environment_names); ++i) {
-        if (ARRAYSIZE(environment) - used <= wcslen(environment_names[i]) + 2)
-            fail("child-env-name-bound", ERROR_INSUFFICIENT_BUFFER);
-        int count = swprintf_s(environment + used, ARRAYSIZE(environment) - used, L"%ls=", environment_names[i]);
-        if (count < 0) fail("child-env-name-bound", ERROR_INVALID_DATA);
-        used += (size_t)count;
-        DWORD space = (DWORD)(ARRAYSIZE(environment) - used - 1);
-        if (!space) fail("child-env-value-bound", ERROR_INVALID_DATA);
-        // AppContainer creation redirects profile/temp variables; never inherit the runner's full environment.
-        DWORD length = (!wcscmp(environment_names[i], L"SystemRoot") || !wcscmp(environment_names[i], L"windir")) ?
-            GetWindowsDirectoryW(environment + used, space) :
-            GetEnvironmentVariableW(environment_names[i], environment + used, space);
-        if (!length || length >= space) fail("child-env-value", length ? ERROR_INSUFFICIENT_BUFFER : GetLastError());
-        used += (size_t)length + 1;
-    }
-    environment[used] = L'\0';
-    const wchar_t *mode = catalog_network ? L"restricted-installer-private-network" :
+    child_environment(environment, ARRAYSIZE(environment));
+    const wchar_t *mode = catalog_descendant ? L"restricted-installer-private-descendant" :
+        catalog_network ? L"restricted-installer-private-network" :
         private_catalog ? L"restricted-installer-private-catalog" :
         installer_files ? L"restricted-installer-appcontainer-files" :
         restricted_code_files ? L"restricted-code-appcontainer-files" :
@@ -1010,7 +1016,9 @@ static DWORD receive(Child *child, DWORD kind) {
                 kind == 4 ? "socket-observation" : kind == 5 ? "shared-socket-ready" :
                 kind == 6 ? "shared-peer-address" : kind == 7 ? "shared-peer-port" :
                 kind == 8 ? "outside-connect-observed" : kind == 9 ? "file-path-checks" :
-                kind == 10 ? "compiler-creation-checks" : "complete"))
+                kind == 10 ? "compiler-creation-checks" : kind == 12 ? "descendant-pid" :
+                kind == 13 ? "descendant-thread" : kind == 14 ? "descendant-file-checks" :
+                kind == 15 ? "descendant-compiler-checks" : "complete"))
             fail("child-report-kind", ERROR_INVALID_DATA);
         return item.value;
     }
@@ -1033,6 +1041,91 @@ static void finished(Child *child) {
     CloseHandle(child->reader); child->reader = NULL;
 }
 
+static void run_descendant(unsigned short provider, unsigned short canary) {
+    Child child = {0};
+    HANDLE writer = NULL;
+    SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
+    STARTUPINFOEXW startup = {0};
+    SIZE_T size = 0;
+    wchar_t command[2048], environment[4096];
+    if (!CreatePipe(&child.reader, &writer, &security, 0) ||
+            !SetHandleInformation(child.reader, HANDLE_FLAG_INHERIT, 0)) fail("descendant-report-pipe", GetLastError());
+    child_environment(environment, ARRAYSIZE(environment));
+    if (_snwprintf_s(command, ARRAYSIZE(command), _TRUNCATE,
+            L"\"%ls\" descendant %llu %u %u restricted-installer-private-descendant \"%ls\" \"%ls\" \"%ls\" %llu",
+            executable, (unsigned long long)(UINT_PTR)writer, (unsigned int)provider, (unsigned int)canary,
+            file_inputs[0], file_inputs[1], file_inputs[2], (unsigned long long)(UINT_PTR)catalog_reader) < 0)
+        fail("descendant-command", ERROR_INVALID_DATA);
+    InitializeProcThreadAttributeList(NULL, 1, 0, &size);
+    startup.lpAttributeList = malloc(size);
+    if (!startup.lpAttributeList || !InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &size))
+        fail("descendant-attributes", GetLastError());
+    HANDLE inherited[] = {writer, (HANDLE)catalog_reader};
+    if (!UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            inherited, sizeof(inherited), NULL, NULL)) fail("descendant-handle-list", GetLastError());
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    // Inherit the actual caller token and Job; the outside controller verifies them before resuming.
+    if (!CreateProcessW(executable, command, NULL, NULL, TRUE,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+            environment, root, &startup.StartupInfo, &child.process)) fail("descendant-create", GetLastError());
+    DeleteProcThreadAttributeList(startup.lpAttributeList);
+    free(startup.lpAttributeList);
+    if (!CloseHandle(writer) || !CloseHandle(child.process.hThread)) fail("descendant-create-close", GetLastError());
+    child.process.hThread = NULL;
+    message(12, child.process.dwProcessId, "descendant-pid");
+    message(13, child.process.dwThreadId, "descendant-thread");
+    if (receive(&child, 9) != 6 || receive(&child, 10) != 3)
+        fail("descendant-file-count", ERROR_INVALID_DATA);
+    message(14, 6, "descendant-file-checks");
+    message(15, 3, "descendant-compiler-checks");
+    DWORD outside = receive(&child, 8);
+    if (outside != WSAETIMEDOUT) fail("descendant-outside-timeout", outside);
+    finished(&child);
+    message(8, outside, "outside-connect-observed");
+}
+
+static HANDLE inspect_descendant(Child *creator) {
+    DWORD pid = receive(creator, 12), thread_id = receive(creator, 13);
+    if (!pid || !thread_id || pid == GetCurrentProcessId()) fail("descendant-identity", ERROR_INVALID_DATA);
+    for (size_t i = 0; i < ARRAYSIZE(children); ++i)
+        if (pid == children[i].process.dwProcessId) fail("descendant-child-alias", ERROR_INVALID_DATA);
+    Child child = {0};
+    child.process.hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
+    if (!child.process.hProcess) fail("descendant-process-open", GetLastError());
+    if (WaitForSingleObject(child.process.hProcess, 0) != WAIT_TIMEOUT)
+        fail("descendant-suspended-lifetime", ERROR_INVALID_DATA);
+    wchar_t image[MAX_PATH];
+    DWORD length = ARRAYSIZE(image);
+    if (!QueryFullProcessImageNameW(child.process.hProcess, 0, image, &length))
+        fail("descendant-image-query", GetLastError());
+    if (_wcsicmp(image, executable)) fail("descendant-image-path", ERROR_INVALID_DATA);
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) fail("descendant-parent-snapshot", GetLastError());
+    PROCESSENTRY32W entry = {0};
+    entry.dwSize = sizeof(entry);
+    BOOL found = FALSE;
+    if (!Process32FirstW(snapshot, &entry)) fail("descendant-parent-first", GetLastError());
+    do {
+        if (entry.th32ProcessID == pid) {
+            if (entry.th32ParentProcessID != creator->process.dwProcessId)
+                fail("descendant-parent-pid", ERROR_INVALID_DATA);
+            found = TRUE;
+            break;
+        }
+    } while (Process32NextW(snapshot, &entry));
+    if (!found) fail("descendant-parent-missing", ERROR_INVALID_DATA);
+    if (!CloseHandle(snapshot)) fail("descendant-snapshot-close", GetLastError());
+    HANDLE thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION | THREAD_SUSPEND_RESUME, FALSE, thread_id);
+    if (!thread) fail("descendant-thread-open", GetLastError());
+    if (GetProcessIdOfThread(thread) != pid || GetThreadId(thread) != thread_id)
+        fail("descendant-thread-owner", ERROR_INVALID_DATA);
+    inspect(&child, FALSE, L"client");
+    if (ResumeThread(thread) != 1) fail("descendant-resume", ERROR_INVALID_DATA);
+    if (!CloseHandle(thread)) fail("descendant-thread-close", GetLastError());
+    return child.process.hProcess;
+}
+
 int wmain(int argc, wchar_t **argv) {
     DWORD length = GetModuleFileNameW(NULL, executable, ARRAYSIZE(executable));
     if (!length || length >= ARRAYSIZE(executable)) fail("executable-path", GetLastError());
@@ -1042,7 +1135,8 @@ int wmain(int argc, wchar_t **argv) {
     *separator = L'\0';
     const wchar_t *mode = argc == 6 || argc == 7 || argc == 9 || argc == 10 ? argv[5] : argc >= 2 ? argv[1] : NULL;
     restricted_code_files = mode && !wcscmp(mode, L"restricted-code-appcontainer-files");
-    catalog_network = mode && !wcscmp(mode, L"restricted-installer-private-network");
+    catalog_descendant = mode && !wcscmp(mode, L"restricted-installer-private-descendant");
+    catalog_network = catalog_descendant || (mode && !wcscmp(mode, L"restricted-installer-private-network"));
     private_catalog = catalog_network || (mode && !wcscmp(mode, L"restricted-installer-private-catalog"));
     installer_files = private_catalog || (mode && !wcscmp(mode, L"restricted-installer-appcontainer-files"));
     file_controls_stage = installer_files || restricted_code_files || (mode && !wcscmp(mode, L"restricted-appcontainer-files"));
@@ -1110,7 +1204,8 @@ int wmain(int argc, wchar_t **argv) {
     if (restricted_code_files || installer_files) check_delayed_imports();
 #endif
     if (installer_files && !private_catalog && !report_pipe) startup_diagnostics(TRUE);
-    if (installer_files && report_pipe && !wcscmp(argv[1], L"client")) {
+    if (installer_files && report_pipe && (!wcscmp(argv[1], L"client") ||
+            (catalog_descendant && !wcscmp(argv[1], L"descendant")))) {
         check_file_controls(TRUE);
         message(9, file_path_checks, "file-path-checks");
         message(10, compiler_creation_checks, "compiler-creation-checks");
@@ -1267,28 +1362,37 @@ int wmain(int argc, wchar_t **argv) {
                 offset += (size_t)count;
             }
             closesocket(connection); closesocket(server);
-        } else if (!wcscmp(argv[1], L"client")) {
+        } else if (!wcscmp(argv[1], L"client") || (catalog_descendant && !wcscmp(argv[1], L"descendant"))) {
             if (read_marker(L"private-input.txt") || read_marker(L"all-packages.txt") != ERROR_ACCESS_DENIED)
                 fail("lpac-opt-out-file-control", ERROR_INVALID_DATA);
             unsigned long provider = wcstoul(argv[3], NULL, 10), canary = wcstoul(argv[4], NULL, 10);
             if (!provider || provider > 65535 || !canary || canary > 65535) fail("ports", ERROR_INVALID_DATA);
-            SOCKET connection = network_socket();
-            if (connection == INVALID_SOCKET) fail("client-provider-socket", (DWORD)WSAGetLastError());
-            error = connect_bounded(connection, (unsigned short)provider);
-            if (error) fail("internal-provider-connect", (DWORD)error);
-            exchange(connection, request, sizeof(request) - 1, response, sizeof(response) - 1);
-            closesocket(connection);
-            connection = network_socket();
-            if (connection == INVALID_SOCKET) fail("client-outside-socket", (DWORD)WSAGetLastError());
-            error = connect_bounded(connection, (unsigned short)canary);
-            if (closesocket(connection) && ordinary_restricted) fail("outside-probe-close", (DWORD)WSAGetLastError());
-            if (ordinary_restricted) {
-                if (error != WSAETIMEDOUT) fail("outside-canary-timeout", (DWORD)error);
-                message(8, (DWORD)error, "outside-connect-observed");
-            } else if (error != WSAEACCES) fail("outside-canary-denial", (DWORD)error);
+            if (catalog_descendant && !wcscmp(argv[1], L"client")) {
+                SOCKET probe = network_socket();
+                if (probe == INVALID_SOCKET) fail("descendant-creator-socket", (DWORD)WSAGetLastError());
+                if (closesocket(probe)) fail("descendant-creator-socket-close", (DWORD)WSAGetLastError());
+                run_descendant((unsigned short)provider, (unsigned short)canary);
+            } else {
+                SOCKET connection = network_socket();
+                if (connection == INVALID_SOCKET) fail("client-provider-socket", (DWORD)WSAGetLastError());
+                error = connect_bounded(connection, (unsigned short)provider);
+                if (error) fail("internal-provider-connect", (DWORD)error);
+                exchange(connection, request, sizeof(request) - 1, response, sizeof(response) - 1);
+                closesocket(connection);
+                connection = network_socket();
+                if (connection == INVALID_SOCKET) fail("client-outside-socket", (DWORD)WSAGetLastError());
+                error = connect_bounded(connection, (unsigned short)canary);
+                if (closesocket(connection) && ordinary_restricted) fail("outside-probe-close", (DWORD)WSAGetLastError());
+                if (ordinary_restricted) {
+                    if (error != WSAETIMEDOUT) fail("outside-canary-timeout", (DWORD)error);
+                    message(8, (DWORD)error, "outside-connect-observed");
+                } else if (error != WSAEACCES) fail("outside-canary-denial", (DWORD)error);
+            }
         } else fail("child-role", ERROR_INVALID_PARAMETER);
         if (catalog_network) {
-            if (catalog_socket_checks != (!wcscmp(argv[1], L"client") ? 2u : 1u))
+            DWORD expected_sockets = (!catalog_descendant && !wcscmp(argv[1], L"client")) ||
+                !wcscmp(argv[1], L"descendant") ? 2u : 1u;
+            if (catalog_socket_checks != expected_sockets)
                 fail("catalog-socket-restore-count", ERROR_INVALID_DATA);
             if (RegCloseKey(catalog_reader)) fail("catalog-child-handle-close", ERROR_INVALID_HANDLE);
             catalog_reader = NULL;
@@ -1426,15 +1530,28 @@ int wmain(int argc, wchar_t **argv) {
         DWORD port = receive(provider, 1);
         if (!port || port > 65535) fail("provider-port", ERROR_INVALID_DATA);
         Child *client = spawn(2, L"client", !ordinary_restricted, (unsigned short)port, canary_port);
+        HANDLE descendant = NULL;
         if (catalog_network) {
             if (receive(client, 9) != file_path_checks || receive(client, 10) != compiler_creation_checks)
                 fail("child-file-control-count", ERROR_INVALID_DATA);
             file_diagnostic_done = TRUE;
         }
+        if (catalog_descendant) {
+            descendant = inspect_descendant(client);
+            if (receive(client, 14) != 6 || receive(client, 15) != 3)
+                fail("outside-descendant-file-count", ERROR_INVALID_DATA);
+        }
         if (ordinary_restricted && receive(client, 8) != (DWORD)WSAETIMEDOUT)
             fail("outside-timeout-observation", ERROR_INVALID_DATA);
         finished(client);
         finished(provider);
+        if (descendant) {
+            DWORD code = 0;
+            if (WaitForSingleObject(descendant, 30000) != WAIT_OBJECT_0 ||
+                    !GetExitCodeProcess(descendant, &code) || code)
+                fail("outside-descendant-exit", ERROR_INVALID_DATA);
+            if (!CloseHandle(descendant)) fail("outside-descendant-process-close", GetLastError());
+        }
         fd_set readable;
         struct timeval now = {0, 0};
         FD_ZERO(&readable); FD_SET(canary, &readable);
@@ -1508,28 +1625,31 @@ int wmain(int argc, wchar_t **argv) {
     }
     if (restricted_mode) {
         printf("{\"status\":\"pass\",\"gate\":\"%s\","
-            "\"outside_token_checks\":3,\"outside_restricted_token_checks\":2,"
+            "\"outside_token_checks\":%u,\"outside_restricted_token_checks\":%u,"
             "\"restricting_sid_count\":3,\"restricting_sid_policy\":\"%s\","
             "\"private_sid_group_absence_checked\":true,\"private_sid_file_grants\":%lu,"
             "\"private_sid_default_dacl_checked\":true,"
             "\"privilege_allowlist_checked\":true,\"capability_count\":%u%s,"
             "\"ordinary_file_positive\":true,\"environment_allowlist_count\":%zu,"
             "\"environment_canary_not_inherited\":true,\"%s\":true,"
-            "\"private_file_positive\":true,\"child_winsock_startup_checks\":3,"
+            "\"private_file_positive\":true,\"child_winsock_startup_checks\":%u,"
             "\"host_registry_baseline\":true,\"host_environment_read_error\":5,"
             "\"host_environment_write_open_error\":5,\"profile_deleted\":true,"
             "\"network\":\"%s\",\"full_isolation\":\"not_run\",\"product\":\"not_run\"%s%s%s%s%s}\n",
-            catalog_network ? "restricted-installer-private-network-control" :
+            catalog_descendant ? "restricted-installer-private-descendant-control" :
+                catalog_network ? "restricted-installer-private-network-control" :
                 private_catalog ? "restricted-installer-private-catalog-control" :
                 installer_files ? "restricted-installer-appcontainer-files-control" :
                 restricted_code_files ? "restricted-code-appcontainer-files-control" :
                 file_controls_stage ? "restricted-appcontainer-files-control" : ordinary_restricted ? "restricted-appcontainer-network-control" :
                 restricted_network ? "lpac-restricted-network-control" : "lpac-restricted-registry-control",
+            catalog_descendant ? 4u : 3u, catalog_descendant ? 3u : 2u,
             installer_files ? "world-trusted-installer-private-nt" :
                 restricted_code_files ? "world-restricted-code-private-nt" : "world-users-private-nt",
             private_sid_file_grants, ordinary_restricted ? 0u : 1u,
             ordinary_restricted ? "" : ",\"capability\":\"registryRead\"",
             ARRAYSIZE(environment_names), ordinary_restricted ? "all_packages_file_denied" : "lpac_opt_out_file_denied",
+            catalog_descendant ? 4u : 3u,
             restricted_network ? "pass" : "not_run",
             restricted_network ? ordinary_restricted ?
                 ",\"provider_http_positive\":true,\"outside_listener_positive\":true,\"outside_connect_error\":10060,"
@@ -1542,7 +1662,21 @@ int wmain(int argc, wchar_t **argv) {
                 "\"outside_compiler_creation_baselines\":3,\"compiler_creation_checks\":3,\"compiler_creation_error\":5,"
                 "\"source_cache_aliases_checked\":true,\"compiler_executed\":false" : "",
             installer_files ? ",\"system_sid_group_absence_checked\":true" : "",
-            private_catalog ? catalog_network ?
+            private_catalog ? catalog_descendant ?
+                ",\"private_registry_view\":\"winsock-provider-inputs-scoped\",\"catalog_copy_bounded\":true,"
+                "\"copied_registry_root_count\":5,\"real_hklm_restored_before_network_io\":true,"
+                "\"startup_view_restorations\":4,\"socket_view_restorations\":5,"
+                "\"private_view_control_socket_positive\":true,\"restored_control_socket_positive\":true,"
+                "\"inherited_handle_count\":2,\"inherited_catalog_write_denials\":4,"
+                "\"real_catalog_read_denials\":30,\"private_catalog_read_checks\":28,"
+                "\"private_catalog_write_denials\":15,\"private_catalog_dacl_denials\":15,"
+                "\"private_catalog_create_denials\":15,\"private_catalog_deleted\":true,"
+                "\"descendant_count\":1,\"descendant_creator_pid_checked\":true,"
+                "\"descendant_thread_process_bound\":true,\"descendant_image_path_checked\":true,"
+                "\"descendant_inherited_restrictions_checked\":true,\"descendant_job_membership_checked\":true,"
+                "\"descendant_file_path_checks\":6,\"descendant_compiler_creation_checks\":3,"
+                "\"descendant_http_positive\":true,\"descendant_normal_exit_checked\":true,"
+                "\"descendant_inherited_handle_count\":2" : catalog_network ?
                 ",\"private_registry_view\":\"winsock-provider-inputs-scoped\",\"catalog_copy_bounded\":true,"
                 "\"copied_registry_root_count\":5,\"real_hklm_restored_before_network_io\":true,"
                 "\"startup_view_restorations\":3,\"socket_view_restorations\":4,"

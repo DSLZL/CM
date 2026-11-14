@@ -148,9 +148,11 @@ def restricted_appcontainer_record(text):
 
 
 def restricted_appcontainer_files_record(text, *, policy="users"):
-    if policy not in ("users", "restricted-code", "trusted-installer", "private-catalog", "private-catalog-network"):
+    if policy not in ("users", "restricted-code", "trusted-installer", "private-catalog", "private-catalog-network",
+            "private-catalog-descendant"):
         raise RuntimeError("Unknown file restriction SID policy")
-    network = policy == "private-catalog-network"
+    descendant = policy == "private-catalog-descendant"
+    network = descendant or policy == "private-catalog-network"
     expected = lpac_restricted_expected(network=network)
     expected.update(gate="restricted-appcontainer-files-control", capability_count=0,
         all_packages_file_denied=expected.pop("lpac_opt_out_file_denied"), all_application_packages_opt_out=False,
@@ -160,10 +162,10 @@ def restricted_appcontainer_files_record(text, *, policy="users"):
     del expected["capability"]
     if policy == "restricted-code":
         expected.update(gate="restricted-code-appcontainer-files-control", restricting_sid_policy="world-restricted-code-private-nt")
-    elif policy in ("trusted-installer", "private-catalog", "private-catalog-network"):
+    elif policy in ("trusted-installer", "private-catalog", "private-catalog-network", "private-catalog-descendant"):
         expected.update(gate="restricted-installer-appcontainer-files-control",
             restricting_sid_policy="world-trusted-installer-private-nt", system_sid_group_absence_checked=True)
-        if policy in ("private-catalog", "private-catalog-network"):
+        if policy in ("private-catalog", "private-catalog-network", "private-catalog-descendant"):
             expected.update(gate="restricted-installer-private-catalog-control",
                 private_registry_view="winsock-catalog-only", catalog_copy_bounded=True,
                 inherited_handle_count=2, inherited_catalog_write_denials=3,
@@ -179,6 +181,18 @@ def restricted_appcontainer_files_record(text, *, policy="users"):
                     restored_control_socket_positive=True, real_catalog_read_denials=21,
                     private_catalog_read_checks=21, private_catalog_write_denials=10,
                     private_catalog_dacl_denials=10, private_catalog_create_denials=10)
+                if descendant:
+                    expected.update(gate="restricted-installer-private-descendant-control",
+                        outside_token_checks=4, outside_restricted_token_checks=3, child_winsock_startup_checks=4,
+                        startup_view_restorations=4, socket_view_restorations=5,
+                        inherited_catalog_write_denials=4, real_catalog_read_denials=30,
+                        private_catalog_read_checks=28, private_catalog_write_denials=15,
+                        private_catalog_dacl_denials=15, private_catalog_create_denials=15,
+                        descendant_count=1, descendant_creator_pid_checked=True, descendant_thread_process_bound=True,
+                        descendant_image_path_checked=True, descendant_inherited_restrictions_checked=True,
+                        descendant_job_membership_checked=True, descendant_file_path_checks=6,
+                        descendant_compiler_creation_checks=3, descendant_http_positive=True,
+                        descendant_normal_exit_checked=True, descendant_inherited_handle_count=2)
     return exact_record(text, expected)
 
 
@@ -379,7 +393,7 @@ def main():
             "lpac-restricted-network", "lpac-socket-availability", "lpac-socket-share", "lpac-shared-peer-observation",
             "lpac-shared-transfer", "restricted-appcontainer-network", "restricted-appcontainer-files",
             "restricted-code-appcontainer-files", "restricted-installer-appcontainer-files", "restricted-installer-private-catalog",
-            "restricted-installer-private-network"):
+            "restricted-installer-private-network", "restricted-installer-private-descendant"):
         raise RuntimeError("Unknown Windows native mechanism stage")
     socket_stage = mechanism == "lpac-socket-availability"
     socket_share_stage = mechanism == "lpac-socket-share"
@@ -387,7 +401,8 @@ def main():
     transfer_stage = mechanism == "lpac-shared-transfer"
     ordinary_stage = mechanism == "restricted-appcontainer-network"
     restricted_code_stage = mechanism == "restricted-code-appcontainer-files"
-    catalog_network_stage = mechanism == "restricted-installer-private-network"
+    descendant_stage = mechanism == "restricted-installer-private-descendant"
+    catalog_network_stage = descendant_stage or mechanism == "restricted-installer-private-network"
     catalog_stage = catalog_network_stage or mechanism == "restricted-installer-private-catalog"
     installer_stage = catalog_stage or mechanism == "restricted-installer-appcontainer-files"
     files_stage = installer_stage or restricted_code_stage or mechanism == "restricted-appcontainer-files"
@@ -403,7 +418,8 @@ def main():
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
     report = {"schema_version": 1, "status": "running",
-        "scope": "V01q-private-catalog-network-only" if catalog_network_stage else
+        "scope": "V01r-native-descendant-controls-only" if descendant_stage else
+            "V01q-private-catalog-network-only" if catalog_network_stage else
             "V01p-private-catalog-files-only" if catalog_stage else
             "V01o-restricted-installer-files-only" if installer_stage else
             "V01n-restricted-code-files-only" if restricted_code_stage else
@@ -540,6 +556,9 @@ def main():
                     "restricted-installer-private-network": ("restricted-installer-private-network-control",
                         "restricted-installer-private-network", "restricted_installer_private_network",
                         lambda text: restricted_appcontainer_files_record(text, policy="private-catalog-network")),
+                    "restricted-installer-private-descendant": ("restricted-installer-private-descendant-control",
+                        "restricted-installer-private-descendant", "restricted_installer_private_descendant",
+                        lambda text: restricted_appcontainer_files_record(text, policy="private-catalog-descendant")),
                 }[mechanism]
                 args = [probe, mode]
                 if files_stage:
@@ -562,13 +581,14 @@ def main():
                                         "USERENV", "ADVAPI32", "WS2_32"))):
                             run(name + "-permissions", [system / "icacls.exe", path])
                     args = [candidate, mode, source_canary, cache_canary, cl]
-                if catalog_network_stage:
+                if catalog_network_stage and not descendant_stage:
                     with registry_failure_trace(temp, logs, label, run, report):
                         _, text = run(label, args, 120)
                 else:
                     _, text = run(label, args, 120)
                 report["controls"][key] = parse(text)
-                report["status"] = ("passed_bounded_file_tool_network_controls_only" if catalog_network_stage else
+                report["status"] = ("passed_bounded_native_descendant_controls_only" if descendant_stage else
+                    "passed_bounded_file_tool_network_controls_only" if catalog_network_stage else
                     "passed_bounded_file_tool_controls_only" if files_stage else
                     "passed_bounded_shared_transfer_only" if transfer_stage else
                     "passed_bounded_shared_socket_only" if socket_share_stage else
@@ -657,7 +677,8 @@ def main():
         report["status"] = "failed"
         raise
     finally:
-        name = ("windows-x64-restricted-installer-private-network.json" if catalog_network_stage else
+        name = ("windows-x64-restricted-installer-private-descendant.json" if descendant_stage else
+            "windows-x64-restricted-installer-private-network.json" if catalog_network_stage else
             "windows-x64-restricted-installer-private-catalog.json" if catalog_stage else
             "windows-x64-restricted-installer-appcontainer-files.json" if installer_stage else
             "windows-x64-restricted-code-appcontainer-files.json" if restricted_code_stage else
@@ -1013,12 +1034,32 @@ def self_check():
             "private_catalog_create_denials": 10, "private_catalog_deleted": True,
             "network": "pass", "provider_http_positive": True, "outside_listener_positive": True,
             "outside_connect_error": 10060, "outside_unexpected_accepts": 0,
-            "outside_denial_observation": "bounded_timeout_3_seconds", "outside_listener_post_positive": True})
+            "outside_denial_observation": "bounded_timeout_3_seconds", "outside_listener_post_positive": True},
+        {**files, "gate": "restricted-installer-private-descendant-control",
+            "restricting_sid_policy": "world-trusted-installer-private-nt", "system_sid_group_absence_checked": True,
+            "outside_token_checks": 4, "outside_restricted_token_checks": 3, "child_winsock_startup_checks": 4,
+            "private_registry_view": "winsock-provider-inputs-scoped", "catalog_copy_bounded": True,
+            "copied_registry_root_count": 5, "real_hklm_restored_before_network_io": True,
+            "startup_view_restorations": 4, "socket_view_restorations": 5,
+            "private_view_control_socket_positive": True, "restored_control_socket_positive": True,
+            "inherited_handle_count": 2, "inherited_catalog_write_denials": 4,
+            "real_catalog_read_denials": 30, "private_catalog_read_checks": 28,
+            "private_catalog_write_denials": 15, "private_catalog_dacl_denials": 15,
+            "private_catalog_create_denials": 15, "private_catalog_deleted": True,
+            "network": "pass", "provider_http_positive": True, "outside_listener_positive": True,
+            "outside_connect_error": 10060, "outside_unexpected_accepts": 0,
+            "outside_denial_observation": "bounded_timeout_3_seconds", "outside_listener_post_positive": True,
+            "descendant_count": 1, "descendant_creator_pid_checked": True, "descendant_thread_process_bound": True,
+            "descendant_image_path_checked": True, "descendant_inherited_restrictions_checked": True,
+            "descendant_job_membership_checked": True, "descendant_file_path_checks": 6,
+            "descendant_compiler_creation_checks": 3, "descendant_http_positive": True,
+            "descendant_normal_exit_checked": True, "descendant_inherited_handle_count": 2})
     file_parsers = (restricted_appcontainer_files_record,
         lambda text: restricted_appcontainer_files_record(text, policy="restricted-code"),
         lambda text: restricted_appcontainer_files_record(text, policy="trusted-installer"),
         lambda text: restricted_appcontainer_files_record(text, policy="private-catalog"),
-        lambda text: restricted_appcontainer_files_record(text, policy="private-catalog-network"))
+        lambda text: restricted_appcontainer_files_record(text, policy="private-catalog-network"),
+        lambda text: restricted_appcontainer_files_record(text, policy="private-catalog-descendant"))
     for policy in ("", "other", True, None):
         try:
             restricted_appcontainer_files_record(json.dumps(files), policy=policy)
