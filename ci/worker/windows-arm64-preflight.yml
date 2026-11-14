@@ -23,6 +23,7 @@ on:
           - isolation-process
           - isolation-network
           - isolation-inputs
+          - native-inputs
 
 permissions:
   contents: read
@@ -71,7 +72,7 @@ jobs:
         env:
           CM_POLICY_TOKEN: ${{ github.token }}
         run: |
-          if ($env:CM_PREFLIGHT_STAGE -notin @('isolation-surface', 'isolation-availability', 'loader-terminal', 'isolation-process', 'isolation-network', 'isolation-inputs')) { throw 'Unknown mechanism stage' }
+          if ($env:CM_PREFLIGHT_STAGE -notin @('isolation-surface', 'isolation-availability', 'loader-terminal', 'isolation-process', 'isolation-network', 'isolation-inputs', 'native-inputs')) { throw 'Unknown mechanism stage' }
           python -B .github/scripts/worker_policy.py native-preflight-self-check
           if ($LASTEXITCODE -ne 0) { throw 'Native authority self-check failed' }
           python -B .github/scripts/worker_policy.py native-preflight
@@ -140,6 +141,10 @@ jobs:
       - name: Probe real PSEC source cache compiler and alias controls
         if: env.CM_PREFLIGHT_STAGE == 'isolation-inputs'
         run: python -B -c "import sys; sys.path.insert(0, 'cm-source/ci/scripts'); import windows_isolation_preflight; windows_isolation_preflight.main(key='windows-arm64')"
+
+      - name: Verify fixed native tool V8 protoc and existing ABI inputs
+        if: env.CM_PREFLIGHT_STAGE == 'native-inputs'
+        run: python -B cm-source/ci/scripts/windows_native_inputs.py
 
       - name: Record final native job status
         if: always() && steps.source.outcome == 'success'
