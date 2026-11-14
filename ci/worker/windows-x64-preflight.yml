@@ -50,7 +50,7 @@ defaults:
 
 jobs:
   native-preflight:
-    runs-on: windows-2025
+    runs-on: windows-2022
     timeout-minutes: 15
     cache-mode: none
     env:
