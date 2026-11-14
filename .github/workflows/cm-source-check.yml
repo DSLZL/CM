@@ -138,7 +138,8 @@ jobs:
           assert win_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'restricted-installer-appcontainer-files'") == 1
           assert win_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'restricted-installer-private-catalog'") == 1
           assert win_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'restricted-installer-private-network'") == 1
-          assert "-notin @('loader-terminal', 'isolation-availability', 'lpac-network', 'lpac-registry-read', 'lpac-registry-restricted', 'lpac-restricted-network', 'lpac-socket-availability', 'lpac-socket-share', 'lpac-shared-peer-observation', 'lpac-shared-transfer', 'restricted-appcontainer-network', 'restricted-appcontainer-files', 'restricted-code-appcontainer-files', 'restricted-installer-appcontainer-files', 'restricted-installer-private-catalog', 'restricted-installer-private-network')" in win_recipe
+          assert win_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'restricted-installer-private-descendant'") == 1
+          assert "-notin @('loader-terminal', 'isolation-availability', 'lpac-network', 'lpac-registry-read', 'lpac-registry-restricted', 'lpac-restricted-network', 'lpac-socket-availability', 'lpac-socket-share', 'lpac-shared-peer-observation', 'lpac-shared-transfer', 'restricted-appcontainer-network', 'restricted-appcontainer-files', 'restricted-code-appcontainer-files', 'restricted-installer-appcontainer-files', 'restricted-installer-private-catalog', 'restricted-installer-private-network', 'restricted-installer-private-descendant')" in win_recipe
           assert "fixtures/native-loader/windows-lpac-network.c" in paths
           assert "-arch=x64 -host_arch=x64" in win_recipe and "shell: pwsh" in win_recipe
           assert not any(value in win_recipe for value in ("actions/cache/", "cache-save", "secrets.",
