@@ -21,6 +21,7 @@ on:
           - isolation-availability
           - loader-terminal
           - isolation-process
+          - isolation-network
 
 permissions:
   contents: read
@@ -69,7 +70,7 @@ jobs:
         env:
           CM_POLICY_TOKEN: ${{ github.token }}
         run: |
-          if ($env:CM_PREFLIGHT_STAGE -notin @('isolation-surface', 'isolation-availability', 'loader-terminal', 'isolation-process')) { throw 'Unknown mechanism stage' }
+          if ($env:CM_PREFLIGHT_STAGE -notin @('isolation-surface', 'isolation-availability', 'loader-terminal', 'isolation-process', 'isolation-network')) { throw 'Unknown mechanism stage' }
           python -B .github/scripts/worker_policy.py native-preflight-self-check
           if ($LASTEXITCODE -ne 0) { throw 'Native authority self-check failed' }
           python -B .github/scripts/worker_policy.py native-preflight
@@ -129,6 +130,10 @@ jobs:
 
       - name: Probe real PSEC child and descendant file controls
         if: env.CM_PREFLIGHT_STAGE == 'isolation-process'
+        run: python -B -c "import sys; sys.path.insert(0, 'cm-source/ci/scripts'); import windows_isolation_preflight; windows_isolation_preflight.main(key='windows-arm64')"
+
+      - name: Probe real PSEC provider and TCP UDP descendant controls
+        if: env.CM_PREFLIGHT_STAGE == 'isolation-network'
         run: python -B -c "import sys; sys.path.insert(0, 'cm-source/ci/scripts'); import windows_isolation_preflight; windows_isolation_preflight.main(key='windows-arm64')"
 
       - name: Record final native job status

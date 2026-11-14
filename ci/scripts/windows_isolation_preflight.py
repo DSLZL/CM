@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """Hosted Windows PSEC mechanism gates; no product or full isolation qualification."""
 import ctypes
+from collections import Counter
+from contextlib import ExitStack
 import hashlib
 import json
 import os
 import platform
 from pathlib import Path
 import shutil
+import ipaddress
+import socket
+import socketserver
 import tempfile
+import threading
 
 import ci_progress
 import record_run
@@ -84,6 +90,172 @@ def process_record(text):
         "network": "not_run", "full_isolation": "not_run"})
 
 
+def network_record(text):
+    if len(text) > 8192:
+        raise RuntimeError("Oversized PSEC network fixture record")
+    value = json.loads(text)
+    if not isinstance(value, dict) or value.get("gate") != "native-psec-provider-network-control" or \
+            value.get("network") != "passed_provider_and_canary_controls":
+        raise RuntimeError("Invalid PSEC network gate")
+    base = {name: item for name, item in value.items() if name != "network_controls"}
+    process_record(json.dumps({**base, "gate": "native-psec-process-file-control", "network": "not_run"}))
+    controls = value.get("network_controls")
+    if not isinstance(controls, dict) or set(controls) != {"child", "descendant"}:
+        raise RuntimeError("Missing real child/descendant network controls")
+    for record in controls.values():
+        if not isinstance(record, dict) or set(record) != {"provider", "tcp_errors", "udp_errors",
+                "audit_read_error", "audit_write_open_error"} or record["provider"] is not True or any(
+                type(record[name]) is not int or record[name] != 5 for name in ("audit_read_error", "audit_write_open_error")):
+            raise RuntimeError("Missing provider positive")
+        for name in ("tcp_errors", "udp_errors"):
+            errors = record[name]
+            if type(errors) is not list or len(errors) != 3 or any(
+                    not (type(error) is int and error in (10013, 10060) or
+                         type(error) is str and error == "timed_out") for error in errors):
+                raise RuntimeError("Incomplete network denial results")
+    return value
+
+
+def network_observation(events, config, value):
+    expected = []
+    for phase in ("before", "after"):
+        for name, listener, host in (("provider", "provider", "127.0.0.1"),
+                ("outside", "outside", config["host"]), ("loopback-port", "outside", "127.0.0.1"),
+                ("loopback-address", "provider", "127.0.0.2")):
+            expected.extend((
+                {"event": "tcp_accept", "listener": listener, "local_host": host,
+                 "local_port": config[listener + "_port"]},
+                {"event": "tcp_request", "listener": listener, "request": f"GET /{phase}/{name} HTTP/1.0"}))
+        for name, listener in (("outside", "outside"), ("loopback-port", "outside"), ("provider-udp", "provider")):
+            expected.append({"event": "udp_receive", "listener": listener, "payload": phase + "/" + name})
+    for role in ("child", "descendant"):
+        expected.extend((
+            {"event": "tcp_accept", "listener": "provider", "local_host": "127.0.0.1",
+             "local_port": config["provider_port"]},
+            {"event": "tcp_request", "listener": "provider",
+             "request": f"GET /{role}/{value[role + '_pid']}/provider HTTP/1.0"}))
+    if Counter(json.dumps(row, sort_keys=True) for row in events) != \
+            Counter(json.dumps(row, sort_keys=True) for row in expected):
+        raise RuntimeError("Network observer saw missing positives or forbidden/unmatched traffic")
+    return {"ordinary_endpoint_baselines": 14, "provider_requests": 2, "tcp_accepts": 10,
+        "udp_datagrams": 6, "forbidden_tcp_accepts": 0, "forbidden_udp_deliveries": 0,
+        "exact_observation": True, "remote_internet": "not_run", "inbound_isolation": "not_run"}
+
+
+def network_controls(run, probe, root, logs):
+    response = b"HTTP/1.0 200 OK\r\nContent-Length: 14\r\nConnection: close\r\n\r\ncm-provider-ok"
+    events, lock = [], threading.Lock()
+    observer = {"status": "running"}
+    audit = logs / "network-audit-canary.txt"
+    with audit.open("xb") as stream:
+        stream.write(b"psec-network-audit")
+
+    with (logs / "network-events.jsonl").open("x", encoding="utf-8") as stream:
+        def note(event):
+            with lock:
+                if len(events) >= 128:
+                    raise RuntimeError("Network observer event limit exceeded")
+                events.append(event)
+                stream.write(json.dumps(event, sort_keys=True) + "\n")
+                stream.flush()
+                print("PSEC network observer: " + json.dumps(event, sort_keys=True), flush=True)
+
+        class Tcp(socketserver.BaseRequestHandler):
+            def handle(self):
+                note({"event": "tcp_accept", "listener": self.server.role,
+                    "local_host": self.request.getsockname()[0], "local_port": self.request.getsockname()[1]})
+                self.request.settimeout(1)
+                with self.request.makefile("rb") as source:
+                    request = source.readline(1025)
+                    if len(request) > 1024 or not request.endswith(b"\r\n") or source.readline(3) != b"\r\n":
+                        raise RuntimeError("Invalid bounded network request")
+                note({"event": "tcp_request", "listener": self.server.role,
+                    "request": request[:-2].decode("ascii", errors="strict")})
+                self.request.sendall(response)
+
+        class Udp(socketserver.BaseRequestHandler):
+            def handle(self):
+                data, sock = self.request
+                note({"event": "udp_receive", "listener": self.server.role,
+                    "payload": data.decode("ascii", errors="replace")})
+                if not 1 <= len(data) <= 1024:
+                    raise RuntimeError("Invalid bounded UDP canary")
+                sock.sendto(data, self.client_address)
+
+        def stop(server, thread):
+            server.shutdown()
+            thread.join(timeout=2)
+            if thread.is_alive():
+                raise RuntimeError("Network listener did not stop")
+
+        try:
+            hosts = [row[4][0] for row in socket.getaddrinfo(socket.gethostname(), 0, socket.AF_INET, socket.SOCK_STREAM)
+                if not (ipaddress.ip_address(row[4][0]).is_loopback or ipaddress.ip_address(row[4][0]).is_link_local or
+                        ipaddress.ip_address(row[4][0]).is_unspecified)]
+            if not hosts:
+                raise RuntimeError("No non-loopback local IPv4 for ordinary canary")
+            with ExitStack() as stack:
+                servers = []
+                for role in ("provider", "outside"):
+                    tcp = stack.enter_context(socketserver.TCPServer(("0.0.0.0", 0), Tcp))
+                    tcp.role = role
+                    udp = stack.enter_context(socketserver.UDPServer(("0.0.0.0", tcp.server_address[1]), Udp))
+                    udp.role = role
+                    udp.max_packet_size = 1025
+                    servers.extend((tcp, udp))
+                config = {"host": hosts[0], "provider_port": servers[0].server_address[1],
+                    "outside_port": servers[2].server_address[1], "audit_dir": str(logs)}
+                if config["provider_port"] == config["outside_port"]:
+                    raise RuntimeError("Provider and canary ports must differ")
+                observer["config"] = config
+                root.mkdir()
+                (root / "network.json").write_text(json.dumps(config), encoding="utf-8")
+                (logs / "network-config.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+                for server in servers:
+                    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+                    thread.start()
+                    stack.callback(stop, server, thread)
+
+                def baseline(phase):
+                    with ci_progress.stage("ordinary-network-" + phase):
+                        with audit.open("r+b") as source:
+                            if source.read() != b"psec-network-audit":
+                                raise RuntimeError("Protected observer canary changed")
+                        for name, host, port in (("provider", "127.0.0.1", config["provider_port"]),
+                                ("outside", config["host"], config["outside_port"]),
+                                ("loopback-port", "127.0.0.1", config["outside_port"]),
+                                ("loopback-address", "127.0.0.2", config["provider_port"])):
+                            with socket.create_connection((host, port), timeout=1) as client:
+                                client.sendall(f"GET /{phase}/{name} HTTP/1.0\r\n\r\n".encode("ascii"))
+                                with client.makefile("rb") as source:
+                                    if source.read(1025) != response:
+                                        raise RuntimeError("Ordinary TCP baseline failed: " + name)
+                        for name, host, port in (("outside", config["host"], config["outside_port"]),
+                                ("loopback-port", "127.0.0.1", config["outside_port"]),
+                                ("provider-udp", "127.0.0.1", config["provider_port"])):
+                            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
+                                client.settimeout(1)
+                                payload = (phase + "/" + name).encode("ascii")
+                                client.sendto(payload, (host, port))
+                                if client.recvfrom(1025)[0] != payload:
+                                    raise RuntimeError("Ordinary UDP baseline failed: " + name)
+                        observer[phase + "_baseline"] = True
+
+                baseline("before")
+                try:
+                    _, text = run("native-psec-provider-network-controls", [probe, "--network", root], 25)
+                    value = network_record(text)
+                finally:
+                    baseline("after")
+            observer.update(network_observation(events, config, value), status="passed", audit_bytes_preserved=True)
+            return value
+        except BaseException:
+            observer["status"] = "failed"
+            raise
+        finally:
+            (logs / "network-observer.json").write_text(json.dumps(observer, indent=2) + "\n", encoding="utf-8")
+
+
 def diagnose_exports():
     # Export presence after a failed gate cannot establish callable availability.
     names = (*EXPORTS, "Experimental_CreateProcessInSandbox", "Experimental_QuerySandboxSupport")
@@ -106,10 +278,11 @@ def main(*, key=KEY):
     authority(json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text()), entry, os.environ, key=key)
     target = entry["target"]
     stage = os.environ.get("CM_PREFLIGHT_STAGE")
-    if stage not in ("isolation-availability", "isolation-process") or \
+    if stage not in ("isolation-availability", "isolation-process", "isolation-network") or \
             Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
         raise RuntimeError("Isolation probe requires its fixed stage and recorded source checkout")
-    process_probe = stage == "isolation-process"
+    network_probe = stage == "isolation-network"
+    process_probe = stage in ("isolation-process", "isolation-network")
     if process_probe and key != "windows-arm64":
         raise RuntimeError("Real PSEC process fixture requires native Windows ARM64")
     logs = Path(os.environ["CM_CI_LOG_DIR"]).resolve()
@@ -118,6 +291,7 @@ def main(*, key=KEY):
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
     report = {"schema_version": 1, "status": "running", "scope":
+        "V01e-native-psec-provider-network-controls-only" if network_probe else
         "V01d-native-psec-process-file-controls-only" if process_probe else "V01b-native-isolation-availability-only",
         "platform": key, "target": target, "source_sha": os.environ["CM_SOURCE_SHA"],
         "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"], "run_id": int(os.environ["GITHUB_RUN_ID"]),
@@ -210,7 +384,10 @@ def main(*, key=KEY):
             probe = temp / "target" / target / "debug/examples" / (name + ".exe")
             report["native_probe"] = pe_fixture(probe.read_bytes(), False,
                 expected_machine={"X64": 0x8664, "ARM64": 0xAA64}[entry["runner_arch"]])
-            if process_probe:
+            if network_probe:
+                report["native_provider_network_controls"] = network_controls(run, probe, temp / "network-controls", logs)
+                report["status"] = "passed_provider_network_controls_only"
+            elif process_probe:
                 _, text = run("native-psec-process-file-controls", [probe, "--broker", temp / "process-controls"], 25)
                 report["native_process_file_controls"] = process_record(text)
                 report["status"] = "passed_process_file_controls_only"
@@ -339,18 +516,64 @@ def self_check():
             raise AssertionError("Incomplete or unbound PSEC process control accepted")
     with tempfile.TemporaryDirectory() as directory:
         (Path(directory) / "cm-worker-preflight.json").write_text("{}")
-        env = {"RUNNER_TEMP": directory, "CM_SOURCE_DIR": str(Path(__file__).resolve().parents[2]),
-            "CM_PREFLIGHT_STAGE": "isolation-process"}
-        with patch.dict(os.environ, env), patch.object(record_run, "require_hosted_worker",
-                return_value={"target": "x86_64-pc-windows-msvc"}), patch(__name__ + ".authority"), \
-                patch.object(record_run, "record") as record:
-            try:
-                main()
-            except RuntimeError as error:
-                assert str(error) == "Real PSEC process fixture requires native Windows ARM64"
-            else:
-                raise AssertionError("ARM64-only PSEC process gate accepted x64")
-            record.assert_not_called()
+        for stage in ("isolation-process", "isolation-network"):
+            env = {"RUNNER_TEMP": directory, "CM_SOURCE_DIR": str(Path(__file__).resolve().parents[2]),
+                "CM_PREFLIGHT_STAGE": stage}
+            with patch.dict(os.environ, env), patch.object(record_run, "require_hosted_worker",
+                    return_value={"target": "x86_64-pc-windows-msvc"}), patch(__name__ + ".authority"), \
+                    patch.object(record_run, "record") as record:
+                try:
+                    main()
+                except RuntimeError as error:
+                    assert str(error) == "Real PSEC process fixture requires native Windows ARM64"
+                else:
+                    raise AssertionError("ARM64-only PSEC process gate accepted x64")
+                record.assert_not_called()
+    controls = {"provider": True, "tcp_errors": [10013, 10060, "timed_out"], "udp_errors": [10060] * 3,
+        "audit_read_error": 5, "audit_write_open_error": 5}
+    network = {**process, "gate": "native-psec-provider-network-control", "network": "passed_provider_and_canary_controls",
+        "network_controls": {"child": controls, "descendant": controls}}
+    assert network_record(json.dumps(network)) == network
+    for change in ({"gate": "native-psec-process-file-control"}, {"child_pid": 3}, {"network": "not_run"},
+            {"full_isolation": "pass"}, {"network_controls": {}},
+            *({"network_controls": {"child": {**controls, **bad}, "descendant": controls}} for bad in
+                ({"provider": 1}, {"provider": False}, {"tcp_errors": [0, 10060, 10060]},
+                 {"tcp_errors": [True, 10060, 10060]}, {"tcp_errors": [10013.0, 10060, 10060]},
+                 {"tcp_errors": ["unknown", 10060, 10060]}, {"udp_errors": [10060, 10060]},
+                 {"udp_errors": [10054] * 3}, {"audit_read_error": 0}, {"audit_write_open_error": True},
+                 {"extra": True})), {"extra": True}):
+        try:
+            network_record(json.dumps({**network, **change}))
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Incomplete or unbound PSEC network control accepted")
+    config = {"host": "10.0.0.2", "provider_port": 1234, "outside_port": 5678}
+    events = []
+    for phase in ("before", "after"):
+        for listener, host, port, name in (("provider", "127.0.0.1", 1234, "provider"),
+                ("outside", "10.0.0.2", 5678, "outside"), ("outside", "127.0.0.1", 5678, "loopback-port"),
+                ("provider", "127.0.0.2", 1234, "loopback-address")):
+            events.extend(({"event": "tcp_accept", "listener": listener, "local_host": host, "local_port": port},
+                {"event": "tcp_request", "listener": listener, "request": f"GET /{phase}/{name} HTTP/1.0"}))
+        for listener, name in (("outside", "outside"), ("outside", "loopback-port"), ("provider", "provider-udp")):
+            events.append({"event": "udp_receive", "listener": listener, "payload": phase + "/" + name})
+    for role, pid in (("child", 2), ("descendant", 3)):
+        events.extend(({"event": "tcp_accept", "listener": "provider", "local_host": "127.0.0.1", "local_port": 1234},
+            {"event": "tcp_request", "listener": "provider", "request": f"GET /{role}/{pid}/provider HTTP/1.0"}))
+    assert len(events) == 26
+    assert network_observation(events, config, network)["ordinary_endpoint_baselines"] == 14
+    for bad_events, bad_config, bad_value in ((events[1:], config, network), (events + [events[0]], config, network),
+            (events + [{"event": "tcp_accept", "listener": "outside", "local_host": "10.0.0.2", "local_port": 5678}], config, network),
+            (events + [{"event": "udp_receive", "listener": "outside", "payload": "child/2/udp0"}], config, network),
+            (events, {**config, "provider_port": 1235}, network), (events, config, {**network, "descendant_pid": 4}),
+            ([{**events[0], "extra": True}, *events[1:]], config, network)):
+        try:
+            network_observation(bad_events, bad_config, bad_value)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Missing/extra/forbidden/unbound observer traffic accepted")
 
 
 if __name__ == "__main__":
