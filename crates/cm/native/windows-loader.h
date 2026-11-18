@@ -42,5 +42,6 @@ int cm_windows_private_write(const CmWindowsPin *parent, const wchar_t *name,
     const unsigned char *bytes, size_t length);
 CmWindowsPin *cm_windows_private_directory(const CmWindowsPin *parent, const wchar_t *name);
 int cm_windows_private_sync(const CmWindowsPin *directory);
+int cm_windows_private_publish(const CmWindowsPin *parent, const wchar_t *source, const wchar_t *target);
 CmWindowsPin *cm_windows_lock_open(const CmWindowsPin *parent, const wchar_t *name, int create);
 #endif

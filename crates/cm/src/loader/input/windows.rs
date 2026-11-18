@@ -53,6 +53,11 @@ unsafe extern "C" {
         name: *const u16,
     ) -> *mut std::ffi::c_void;
     fn cm_windows_private_sync(directory: *const std::ffi::c_void) -> i32;
+    fn cm_windows_private_publish(
+        parent: *const std::ffi::c_void,
+        source: *const u16,
+        target: *const u16,
+    ) -> i32;
     fn cm_windows_lock_open(
         parent: *const std::ffi::c_void,
         name: *const u16,
@@ -117,6 +122,22 @@ impl Handle {
             return Err(format!("private directory flush failed: {error}"));
         }
         Ok(())
+    }
+
+    pub(crate) fn publish(&self, source: &OsStr, target: &OsStr) -> Result<bool, String> {
+        let source = wide(source)?;
+        let target = wide(target)?;
+        match unsafe {
+            cm_windows_private_publish(self.pin.0.as_ptr(), source.as_ptr(), target.as_ptr())
+        } {
+            1 => Ok(true),
+            0 => Ok(false),
+            -2 => Err(format!(
+                "committed: namespace publication completed; {}",
+                io::Error::last_os_error()
+            )),
+            _ => Err(io::Error::last_os_error().to_string()),
+        }
     }
 
     fn take(raw: *mut std::ffi::c_void) -> Result<Self, String> {

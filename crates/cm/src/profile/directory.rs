@@ -19,6 +19,47 @@ pub(crate) struct Directory {
 }
 
 impl Directory {
+    #[cfg(not(windows))]
+    pub(crate) fn publish(&self, temporary: &str, target: &str) -> Result<bool, String> {
+        self.check()?;
+        let source = CString::new(temporary).map_err(|e| e.to_string())?;
+        let target = CString::new(target).map_err(|e| e.to_string())?;
+        if unsafe {
+            libc::renameat2(
+                self.file.as_raw_fd(),
+                source.as_ptr(),
+                self.file.as_raw_fd(),
+                target.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        } == 0
+        {
+            self.file.sync_all().map_err(|e| e.to_string())?;
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            Ok(false)
+        } else {
+            Err(error.to_string())
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn publish(&self, temporary: &str, target: &str) -> Result<bool, String> {
+        self.check()?;
+        let published = self.file.publish(OsStr::new(temporary), OsStr::new(target))?;
+        if published {
+            self.file
+                .sync_private_directory()
+                .and_then(|()| self.check())
+                .map_err(|error| format!("committed: namespace publication completed; {error}"))?;
+        } else {
+            self.check()?;
+        }
+        Ok(published)
+    }
+
     pub(crate) fn open(path: &Path) -> Result<Self, String> {
         let file = loader::open_directory(path)?;
         #[cfg(not(windows))]

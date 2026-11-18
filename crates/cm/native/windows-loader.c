@@ -239,8 +239,8 @@ static CmWindowsPin *cm_windows_input_finish(CmWindowsPin *p, int directory, int
     wchar_t final[4096];
     DWORD length;
     if (!cm_windows_file_information(p, &info)) goto failed;
-    if (!!(info.attributes & FILE_ATTRIBUTE_DIRECTORY) != !!directory
-        || (!directory && info.links != 1)) {
+    if ((directory >= 0 && !!(info.attributes & FILE_ATTRIBUTE_DIRECTORY) != !!directory)
+        || (!(info.attributes & FILE_ATTRIBUTE_DIRECTORY) && info.links != 1)) {
         SetLastError(ERROR_INVALID_DATA); goto failed;
     }
     length = GetFinalPathNameByHandleW(p->file, final, 4096, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
@@ -298,15 +298,21 @@ failed: {
     return NULL;
 }}
 
-static CmWindowsPin *cm_windows_child(const CmWindowsPin *parent, const wchar_t *name, int directory,
-    PSECURITY_DESCRIPTOR descriptor, int writable) {
+static int cm_windows_component(const CmWindowsPin *parent, const wchar_t *name) {
     size_t length = wcslen(name);
     if (!length || length > 255 || wcspbrk(name, L"\\/:\"<>?*|") || !wcscmp(name, L".")
         || !wcscmp(name, L"..") || name[length - 1] == L'.' || name[length - 1] == L' '
-        || parent->count >= 96) { SetLastError(ERROR_INVALID_NAME); return NULL; }
+        || parent->count >= 96) { SetLastError(ERROR_INVALID_NAME); return 0; }
     if (wcslen(parent->path) + length + 2 > 4096) {
-        SetLastError(ERROR_BUFFER_OVERFLOW); return NULL;
+        SetLastError(ERROR_BUFFER_OVERFLOW); return 0;
     }
+    return 1;
+}
+
+static CmWindowsPin *cm_windows_child(const CmWindowsPin *parent, const wchar_t *name, int directory,
+    PSECURITY_DESCRIPTOR descriptor, int writable, int mutation) {
+    if (!cm_windows_component(parent, name)) return NULL;
+    size_t length = wcslen(name);
     CmWindowsPin *p = (CmWindowsPin *)calloc(1, sizeof(*p));
     if (!p) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return NULL; }
     p->file = INVALID_HANDLE_VALUE;
@@ -342,8 +348,13 @@ static CmWindowsPin *cm_windows_child(const CmWindowsPin *parent, const wchar_t 
         attributes.Attributes |= 0x1000;
         options = 1 | 2 | 0x20;
     }
+    if (mutation) {
+        access = FILE_READ_DATA | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE | DELETE;
+        attributes.Attributes |= 0x1000;
+        options = 0x20;
+    }
     NTSTATUS result = open_file(&p->file, access, &attributes, &status, NULL, 0,
-        FILE_SHARE_READ | ((directory || writable) ? FILE_SHARE_WRITE : 0), descriptor ? 2 : 1,
+        FILE_SHARE_READ | ((!mutation && (directory || writable)) ? FILE_SHARE_WRITE : 0), descriptor ? 2 : 1,
         options, NULL, 0);
     if (result < 0) { SetLastError(dos_error(result)); goto failed; }
     return cm_windows_input_finish(p, directory, descriptor != NULL && !directory);
@@ -355,7 +366,7 @@ failed: {
 }}
 
 CmWindowsPin *cm_windows_child_open(const CmWindowsPin *parent, const wchar_t *name, int directory) {
-    return cm_windows_child(parent, name, directory, NULL, 0);
+    return cm_windows_child(parent, name, directory, NULL, 0, 0);
 }
 
 static TOKEN_USER *cm_windows_user(void) {
@@ -477,7 +488,7 @@ int cm_windows_private_write(const CmWindowsPin *parent, const wchar_t *name,
         || !SetSecurityDescriptorDacl(&descriptor, TRUE, (PACL)&acl, FALSE)
         || !SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED)
         || !cm_windows_private_descriptor(&descriptor, user->User.Sid)) goto done;
-    p = cm_windows_child(parent, name, 0, &descriptor, 0);
+    p = cm_windows_child(parent, name, 0, &descriptor, 0, 0);
     if (!p || !cm_windows_private_check(p)) goto done;
     ULONG mode = 0;
     IO_STATUS_BLOCK status;
@@ -520,9 +531,9 @@ CmWindowsPin *cm_windows_private_directory(const CmWindowsPin *parent, const wch
         || !SetSecurityDescriptorDacl(&descriptor, TRUE, (PACL)&acl, FALSE)
         || !SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED)
         || !cm_windows_private_descriptor(&descriptor, user->User.Sid)) goto done;
-    p = cm_windows_child(parent, name, 1, &descriptor, 0);
+    p = cm_windows_child(parent, name, 1, &descriptor, 0, 0);
     if (!p && (GetLastError() == ERROR_ALREADY_EXISTS || GetLastError() == ERROR_FILE_EXISTS))
-        p = cm_windows_child(parent, name, 1, NULL, 0);
+        p = cm_windows_child(parent, name, 1, NULL, 0, 0);
     if (p && (!cm_windows_private_check(p) || !cm_windows_private_check(parent))) {
         DWORD error = GetLastError();
         cm_windows_pin_free(p);
@@ -560,15 +571,58 @@ done: {
     return ok;
 }}
 
+int cm_windows_private_publish(const CmWindowsPin *parent, const wchar_t *source, const wchar_t *target) {
+    if (!cm_windows_private_parent(parent) || !cm_windows_component(parent, target)) return -1;
+    CmWindowsPin *p = cm_windows_child(parent, source, -1, NULL, 0, 1);
+    if (!p) return -1;
+    int result = -1;
+    if (!cm_windows_private_check(p) || !cm_windows_private_check(parent)) goto done;
+    int comparison = CompareStringOrdinal(source, -1, target, -1, TRUE);
+    if (!comparison) goto done;
+    if (comparison == CSTR_EQUAL) { result = 0; goto done; }
+    size_t length = wcslen(target);
+    union {
+        FILE_RENAME_INFO alignment;
+        BYTE bytes[sizeof(FILE_RENAME_INFO) + 255 * sizeof(wchar_t)];
+    } buffer;
+    ZeroMemory(&buffer, sizeof(buffer));
+    FILE_RENAME_INFO *rename = (FILE_RENAME_INFO *)buffer.bytes;
+    rename->ReplaceIfExists = FALSE;
+    rename->RootDirectory = parent->file;
+    rename->FileNameLength = (DWORD)(length * sizeof(wchar_t));
+    memcpy(rename->FileName, target, length * sizeof(wchar_t));
+    if (swprintf_s(p->path, 4096, L"%ls%ls%ls", parent->path,
+        parent->path[wcslen(parent->path) - 1] == L'\\' ? L"" : L"\\", target) < 0) {
+        SetLastError(ERROR_BUFFER_OVERFLOW); goto done;
+    }
+    if (!SetFileInformationByHandle(p->file, FileRenameInfo, rename,
+        (DWORD)(sizeof(FILE_RENAME_INFO) + length * sizeof(wchar_t)))) {
+        DWORD error = GetLastError();
+        if (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS) result = 0;
+        SetLastError(error);
+        goto done;
+    }
+    /* A later verification failure must not be reported as an uncommitted rename. */
+    result = -2;
+    p = cm_windows_input_finish(p, -1, 0);
+    if (!p || !cm_windows_private_check(p) || !cm_windows_private_check(parent)) goto done;
+    result = 1;
+done: {
+    DWORD error = result == 1 ? ERROR_SUCCESS : GetLastError();
+    cm_windows_pin_free(p);
+    SetLastError(error);
+    return result;
+}}
+
 CmWindowsPin *cm_windows_lock_open(const CmWindowsPin *parent, const wchar_t *name, int create) {
     if (!cm_windows_private_check(parent)) return NULL;
-    CmWindowsPin *p = cm_windows_child(parent, name, 0, NULL, 1);
+    CmWindowsPin *p = cm_windows_child(parent, name, 0, NULL, 1, 0);
     if (!p && create && GetLastError() == ERROR_FILE_NOT_FOUND) {
         if (!cm_windows_private_write(parent, name, NULL, 0)) {
             DWORD error = GetLastError();
             if (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS) return NULL;
         }
-        p = cm_windows_child(parent, name, 0, NULL, 1);
+        p = cm_windows_child(parent, name, 0, NULL, 1, 0);
     }
     if (!p) return NULL;
     if (!cm_windows_private_check(p) || !cm_windows_private_check(parent)) {

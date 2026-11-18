@@ -356,33 +356,6 @@ fn acquire_writer(file: &File) -> Result<(), String> {
     loader::try_lock(file, true).map_err(|_| "profile write lock is busy or unsafe".into())
 }
 
-impl Directory {
-    pub(crate) fn publish(&self, temporary: &str, target: &str) -> Result<bool, String> {
-        self.check()?;
-        let source = CString::new(temporary).map_err(|e| e.to_string())?;
-        let target = CString::new(target).map_err(|e| e.to_string())?;
-        if unsafe {
-            libc::renameat2(
-                self.file.as_raw_fd(),
-                source.as_ptr(),
-                self.file.as_raw_fd(),
-                target.as_ptr(),
-                libc::RENAME_NOREPLACE,
-            )
-        } == 0
-        {
-            self.file.sync_all().map_err(|e| e.to_string())?;
-            return Ok(true);
-        }
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::AlreadyExists {
-            Ok(false)
-        } else {
-            Err(error.to_string())
-        }
-    }
-}
-
 pub(crate) fn temporary(kind: &str) -> String {
     format!(
         ".{kind}.{}.{}.tmp",

@@ -627,6 +627,8 @@ impl UpgradeState {
             target.revalidate()?;
             fault(1)?;
             let tree = random_id()?;
+            #[cfg(windows)]
+            drop(stage);
             if !target
                 .store
                 .trees
@@ -1113,6 +1115,8 @@ pub(crate) fn reconcile(
             }
             held.revalidate()?;
             let id = random_id()?;
+            #[cfg(windows)]
+            drop(stage);
             if !held
                 .store
                 .trees
@@ -1369,6 +1373,10 @@ fn checkpoint(mut transaction: Transaction, options: &Options) -> Result<Value> 
         prepared.revalidate()?;
         held.revalidate()?;
         let id = loader::hash(&bytes);
+        #[cfg(windows)]
+        drop(data);
+        #[cfg(windows)]
+        drop(stage);
         if !held
             .store
             .checkpoints
@@ -1522,6 +1530,8 @@ fn restore(
             .map_err(|_| failure("input_drift", "checkpoint manifest replaced"))?;
         fault(1)?;
         let tree = random_id()?;
+        #[cfg(windows)]
+        drop(stage);
         if !held
             .store
             .trees
@@ -1706,6 +1716,8 @@ fn clean(
         }
         held.revalidate()?;
         let tree = random_id()?;
+        #[cfg(windows)]
+        drop(stage);
         if !held
             .store
             .trees

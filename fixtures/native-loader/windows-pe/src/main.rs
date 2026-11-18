@@ -408,7 +408,190 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     assert_eq!(fs::read(child_path.join("unchanged"))?, bytes);
     private.child("created-directory")?.check()?;
     println!("cm_private passed=directory-ancestor-pin");
+
+    private.create_file("publish-临时", bytes)?;
+    let file = input::open_at(&private.file, OsStr::new("publish-临时"), false)?;
+    let published_identity = file.identity()?;
+    drop(file);
+    assert!(private.publish("publish-临时", "published-文件")?);
+    assert!(!private.path.join("publish-临时").exists());
+    assert_eq!(fs::read(private.path.join("published-文件"))?, bytes);
+    let file = input::open_at(&private.file, OsStr::new("published-文件"), false)?;
+    assert_eq!(file.identity()?, published_identity);
+    file.check_private()?;
+    drop(file);
+    println!("cm_private passed=published-private-file");
+
+    private.create_file("publish-collision", b"other")?;
+    let file = input::open_at(&private.file, OsStr::new("publish-collision"), false)?;
+    let collision_identity = file.identity()?;
+    drop(file);
+    assert!(!private.publish("publish-collision", "published-文件")?);
+    assert!(!private.publish("publish-collision", "PUBLISH-COLLISION")?);
+    assert!(!private.publish("publish-collision", "created-directory")?);
+    assert_eq!(fs::read(private.path.join("published-文件"))?, bytes);
+    assert_eq!(fs::read(private.path.join("publish-collision"))?, b"other");
+    let file = input::open_at(&private.file, OsStr::new("publish-collision"), false)?;
+    assert_eq!(file.identity()?, collision_identity);
+    drop(file);
+    let file = input::open_at(&private.file, OsStr::new("published-文件"), false)?;
+    assert_eq!(file.identity()?, published_identity);
+    drop(file);
+    println!("cm_private passed=publish-collisions");
+
+    let stage = private.child("publish-tree")?;
+    let tree_identity = stage.file.identity()?;
+    stage.child("nested")?.create_file("value", bytes)?;
+    drop(stage);
+    assert!(private.publish("publish-tree", "published-tree")?);
+    assert!(!private.path.join("publish-tree").exists());
+    let tree = directory::Directory::open(&private.path.join("published-tree"))?;
+    assert_eq!(tree.file.identity()?, tree_identity);
+    tree.check()?;
+    assert_eq!(fs::read(tree.path.join("nested/value"))?, bytes);
+    drop(tree);
+    println!("cm_private passed=published-private-directory");
+
+    private.create_file("publish-held", bytes)?;
+    let file = input::open_at(&private.file, OsStr::new("publish-held"), false)?;
+    let clone = file.try_clone()?;
+    assert!(private.publish("publish-held", "published-held").is_err());
+    drop(file);
+    assert!(private.publish("publish-held", "published-held").is_err());
+    drop(clone);
+    let writer = fs::OpenOptions::new()
+        .write(true)
+        .open(private.path.join("publish-held"))?;
+    assert!(private.publish("publish-held", "published-held").is_err());
+    drop(writer);
+    assert!(private.publish("publish-held", "published-held")?);
+    assert_eq!(fs::read(private.path.join("published-held"))?, bytes);
+    private.create_file("publish-mapped", b"hello")?;
+    with_writable_mapping(&private.path.join("publish-mapped"), || {
+        assert!(private.publish("publish-mapped", "published-mapped").is_err());
+    })?;
+    assert!(private.publish("publish-mapped", "published-mapped")?);
+    assert_eq!(fs::read(private.path.join("published-mapped"))?, b"hello");
+    let stage = private.child("publish-held-tree")?;
+    let descendant = stage.child("descendant")?;
+    drop(stage);
+    assert!(private.publish("publish-held-tree", "published-held-tree").is_err());
+    descendant.check()?;
+    drop(descendant);
+    assert!(private.publish("publish-held-tree", "published-held-tree")?);
+    println!("cm_private passed=publish-retained-pins");
+
+    private.create_file("publish-hardlink", bytes)?;
+    fs::hard_link(
+        private.path.join("publish-hardlink"),
+        private.path.join("publish-hardlink-alias"),
+    )?;
+    assert!(private.publish("publish-hardlink", "published-hardlink").is_err());
+    fs::remove_file(private.path.join("publish-hardlink-alias"))?;
+    assert_eq!(fs::read(private.path.join("publish-hardlink"))?, bytes);
+    fs::write(private.path.join("publish-public"), b"unprotected")?;
+    let file = input::open_at(&private.file, OsStr::new("publish-public"), false)?;
+    assert!(file.check_private().is_err());
+    drop(file);
+    assert!(private.publish("publish-public", "published-public").is_err());
+    let junction = private.path.join("publish-junction");
+    let output = Command::new("cmd.exe")
+        .args([
+            OsStr::new("/D"),
+            OsStr::new("/C"),
+            OsStr::new("mklink"),
+            OsStr::new("/J"),
+            junction.as_os_str(),
+            child_path.as_os_str(),
+        ])
+        .output()?;
+    assert!(output.status.success(), "publish junction setup: {output:?}");
+    assert!(private.publish("publish-junction", "published-junction").is_err());
+    assert!(!private.publish("publish-collision", "publish-junction")?);
+    assert_eq!(fs::read(child_path.join("unchanged"))?, bytes);
+    fs::remove_dir(&junction)?;
+    assert!(!private.path.join("published-hardlink").exists());
+    assert!(!private.path.join("published-public").exists());
+    assert!(!private.path.join("published-junction").exists());
+    println!("cm_private passed=publish-unsafe-source");
+
+    let before = inventory()?;
+    for name in [
+        "",
+        ".",
+        "..",
+        "../escaped",
+        "..\\escaped",
+        "stream:ads",
+        "tail.",
+        "tail ",
+        "nul\0",
+    ] {
+        assert!(private.publish("publish-collision", name).is_err(), "{name:?}");
+        assert!(private.publish(name, "publish-invalid").is_err(), "{name:?}");
+    }
+    assert!(private.publish("publish-collision", &"x".repeat(256)).is_err());
+    assert!(private.publish(&"x".repeat(256), "publish-invalid").is_err());
+    assert!(private.publish("publish-missing", "publish-invalid").is_err());
+    assert_eq!(inventory()?, before);
+    assert!(!root.join("escaped").exists());
+    println!("cm_private passed=publish-invalid-paths");
+
+    control("private-change")?;
+    assert!(private.publish("publish-collision", "publish-denied").is_err());
+    assert_eq!(inventory()?, before);
+    control("private-restore")?;
+    private.check()?;
+    assert!(private.publish("publish-collision", "publish-restored")?);
+    assert_eq!(fs::read(private.path.join("publish-restored"))?, b"other");
+    println!("cm_private passed=publish-parent-drift");
     Ok(0)
+}
+
+fn with_writable_mapping(
+    path: &Path,
+    check: impl FnOnce(),
+) -> Result<(), Box<dyn std::error::Error>> {
+    unsafe extern "system" {
+        fn CreateFileMappingW(
+            file: *mut std::ffi::c_void,
+            security: *const std::ffi::c_void,
+            protection: u32,
+            high: u32,
+            low: u32,
+            name: *const u16,
+        ) -> *mut std::ffi::c_void;
+        fn MapViewOfFile(
+            mapping: *mut std::ffi::c_void,
+            access: u32,
+            high: u32,
+            low: u32,
+            size: usize,
+        ) -> *mut std::ffi::c_void;
+        fn UnmapViewOfFile(view: *const std::ffi::c_void) -> i32;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+    }
+    use std::os::windows::io::AsRawHandle;
+    let writer = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
+    let mapping = unsafe {
+        CreateFileMappingW(
+            writer.as_raw_handle(),
+            std::ptr::null(),
+            4,
+            0,
+            0,
+            std::ptr::null(),
+        )
+    };
+    assert!(!mapping.is_null());
+    let view = unsafe { MapViewOfFile(mapping, 2, 0, 0, 5) };
+    assert!(!view.is_null());
+    drop(writer);
+    unsafe { std::ptr::copy_nonoverlapping(b"hello".as_ptr(), view.cast::<u8>(), 5) };
+    check();
+    assert_ne!(unsafe { UnmapViewOfFile(view) }, 0);
+    assert_ne!(unsafe { CloseHandle(mapping) }, 0);
+    Ok(())
 }
 
 fn input_controls(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
@@ -485,45 +668,9 @@ fn input_controls(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     assert!(input::open_at(&parent, OsStr::new("value"), false).is_err());
     drop(writer);
     passed("preheld-writer");
-    unsafe extern "system" {
-        fn CreateFileMappingW(
-            file: *mut std::ffi::c_void,
-            security: *const std::ffi::c_void,
-            protection: u32,
-            high: u32,
-            low: u32,
-            name: *const u16,
-        ) -> *mut std::ffi::c_void;
-        fn MapViewOfFile(
-            mapping: *mut std::ffi::c_void,
-            access: u32,
-            high: u32,
-            low: u32,
-            size: usize,
-        ) -> *mut std::ffi::c_void;
-        fn UnmapViewOfFile(view: *const std::ffi::c_void) -> i32;
-        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
-    }
-    use std::os::windows::io::AsRawHandle;
-    let writer = fs::OpenOptions::new().read(true).write(true).open(&path)?;
-    let mapping = unsafe {
-        CreateFileMappingW(
-            writer.as_raw_handle(),
-            std::ptr::null(),
-            4,
-            0,
-            0,
-            std::ptr::null(),
-        )
-    };
-    assert!(!mapping.is_null());
-    let view = unsafe { MapViewOfFile(mapping, 2, 0, 0, 5) };
-    assert!(!view.is_null());
-    drop(writer);
-    unsafe { std::ptr::copy_nonoverlapping(b"hello".as_ptr(), view.cast::<u8>(), 5) };
-    assert!(input::open_at(&parent, OsStr::new("value"), false).is_err());
-    assert_ne!(unsafe { UnmapViewOfFile(view) }, 0);
-    assert_ne!(unsafe { CloseHandle(mapping) }, 0);
+    with_writable_mapping(&path, || {
+        assert!(input::open_at(&parent, OsStr::new("value"), false).is_err());
+    })?;
     input::read_input(&path, 5)?;
     passed("preheld-mapping");
     let file = input::open_at(&parent, OsStr::new("value"), false)?;
