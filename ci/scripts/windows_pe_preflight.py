@@ -223,6 +223,10 @@ def main():
         if not cl.is_absolute() or tuple(part.lower() for part in cl.parts[-3:]) != ("hostarm64", "arm64", "cl.exe"):
             raise RuntimeError("PE fixture requires installed native ARM64 MSVC")
         tools = report["tools"] = {"cl": {"path": str(cl), **pe_fixture(cl.read_bytes(), False, expected_machine=0xAA64)}}
+        link = Path(shutil.which("link.exe") or "")
+        if not link.is_absolute() or link.parent != cl.parent:
+            raise RuntimeError("PE fixture requires the matching installed native ARM64 linker")
+        tools["link"] = {"path": str(link), **pe_fixture(link.read_bytes(), False, expected_machine=0xAA64)}
         fixture = root / "fixtures/native-loader/windows-pe"
         lock = tomllib.loads((fixture / "Cargo.lock").read_text())
         if {row["name"]: (row["version"], row.get("checksum")) for row in lock["package"]} != {
@@ -245,7 +249,8 @@ def main():
             run("pe-format-check", [tools["rustfmt"]["path"], "--edition", "2024", "--check",
                 root / INPUTS[0], root / INPUTS[5], root / INPUTS[6]])
             os.environ.update({"CARGO_HOME": str(temp / "c"), "CARGO_TARGET_DIR": str(temp / "t"), "CARGO_INCREMENTAL": "0",
-                "RUSTUP_TOOLCHAIN": toolchain, "RUSTC": tools["rustc"]["path"]})
+                "RUSTUP_TOOLCHAIN": toolchain, "RUSTC": tools["rustc"]["path"],
+                "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER": tools["link"]["path"]})
             cargo = [tools["cargo"]["path"]]
             _, text = run("pe-cargo-metadata", [*cargo, "metadata", "--format-version", "1", "--locked"], 180, cwd=fixture)
             records = [json.loads(line) for line in text.splitlines() if line.startswith("{")]
