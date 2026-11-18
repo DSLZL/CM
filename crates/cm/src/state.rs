@@ -114,6 +114,10 @@ pub(crate) fn component(value: &str) -> bool {
     loader::identifier(value) && value != "." && value != ".."
 }
 
+fn state_path(root: &Path, relative: &str) -> PathBuf {
+    root.join(relative.split('/').collect::<PathBuf>())
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Owner {
@@ -655,7 +659,7 @@ pub(crate) struct UpgradeState {
 
 impl UpgradeState {
     pub(crate) fn capture(home: &Path, view: Option<&View>) -> Result<Option<Self>> {
-        if view.is_none() && !present(&home.join("state/cm-files-v1"))? {
+        if view.is_none() && !present(&state_path(home, "state/cm-files-v1"))? {
             return Ok(None);
         }
         if let Some(view) = view {
@@ -1046,7 +1050,7 @@ fn capture_owner(
     let mut budget = Budget::default();
     // Header directories are also bounded and recorded, without traversing another owner.
     for relative in [id.to_owned(), format!("{id}/{}", owner.schema)] {
-        let directory = Directory::open(&root.path.join(&relative))
+        let directory = Directory::open(&state_path(&root.path, &relative))
             .map_err(|_| failure("state_ownership", "unsafe state header directory"))?;
         let metadata = file_metadata(&directory.file)?;
         record(
@@ -1080,7 +1084,7 @@ fn capture_owner(
             (format!("{id}/{}", owner.schema), &target[1]),
             (id.to_owned(), &target[0]),
         ] {
-            let old = Directory::open(&root.path.join(&relative))
+            let old = Directory::open(&state_path(&root.path, &relative))
                 .map_err(|_| failure("state_ownership", "unsafe state header"))?;
             #[cfg(not(windows))]
             {
@@ -1411,7 +1415,7 @@ pub fn prepare_environment(home: &Path) -> Result<()> {
     let expected = snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.generation.state.as_ref())
-        .map(|view| home.join("state/cm-files-v1/trees").join(&view.tree));
+        .map(|view| state_path(home, "state/cm-files-v1/trees").join(&view.tree));
     if let Some(supplied) = std::env::var_os("CM_MOD_STATE_ROOT")
         && expected.as_deref().map(Path::as_os_str) != Some(supplied.as_os_str())
     {
@@ -1961,7 +1965,7 @@ pub fn run(home: &Path, command: Command<'_>, options: &Options) -> Result<Value
         // Read-only query: never creates a namespace, state tree, or lease.
         let home_directory =
             Directory::open(home).map_err(|_| failure("state_ownership", "unsafe CM home"))?;
-        let namespace = Directory::open(&home.join("state/cm-files-v1"))
+        let namespace = Directory::open(&state_path(home, "state/cm-files-v1"))
             .map_err(|_| failure("state_ownership", "unsafe state namespace"))?;
         let (bytes, pin) = read_marker(&namespace, "identity.json", 4096)
             .map_err(|_| failure("state_ownership", "invalid state home identity"))?;
@@ -1988,7 +1992,7 @@ pub fn run(home: &Path, command: Command<'_>, options: &Options) -> Result<Value
         current.revalidate()?;
         return Ok(
             json!({"owner":id,"schema":owner.schema,"version":owner.version,
-            "root":root,"path":root.join(owner.relative(id)), "generation":current.generation_id,
+            "root":root,"path":state_path(&root, &owner.relative(id)), "generation":current.generation_id,
             "enabled":current.generation.enabled.contains(id),"already_native_executed":false}),
         );
     }
@@ -2087,6 +2091,25 @@ mod tests {
             path[2].create_file("value", id.as_bytes()).unwrap();
         }
         view
+    }
+
+    #[test]
+    fn logical_record_paths_open_with_native_separators() {
+        let home = Home::new();
+        let root = Directory::open(&home.0).unwrap();
+        let owner = owner(1);
+        let directories = create_owner(&root, "example-tool", &owner).unwrap();
+        let relative = owner.relative("example-tool");
+        assert_eq!(relative, "example-tool/notes/1");
+        let path = state_path(&home.0, &relative);
+        assert_eq!(path, directories[2].path);
+        #[cfg(windows)]
+        assert!(!path.to_str().unwrap().contains('/'));
+        let opened = Directory::open(&path).unwrap();
+        assert_eq!(
+            loader::identity(&opened.file).unwrap(),
+            loader::identity(&directories[2].file).unwrap()
+        );
     }
 
     #[test]
