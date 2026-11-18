@@ -1,10 +1,14 @@
 fn main() {
     #[cfg(windows)]
     {
-        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(file!())
-            .with_file_name("native")
-            .join("windows-loader.c");
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let native = if manifest.join("native/windows-loader.c").is_file() {
+            manifest.join("native")
+        } else {
+            // The standalone PE fixture uses this build script outside its package.
+            manifest.join(file!()).with_file_name("native")
+        };
+        let source = native.join("windows-loader.c");
         println!("cargo:rerun-if-changed={}", source.display());
         println!(
             "cargo:rerun-if-changed={}",
