@@ -342,7 +342,6 @@ def native_protocol(root, temp, tools, report, run):
             "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER",
             "V8_FROM_SOURCE", "CM_NATIVE_PROTOC")):
         raise RuntimeError("Protocol compilation requires the verified native tool without overrides")
-    protoc = verified_protoc(temp, report)
     overlay_name = "adapters/codex-e4568a3/native-protoc-build.rs"
     build_name = "codex-rs/code-mode-protocol/build.rs"
     pin = json.loads((root / "adapters/codex-e4568a3/source.json").read_text(encoding="utf-8"))
@@ -353,17 +352,17 @@ def native_protocol(root, temp, tools, report, run):
         raise RuntimeError("Protocol requires its single reviewed target overlay")
     overlay_hash = sha(overlay)
     checkout = temp / "protocol-upstream"
+    git = ["git", "-c", "core.hooksPath=NUL", "-c", "core.autocrlf=false", "-c", "core.longpaths=true", "-C", checkout]
     run("protocol-source-init", ["git", "init", checkout])
-    run("protocol-source-fetch", ["git", "-C", checkout, "fetch", "--depth=1", "--no-tags",
+    run("protocol-source-fetch", [*git, "fetch", "--depth=1", "--no-tags",
         "https://github.com/openai/codex.git", REVISION], 180)
-    run("protocol-source-checkout", ["git", "-c", "core.hooksPath=NUL", "-c", "core.autocrlf=false", "-C", checkout,
-        "checkout", "--detach", REVISION], 180)
-    if run("protocol-source-identity", ["git", "-C", checkout, "rev-parse", "HEAD"]) != REVISION:
+    run("protocol-source-checkout", [*git, "checkout", "--detach", REVISION], 180)
+    if run("protocol-source-identity", [*git, "rev-parse", "HEAD"]) != REVISION:
         raise RuntimeError("Protocol source checkout differs")
     expected = {**SOURCE_HASHES, **{path: V8_SOURCE_HASHES[path] for path in (
         "codex-rs/Cargo.toml", "codex-rs/.cargo/config.toml")}}
     if any(sha(checkout / path) != value for path, value in expected.items()) or run(
-            "protocol-source-pristine", ["git", "-C", checkout, "status", "--porcelain", "--untracked-files=all"]):
+            "protocol-source-pristine", [*git, "status", "--porcelain", "--untracked-files=all"]):
         raise RuntimeError("Protocol source inputs differ before compilation")
     proto = checkout / "codex-rs/code-mode-protocol/src/grpc/codex.code_mode.v1.proto"
     expected[proto.relative_to(checkout).as_posix()] = sha(proto)
@@ -374,14 +373,19 @@ def native_protocol(root, temp, tools, report, run):
     cargo_home.mkdir()
     result = report["protocol_integration"] = {"scope": "fixed-upstream-protocol-library-only", "builds": 0,
         "source_sha256": expected, "overlay": {"path": overlay_name, "sha256": overlay_hash},
-        "protoc_sha256": report["protoc_replacement"]["binary"]["sha256"], "cli_builds": 0,
-        "v8_builds": 0, "host_integration": "not_run", "cache_identity": "probe-inputs-only"}
+        "cli_builds": 0, "v8_builds": 0, "host_integration": "not_run", "cache_identity": "probe-inputs-only"}
     run("protocol-native-components", ["rustup", "component", "add", "clippy", "rustfmt",
         "--toolchain", "1.95.0-" + TARGET], 180)
     for name in ("rustfmt", "cargo-clippy", "clippy-driver"):
         path = Path(run("protocol-" + name + "-path", ["rustup", "which", "--toolchain", "1.95.0-" + TARGET, name]))
         tools[name] = {"path": str(path), **pe_fixture(path.read_bytes(), False, expected_machine=0xAA64)}
     run("protocol-overlay-fmt", [tools["rustfmt"]["path"], "--edition", "2024", "--check", overlay], 30)
+    if run("protocol-preparation-delta", [*git, "diff", "HEAD", "--name-only"]) != build_name or run(
+            "protocol-preparation-untracked", [*git, "ls-files", "--others", "--exclude-standard"]):
+        raise RuntimeError("Protocol checkout changed before compilation")
+    native_protoc(temp, tools, report, run)
+    protoc = verified_protoc(temp, report)
+    result["protoc_sha256"] = report["protoc_replacement"]["binary"]["sha256"]
     os.environ.update({"CARGO_HOME": str(cargo_home), "CARGO_TARGET_DIR": str(target), "CARGO_INCREMENTAL": "0",
         "RUSTC": tools["rustc"]["path"], "RUSTUP_TOOLCHAIN": "1.95.0-" + TARGET,
         "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER": tools["link"]["path"], "CM_NATIVE_PROTOC": str(protoc)})
@@ -389,8 +393,10 @@ def native_protocol(root, temp, tools, report, run):
     try:
         os.chdir(checkout / "codex-rs")
         verified_protoc(temp, report)
-        if run("protocol-source-delta-before", ["git", "-C", checkout, "diff", "HEAD", "--name-only"]) != build_name or run(
-                "protocol-source-untracked-before", ["git", "-C", checkout, "ls-files", "--others", "--exclude-standard"]):
+        if any(sha(checkout / path) != value for path, value in expected.items()) or sha(overlay) != overlay_hash:
+            raise RuntimeError("Protocol source or overlay changed before compilation")
+        if run("protocol-source-delta-before", [*git, "diff", "HEAD", "--name-only"]) != build_name or run(
+                "protocol-source-untracked-before", [*git, "ls-files", "--others", "--exclude-standard"]):
             raise RuntimeError("Protocol checkout changed before compilation")
         result["builds"] = 1
         run("native-protocol-clippy", [tools["cargo"]["path"], "clippy", "--locked", "--target", TARGET,
@@ -417,8 +423,8 @@ def native_protocol(root, temp, tools, report, run):
         verified_protoc(temp, report)
         if any(sha(Path(tool["path"])) != tool["sha256"] for tool in tools.values()):
             raise RuntimeError("Protocol native tool changed during compilation")
-        if run("protocol-source-delta", ["git", "-C", checkout, "diff", "HEAD", "--name-only"]) != build_name or run(
-                "protocol-source-untracked", ["git", "-C", checkout, "ls-files", "--others", "--exclude-standard"]):
+        if run("protocol-source-delta", [*git, "diff", "HEAD", "--name-only"]) != build_name or run(
+                "protocol-source-untracked", [*git, "ls-files", "--others", "--exclude-standard"]):
             raise RuntimeError("Protocol checkout changed outside its reviewed build script")
         result["status"] = "pass"
     finally:
@@ -567,13 +573,15 @@ def main():
             if stage == "v8-link":
                 v8_link(temp, report["tools"], values, report, run)
                 run("source-pristine-after-v8", ["git", "-C", root, "diff", "--exit-code"])
-            elif not report["protoc"]["native"]:
-                if report["protoc"].get("observed_machine") != 0x14C or report["protoc"]["executed"]:
+            else:
+                if not report["protoc"]["native"] and (report["protoc"].get("observed_machine") != 0x14C
+                        or report["protoc"]["executed"]):
                     raise RuntimeError("Unexpected vendored protoc input; native replacement requires the reviewed I386 original")
-                native_protoc(temp, report["tools"], report, run)
-            if stage == "native-protocol":
-                native_protocol(root, temp, report["tools"], report, run)
-                run("source-pristine-after-protocol", ["git", "-C", root, "diff", "--exit-code"])
+                if stage == "native-protocol":
+                    native_protocol(root, temp, report["tools"], report, run)
+                    run("source-pristine-after-protocol", ["git", "-C", root, "diff", "--exit-code"])
+                elif not report["protoc"]["native"]:
+                    native_protoc(temp, report["tools"], report, run)
             report["status"] = {"v8-link": "observed_native_v8_runtime_only",
                 "native-protocol": "observed_native_protocol_library_only",
                 "native-inputs": "observed_native_inputs_and_abi_only"}[stage]
@@ -690,7 +698,7 @@ def self_check():
         for case in ("overlay", "commit", "hash"):
             changed = {**pin, "target_overlay": {}} if case == "overlay" else pin
             command = Mock(return_value="wrong-source" if case == "commit" else REVISION)
-            with patch.dict(os.environ, {}, clear=True), patch(__name__ + ".verified_protoc", return_value=protoc), \
+            with patch.dict(os.environ, {}, clear=True), patch(__name__ + ".native_protoc") as bootstrap, \
                     patch("json.loads", return_value=changed), patch(__name__ + ".sha", return_value="0" * 64):
                 try:
                     native_protocol(root, temp, {}, {}, command)
@@ -701,8 +709,48 @@ def self_check():
                 else:
                     raise AssertionError("Changed protocol source or target overlay reached Cargo")
             assert not any(call.args[0] == "native-protocol-clippy" for call in command.call_args_list)
+            bootstrap.assert_not_called()
             if case == "overlay":
                 command.assert_not_called()
+        for case in ("pristine", "format"):
+            with tempfile.TemporaryDirectory() as directory:
+                private = Path(directory)
+                compiler = private / "native-tool.exe"
+                compiler.write_bytes(bytes(128))
+                expected = {**SOURCE_HASHES, **{path: V8_SOURCE_HASHES[path] for path in (
+                    "codex-rs/Cargo.toml", "codex-rs/.cargo/config.toml")}}
+
+                def source_hash(path):
+                    if path == root / "adapters/codex-e4568a3/native-protoc-build.rs" or path.suffix == ".proto":
+                        return "e" * 64
+                    return expected[path.relative_to(private / "protocol-upstream").as_posix()]
+
+                def prepare(label, args, timeout=30):
+                    if label.startswith("protocol-source-") and label != "protocol-source-init":
+                        assert "core.longpaths=true" in args and "core.autocrlf=false" in args and "core.hooksPath=NUL" in args
+                    if label == "protocol-source-identity":
+                        return REVISION
+                    if label == "protocol-source-pristine" and case == "pristine":
+                        return " D missing-long-snapshot.snap"
+                    if label.endswith("-path"):
+                        return str(compiler)
+                    if label == "protocol-overlay-fmt":
+                        raise RuntimeError("format-error")
+                    return ""
+
+                command = Mock(side_effect=prepare)
+                with patch.dict(os.environ, {}, clear=True), patch(__name__ + ".native_protoc") as bootstrap, \
+                        patch(__name__ + ".verified_protoc") as verify, patch(__name__ + ".sha", side_effect=source_hash), \
+                        patch(__name__ + ".pe_fixture", return_value=binary), patch("shutil.copyfile"):
+                    try:
+                        native_protocol(root, private, {}, {}, command)
+                    except RuntimeError as error:
+                        assert str(error) == ("Protocol source inputs differ before compilation" if case == "pristine" else "format-error")
+                    else:
+                        raise AssertionError("Invalid protocol preparation reached the native build")
+                bootstrap.assert_not_called()
+                verify.assert_not_called()
+                assert not any(call.args[0] == "native-protocol-clippy" for call in command.call_args_list)
         import host
         overlay_name = "adapters/codex-e4568a3/native-protoc-build.rs"
         old_pin = {**pin, "target_overlay": {key: value for key, value in pin["target_overlay"].items() if key != TARGET}}
