@@ -595,7 +595,7 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     let stage_identity = input::identity(&stage.file)?;
     stage.child("nested")?.create_file("value", bytes)?;
     assert!(private.staging("discard-tree").is_err());
-    assert_eq!(fs::read(stage.path.join("nested/value"))?, bytes);
+    assert_eq!(fs::read(stage.path.join("nested").join("value"))?, bytes);
     assert_eq!(
         input::identity(&private.child("discard-tree")?.file)?,
         stage_identity
@@ -657,7 +657,7 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
             .is_err()
     );
     assert_eq!(
-        fs::read(private.path.join("discard-tree/nested/value"))?,
+        fs::read(private.path.join("discard-tree").join("nested").join("value"))?,
         bytes
     );
     println!("cm_private passed=remove-entry-kinds");
@@ -732,7 +732,7 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
         fs::read(private.path.join("publish-public"))?,
         b"unprotected"
     );
-    let junction = private.path.join("discard-tree/junction");
+    let junction = private.path.join("discard-tree").join("junction");
     let output = Command::new("cmd.exe")
         .args([
             OsStr::new("/D"),
@@ -771,10 +771,10 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     drop(replacement);
     assert!(directory::discard(&private, "discard-original", original).is_err());
     assert_eq!(
-        fs::read(private.path.join("discard-original/value"))?,
+        fs::read(private.path.join("discard-original").join("value"))?,
         bytes
     );
-    assert_eq!(fs::read(private.path.join("discard-saved/value"))?, bytes);
+    assert_eq!(fs::read(private.path.join("discard-saved").join("value"))?, bytes);
     directory::discard(&private, "discard-original", replaced)?;
     directory::discard(&private, "discard-saved", original)?;
     println!("cm_private passed=discard-replacement-preserved");
