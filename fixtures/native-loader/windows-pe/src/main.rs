@@ -334,7 +334,10 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
             child_path.as_os_str(),
         ])
         .output()?;
-    assert!(output.status.success(), "directory junction setup: {output:?}");
+    assert!(
+        output.status.success(),
+        "directory junction setup: {output:?}"
+    );
     assert!(private.child("directory-junction").is_err());
     assert_eq!(fs::read(child_path.join("unchanged"))?, bytes);
     fs::remove_dir(&junction)?;
@@ -350,7 +353,10 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
             target.as_os_str(),
         ])
         .output()?;
-    assert!(output.status.success(), "dangling junction setup: {output:?}");
+    assert!(
+        output.status.success(),
+        "dangling junction setup: {output:?}"
+    );
     fs::remove_dir(&target)?;
     assert!(private.child("directory-junction").is_err());
     assert!(!target.exists());
