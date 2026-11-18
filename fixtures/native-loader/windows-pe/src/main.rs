@@ -468,14 +468,22 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     assert_eq!(fs::read(private.path.join("published-held"))?, bytes);
     private.create_file("publish-mapped", b"hello")?;
     with_writable_mapping(&private.path.join("publish-mapped"), || {
-        assert!(private.publish("publish-mapped", "published-mapped").is_err());
+        assert!(
+            private
+                .publish("publish-mapped", "published-mapped")
+                .is_err()
+        );
     })?;
     assert!(private.publish("publish-mapped", "published-mapped")?);
     assert_eq!(fs::read(private.path.join("published-mapped"))?, b"hello");
     let stage = private.child("publish-held-tree")?;
     let descendant = stage.child("descendant")?;
     drop(stage);
-    assert!(private.publish("publish-held-tree", "published-held-tree").is_err());
+    assert!(
+        private
+            .publish("publish-held-tree", "published-held-tree")
+            .is_err()
+    );
     descendant.check()?;
     drop(descendant);
     assert!(private.publish("publish-held-tree", "published-held-tree")?);
@@ -486,14 +494,22 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
         private.path.join("publish-hardlink"),
         private.path.join("publish-hardlink-alias"),
     )?;
-    assert!(private.publish("publish-hardlink", "published-hardlink").is_err());
+    assert!(
+        private
+            .publish("publish-hardlink", "published-hardlink")
+            .is_err()
+    );
     fs::remove_file(private.path.join("publish-hardlink-alias"))?;
     assert_eq!(fs::read(private.path.join("publish-hardlink"))?, bytes);
     fs::write(private.path.join("publish-public"), b"unprotected")?;
     let file = input::open_at(&private.file, OsStr::new("publish-public"), false)?;
     assert!(file.check_private().is_err());
     drop(file);
-    assert!(private.publish("publish-public", "published-public").is_err());
+    assert!(
+        private
+            .publish("publish-public", "published-public")
+            .is_err()
+    );
     let junction = private.path.join("publish-junction");
     let output = Command::new("cmd.exe")
         .args([
@@ -505,8 +521,15 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
             child_path.as_os_str(),
         ])
         .output()?;
-    assert!(output.status.success(), "publish junction setup: {output:?}");
-    assert!(private.publish("publish-junction", "published-junction").is_err());
+    assert!(
+        output.status.success(),
+        "publish junction setup: {output:?}"
+    );
+    assert!(
+        private
+            .publish("publish-junction", "published-junction")
+            .is_err()
+    );
     assert!(!private.publish("publish-collision", "publish-junction")?);
     assert_eq!(fs::read(child_path.join("unchanged"))?, bytes);
     fs::remove_dir(&junction)?;
@@ -527,18 +550,40 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
         "tail ",
         "nul\0",
     ] {
-        assert!(private.publish("publish-collision", name).is_err(), "{name:?}");
-        assert!(private.publish(name, "publish-invalid").is_err(), "{name:?}");
+        assert!(
+            private.publish("publish-collision", name).is_err(),
+            "{name:?}"
+        );
+        assert!(
+            private.publish(name, "publish-invalid").is_err(),
+            "{name:?}"
+        );
     }
-    assert!(private.publish("publish-collision", &"x".repeat(256)).is_err());
-    assert!(private.publish(&"x".repeat(256), "publish-invalid").is_err());
-    assert!(private.publish("publish-missing", "publish-invalid").is_err());
+    assert!(
+        private
+            .publish("publish-collision", &"x".repeat(256))
+            .is_err()
+    );
+    assert!(
+        private
+            .publish(&"x".repeat(256), "publish-invalid")
+            .is_err()
+    );
+    assert!(
+        private
+            .publish("publish-missing", "publish-invalid")
+            .is_err()
+    );
     assert_eq!(inventory()?, before);
     assert!(!root.join("escaped").exists());
     println!("cm_private passed=publish-invalid-paths");
 
     control("private-change")?;
-    assert!(private.publish("publish-collision", "publish-denied").is_err());
+    assert!(
+        private
+            .publish("publish-collision", "publish-denied")
+            .is_err()
+    );
     assert_eq!(inventory()?, before);
     control("private-restore")?;
     private.check()?;
@@ -572,7 +617,10 @@ fn with_writable_mapping(
         fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
     }
     use std::os::windows::io::AsRawHandle;
-    let writer = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
+    let writer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?;
     let mapping = unsafe {
         CreateFileMappingW(
             writer.as_raw_handle(),

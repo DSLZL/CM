@@ -48,7 +48,9 @@ impl Directory {
     #[cfg(windows)]
     pub(crate) fn publish(&self, temporary: &str, target: &str) -> Result<bool, String> {
         self.check()?;
-        let published = self.file.publish(OsStr::new(temporary), OsStr::new(target))?;
+        let published = self
+            .file
+            .publish(OsStr::new(temporary), OsStr::new(target))?;
         if published {
             self.file
                 .sync_private_directory()
