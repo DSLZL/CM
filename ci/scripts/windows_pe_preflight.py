@@ -295,7 +295,8 @@ def main():
                 for member in members:
                     data = crate_file(matches[0], member.name, 32768)
                     evidence = "pe-license-" + name + "-" + Path(member.name).name + ".txt"
-                    (logs / evidence).write_text(data.decode("utf-8", errors="strict"), encoding="utf-8")
+                    data.decode("utf-8", errors="strict")
+                    (logs / evidence).write_bytes(data)
                     report["licenses"][evidence] = {"crate_sha256": checksum, "member": member.name,
                         "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
             run("pe-clippy", [*cargo, "clippy", "--locked", "--target", TARGET, "--all-targets", "-j", "2",

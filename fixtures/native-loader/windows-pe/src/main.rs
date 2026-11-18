@@ -7,6 +7,12 @@ use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 
+// Cargo sends build-script native link directives to the separate payload library.
+#[link(name = "cm_windows_loader", kind = "static")]
+unsafe extern "C" {}
+#[link(name = "bcrypt")]
+unsafe extern "C" {}
+
 #[cfg(target_arch = "aarch64")]
 const MACHINE: u16 = 0xaa64;
 #[cfg(target_arch = "x86_64")]
