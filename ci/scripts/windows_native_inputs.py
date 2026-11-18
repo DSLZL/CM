@@ -368,12 +368,13 @@ def native_protocol(root, temp, tools, report, run):
     expected[proto.relative_to(checkout).as_posix()] = sha(proto)
     shutil.copyfile(overlay, checkout / build_name)
     expected[build_name] = overlay_hash
-    target, cargo_home = temp / "protocol-target", temp / "protocol-cargo"
+    target, cargo_home = temp / "protocol-target", temp / "c"
     target.mkdir()
     cargo_home.mkdir()
     result = report["protocol_integration"] = {"scope": "fixed-upstream-protocol-library-only", "builds": 0,
         "source_sha256": expected, "overlay": {"path": overlay_name, "sha256": overlay_hash},
-        "cli_builds": 0, "v8_builds": 0, "host_integration": "not_run", "cache_identity": "probe-inputs-only"}
+        "cli_builds": 0, "v8_builds": 0, "host_integration": "not_run", "cache_identity": "probe-inputs-only",
+        "cargo_home": str(cargo_home), "dependency_preparation": "not_run"}
     run("protocol-native-components", ["rustup", "component", "add", "clippy", "rustfmt",
         "--toolchain", "1.95.0-" + TARGET], 180)
     for name in ("rustfmt", "cargo-clippy", "clippy-driver"):
@@ -383,15 +384,24 @@ def native_protocol(root, temp, tools, report, run):
     if run("protocol-preparation-delta", [*git, "diff", "HEAD", "--name-only"]) != build_name or run(
             "protocol-preparation-untracked", [*git, "ls-files", "--others", "--exclude-standard"]):
         raise RuntimeError("Protocol checkout changed before compilation")
-    native_protoc(temp, tools, report, run)
-    protoc = verified_protoc(temp, report)
-    result["protoc_sha256"] = report["protoc_replacement"]["binary"]["sha256"]
     os.environ.update({"CARGO_HOME": str(cargo_home), "CARGO_TARGET_DIR": str(target), "CARGO_INCREMENTAL": "0",
-        "RUSTC": tools["rustc"]["path"], "RUSTUP_TOOLCHAIN": "1.95.0-" + TARGET,
-        "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER": tools["link"]["path"], "CM_NATIVE_PROTOC": str(protoc)})
+        "RUSTC": tools["rustc"]["path"], "RUSTUP_TOOLCHAIN": "1.95.0-" + TARGET})
     previous = Path.cwd()
     try:
         os.chdir(checkout / "codex-rs")
+        run("protocol-dependencies", [tools["cargo"]["path"], "tree", "--locked", "--target", TARGET,
+            "-p", "codex-code-mode-protocol", "--edges", "normal,build", "--depth", "1"], 180)
+        if any(sha(checkout / path) != value for path, value in expected.items()) or sha(overlay) != overlay_hash:
+            raise RuntimeError("Protocol source or overlay changed during dependency preparation")
+        if run("protocol-dependency-delta", [*git, "diff", "HEAD", "--name-only"]) != build_name or run(
+                "protocol-dependency-untracked", [*git, "ls-files", "--others", "--exclude-standard"]):
+            raise RuntimeError("Protocol checkout changed during dependency preparation")
+        result["dependency_preparation"] = "pass"
+        native_protoc(temp, tools, report, run)
+        protoc = verified_protoc(temp, report)
+        result["protoc_sha256"] = report["protoc_replacement"]["binary"]["sha256"]
+        os.environ.update({"CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER": tools["link"]["path"],
+            "CM_NATIVE_PROTOC": str(protoc)})
         verified_protoc(temp, report)
         if any(sha(checkout / path) != value for path, value in expected.items()) or sha(overlay) != overlay_hash:
             raise RuntimeError("Protocol source or overlay changed before compilation")
@@ -712,21 +722,27 @@ def self_check():
             bootstrap.assert_not_called()
             if case == "overlay":
                 command.assert_not_called()
-        for case in ("pristine", "format"):
+        for case in ("pristine", "format", "dependencies", "dependency-source", "dependency-delta", "prepared"):
             with tempfile.TemporaryDirectory() as directory:
                 private = Path(directory)
+                (private / "protocol-upstream/codex-rs").mkdir(parents=True)
                 compiler = private / "native-tool.exe"
                 compiler.write_bytes(bytes(128))
                 expected = {**SOURCE_HASHES, **{path: V8_SOURCE_HASHES[path] for path in (
                     "codex-rs/Cargo.toml", "codex-rs/.cargo/config.toml")}}
 
                 def source_hash(path):
+                    labels = [call.args[0] for call in command.call_args_list]
                     if path == root / "adapters/codex-e4568a3/native-protoc-build.rs" or path.suffix == ".proto":
                         return "e" * 64
+                    if path.name == "build.rs" and "protocol-overlay-fmt" in labels:
+                        return "e" * 64
+                    if case == "dependency-source" and path.name == "Cargo.lock" and "protocol-dependencies" in labels:
+                        return "0" * 64
                     return expected[path.relative_to(private / "protocol-upstream").as_posix()]
 
                 def prepare(label, args, timeout=30):
-                    if label.startswith("protocol-source-") and label != "protocol-source-init":
+                    if label.startswith(("protocol-source-", "protocol-preparation-", "protocol-dependency-")) and label != "protocol-source-init":
                         assert "core.longpaths=true" in args and "core.autocrlf=false" in args and "core.hooksPath=NUL" in args
                     if label == "protocol-source-identity":
                         return REVISION
@@ -734,21 +750,39 @@ def self_check():
                         return " D missing-long-snapshot.snap"
                     if label.endswith("-path"):
                         return str(compiler)
-                    if label == "protocol-overlay-fmt":
+                    if label == "protocol-overlay-fmt" and case == "format":
                         raise RuntimeError("format-error")
+                    if label == "protocol-dependencies":
+                        assert args == [str(compiler), "tree", "--locked", "--target", TARGET, "-p",
+                            "codex-code-mode-protocol", "--edges", "normal,build", "--depth", "1"]
+                        assert Path(os.environ["CARGO_HOME"]) == private / "c"
+                        assert Path(os.environ["CARGO_TARGET_DIR"]) == private / "protocol-target"
+                        assert os.environ["RUSTC"] == str(compiler) and os.environ["RUSTUP_TOOLCHAIN"] == "1.95.0-" + TARGET
+                        assert "CM_NATIVE_PROTOC" not in os.environ
+                        if case == "dependencies":
+                            raise RuntimeError("dependency-error")
+                    if label in ("protocol-preparation-delta", "protocol-dependency-delta"):
+                        return "unexpected.rs" if label == "protocol-dependency-delta" and case == "dependency-delta" else "codex-rs/code-mode-protocol/build.rs"
                     return ""
 
                 command = Mock(side_effect=prepare)
-                with patch.dict(os.environ, {}, clear=True), patch(__name__ + ".native_protoc") as bootstrap, \
+                previous = Path.cwd()
+                with patch.dict(os.environ, {}, clear=True), \
+                        patch(__name__ + ".native_protoc", side_effect=RuntimeError("bootstrap-boundary")) as bootstrap, \
                         patch(__name__ + ".verified_protoc") as verify, patch(__name__ + ".sha", side_effect=source_hash), \
                         patch(__name__ + ".pe_fixture", return_value=binary), patch("shutil.copyfile"):
                     try:
-                        native_protocol(root, private, {}, {}, command)
+                        tools = {name: {"path": str(compiler)} for name in ("rustc", "cargo")}
+                        native_protocol(root, private, tools, {}, command)
                     except RuntimeError as error:
-                        assert str(error) == ("Protocol source inputs differ before compilation" if case == "pristine" else "format-error")
+                        assert str(error) == {"pristine": "Protocol source inputs differ before compilation",
+                            "format": "format-error", "dependencies": "dependency-error", "dependency-source":
+                            "Protocol source or overlay changed during dependency preparation", "dependency-delta":
+                            "Protocol checkout changed during dependency preparation", "prepared": "bootstrap-boundary"}[case]
                     else:
                         raise AssertionError("Invalid protocol preparation reached the native build")
-                bootstrap.assert_not_called()
+                assert Path.cwd() == previous
+                assert bootstrap.call_count == (1 if case == "prepared" else 0)
                 verify.assert_not_called()
                 assert not any(call.args[0] == "native-protocol-clippy" for call in command.call_args_list)
         import host
