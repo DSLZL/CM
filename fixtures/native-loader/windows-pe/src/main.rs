@@ -315,7 +315,7 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     drop(child);
     target.file.copy_metadata(&source.file)?;
     assert_eq!(target.file.private_metadata()?, source_metadata);
-    target.sync()?;
+    target.file.sync_private_directory()?;
     let child = input::open_at(&target.file, OsStr::new("protected-child"), false)?;
     assert_eq!(child.private_metadata()?, child_metadata);
     assert_eq!(child.identity()?, child_identity);
@@ -349,34 +349,34 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     drop(source);
     println!("cm_private passed=metadata-invalid-source-target");
 
-    let name = OsStr::new("metadata-attributes-文件");
-    let file = input::open_at(&private.file, name, false)?;
-    let clone = file.try_clone()?;
-    assert!(private.remove(name, attributes_identity, false).is_err());
+    let cleanup_name = OsStr::new("metadata-attributes-文件");
+    let file = input::open_at(&private.file, cleanup_name, false)?;
+    let retained_metadata = file.try_clone()?;
+    assert!(private.remove(cleanup_name, attributes_identity, false).is_err());
     drop(file);
-    assert!(private.remove(name, attributes_identity, false).is_err());
-    drop(clone);
+    assert!(private.remove(cleanup_name, attributes_identity, false).is_err());
+    drop(retained_metadata);
     let mut wrong_identity = attributes_identity;
     wrong_identity.1[15] ^= 1;
-    assert!(private.remove(name, wrong_identity, false).is_err());
-    let file = input::open_at(&private.file, name, false)?;
+    assert!(private.remove(cleanup_name, wrong_identity, false).is_err());
+    let file = input::open_at(&private.file, cleanup_name, false)?;
     assert_eq!(file.private_metadata()?.0, 1 | 2 | 4 | 32 | 8192);
     drop(file);
-    private.remove(name, attributes_identity, false)?;
-    assert!(!private.path.join(name).exists());
+    private.remove(cleanup_name, attributes_identity, false)?;
+    assert!(!private.path.join(cleanup_name).exists());
     private.create_file("readonly-mapping", b"hello")?;
-    let name = OsStr::new("readonly-mapping");
-    let file = input::open_at(&private.file, name, false)?;
-    let identity = file.identity()?;
+    let mapped_name = OsStr::new("readonly-mapping");
+    let file = input::open_at(&private.file, mapped_name, false)?;
+    let mapping_identity = file.identity()?;
     drop(file);
-    with_writable_mapping(&private.path.join(name), || {
-        let mut permissions = fs::metadata(private.path.join(name)).unwrap().permissions();
+    with_writable_mapping(&private.path.join(mapped_name), || {
+        let mut permissions = fs::metadata(private.path.join(mapped_name)).unwrap().permissions();
         permissions.set_readonly(true);
-        fs::set_permissions(private.path.join(name), permissions).unwrap();
-        assert!(private.remove(name, identity, false).is_err());
+        fs::set_permissions(private.path.join(mapped_name), permissions).unwrap();
+        assert!(private.remove(mapped_name, mapping_identity, false).is_err());
     })?;
-    private.remove(name, identity, false)?;
-    assert!(!private.path.join(name).exists());
+    private.remove(mapped_name, mapping_identity, false)?;
+    assert!(!private.path.join(mapped_name).exists());
     println!("cm_private passed=readonly-identity-cleanup");
 
     let lock_path = private.path.join(".cm-write.lock");
