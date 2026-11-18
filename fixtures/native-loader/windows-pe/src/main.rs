@@ -1044,7 +1044,11 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     println!("cm_private passed=remove-invalid-parent");
 
     assert!(parent.check_private().is_err());
-    assert!(parent.create_directory(OsStr::new("strict-parent"), true).is_err());
+    assert!(
+        parent
+            .create_directory(OsStr::new("strict-parent"), true)
+            .is_err()
+    );
     let home_path = root.join("home-新");
     let home = directory::Directory::create_home(&home_path)?;
     home.check()?;
@@ -1065,7 +1069,17 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     assert_eq!(home.file.identity()?, home_identity);
     println!("cm_private passed=home-collisions");
 
-    for name in ["", ".", "..", "../escaped", "..\\escaped", "stream:ads", "tail.", "tail ", "nul\0"] {
+    for name in [
+        "",
+        ".",
+        "..",
+        "../escaped",
+        "..\\escaped",
+        "stream:ads",
+        "tail.",
+        "tail ",
+        "nul\0",
+    ] {
         assert!(parent.create_home(OsStr::new(name)).is_err(), "{name:?}");
     }
     assert!(parent.create_home(OsStr::new(&"x".repeat(256))).is_err());
@@ -1080,7 +1094,10 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     child.check()?;
     drop(child);
     fs::rename(&home_path, &moved)?;
-    assert_eq!(directory::Directory::open(&moved)?.file.identity()?, home_identity);
+    assert_eq!(
+        directory::Directory::open(&moved)?.file.identity()?,
+        home_identity
+    );
     assert_eq!(fs::read(moved.join(".cm-owner"))?, b"private home");
     println!("cm_private passed=home-ancestor-pins");
 
@@ -1089,33 +1106,65 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     private.replace_file("active-first", "active.json", None)?;
     assert_eq!(entry_identity("active.json", false)?, first.identity());
     private.create_file("active-next", b"new descriptor")?;
-    assert!(private.replace_file("active-next", "active.json", None).is_err());
-    assert_eq!(fs::read(private.path.join("active.json"))?, b"old descriptor");
+    assert!(
+        private
+            .replace_file("active-next", "active.json", None)
+            .is_err()
+    );
+    assert_eq!(
+        fs::read(private.path.join("active.json"))?,
+        b"old descriptor"
+    );
     println!("cm_private passed=active-first-install");
 
     for byte in 0..8 {
         let mut changed = first.identity();
         changed.0 ^= 1u64 << (byte * 8);
-        assert!(private.replace_file("active-next", "active.json", Some(changed)).is_err());
+        assert!(
+            private
+                .replace_file("active-next", "active.json", Some(changed))
+                .is_err()
+        );
     }
     for byte in 0..16 {
         let mut changed = first.identity();
         changed.1[byte] ^= 1;
-        assert!(private.replace_file("active-next", "active.json", Some(changed)).is_err());
+        assert!(
+            private
+                .replace_file("active-next", "active.json", Some(changed))
+                .is_err()
+        );
     }
     let next_identity = entry_identity("active-next", false)?;
-    assert!(private.replace_file("active-next", "ACTIVE-NEXT", Some(next_identity)).is_err());
-    fs::rename(private.path.join("active.json"), private.path.join("active-saved"))?;
+    assert!(
+        private
+            .replace_file("active-next", "ACTIVE-NEXT", Some(next_identity))
+            .is_err()
+    );
+    fs::rename(
+        private.path.join("active.json"),
+        private.path.join("active-saved"),
+    )?;
     private.create_file("active.json", b"old descriptor")?;
     let replacement = entry_identity("active.json", false)?;
     assert_ne!(replacement, first.identity());
     assert!(first.revalidate().is_err());
-    assert!(private.replace_file("active-next", "active.json", Some(first.identity())).is_err());
+    assert!(
+        private
+            .replace_file("active-next", "active.json", Some(first.identity()))
+            .is_err()
+    );
     assert_eq!(entry_identity("active.json", false)?, replacement);
-    assert_eq!(fs::read(private.path.join("active-saved"))?, b"old descriptor");
+    assert_eq!(
+        fs::read(private.path.join("active-saved"))?,
+        b"old descriptor"
+    );
     private.replace_file("active-next", "active.json", Some(replacement))?;
     assert_eq!(entry_identity("active.json", false)?, next_identity);
-    assert_eq!(fs::read(private.path.join("active.json"))?, b"new descriptor");
+    assert_eq!(
+        fs::read(private.path.join("active.json"))?,
+        b"new descriptor"
+    );
     println!("cm_private passed=active-replace-full-identity");
 
     private.create_file("replace-held-source", b"hello")?;
@@ -1125,62 +1174,168 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     for name in ["replace-held-source", "replace-held-target"] {
         let file = input::open_at(&private.file, OsStr::new(name), false)?;
         let clone = file.try_clone()?;
-        assert!(private.replace_file("replace-held-source", "replace-held-target", Some(expected)).is_err());
+        assert!(
+            private
+                .replace_file("replace-held-source", "replace-held-target", Some(expected))
+                .is_err()
+        );
         drop(file);
-        assert!(private.replace_file("replace-held-source", "replace-held-target", Some(expected)).is_err());
+        assert!(
+            private
+                .replace_file("replace-held-source", "replace-held-target", Some(expected))
+                .is_err()
+        );
         drop(clone);
-        let writer = fs::OpenOptions::new().write(true).open(private.path.join(name))?;
-        assert!(private.replace_file("replace-held-source", "replace-held-target", Some(expected)).is_err());
+        let writer = fs::OpenOptions::new()
+            .write(true)
+            .open(private.path.join(name))?;
+        assert!(
+            private
+                .replace_file("replace-held-source", "replace-held-target", Some(expected))
+                .is_err()
+        );
         drop(writer);
         with_writable_mapping(&private.path.join(name), || {
-            assert!(private.replace_file("replace-held-source", "replace-held-target", Some(expected)).is_err());
+            assert!(
+                private
+                    .replace_file("replace-held-source", "replace-held-target", Some(expected))
+                    .is_err()
+            );
         })?;
-        assert_eq!(entry_identity("replace-held-source", false)?, source_identity);
+        assert_eq!(
+            entry_identity("replace-held-source", false)?,
+            source_identity
+        );
         assert_eq!(entry_identity("replace-held-target", false)?, expected);
     }
     private.replace_file("replace-held-source", "replace-held-target", Some(expected))?;
-    assert_eq!(entry_identity("replace-held-target", false)?, source_identity);
+    assert_eq!(
+        entry_identity("replace-held-target", false)?,
+        source_identity
+    );
     println!("cm_private passed=active-replace-retained-pins");
 
     private.create_file("replace-safe", b"candidate")?;
     private.create_file("replace-hardlink", b"keep")?;
-    fs::hard_link(private.path.join("replace-hardlink"), private.path.join("replace-alias"))?;
-    assert!(private.replace_file("replace-safe", "replace-hardlink", Some(source_identity)).is_err());
-    assert!(private.replace_file("replace-hardlink", "active.json", Some(next_identity)).is_err());
+    fs::hard_link(
+        private.path.join("replace-hardlink"),
+        private.path.join("replace-alias"),
+    )?;
+    assert!(
+        private
+            .replace_file("replace-safe", "replace-hardlink", Some(source_identity))
+            .is_err()
+    );
+    assert!(
+        private
+            .replace_file("replace-hardlink", "active.json", Some(next_identity))
+            .is_err()
+    );
     fs::remove_file(private.path.join("replace-alias"))?;
     fs::write(private.path.join("replace-public"), b"unprotected")?;
-    assert!(private.replace_file("replace-safe", "replace-public", Some(source_identity)).is_err());
+    assert!(
+        private
+            .replace_file("replace-safe", "replace-public", Some(source_identity))
+            .is_err()
+    );
     let child = private.child("replace-directory")?;
     let descendant = child.child("pinned")?;
     let directory_identity = child.file.identity()?;
     drop(child);
-    assert!(private.replace_file("replace-safe", "replace-directory", Some(directory_identity)).is_err());
-    assert!(private.replace_file("replace-directory", "active.json", Some(next_identity)).is_err());
+    assert!(
+        private
+            .replace_file(
+                "replace-safe",
+                "replace-directory",
+                Some(directory_identity)
+            )
+            .is_err()
+    );
+    assert!(
+        private
+            .replace_file("replace-directory", "active.json", Some(next_identity))
+            .is_err()
+    );
     descendant.check()?;
     drop(descendant);
     let junction = private.path.join("replace-junction");
     let output = Command::new("cmd.exe")
-        .args([OsStr::new("/D"), OsStr::new("/C"), OsStr::new("mklink"), OsStr::new("/J"), junction.as_os_str(), ordinary_path.as_os_str()])
+        .args([
+            OsStr::new("/D"),
+            OsStr::new("/C"),
+            OsStr::new("mklink"),
+            OsStr::new("/J"),
+            junction.as_os_str(),
+            ordinary_path.as_os_str(),
+        ])
         .output()?;
-    assert!(output.status.success(), "replace junction setup: {output:?}");
-    assert!(private.replace_file("replace-safe", "replace-junction", Some(source_identity)).is_err());
+    assert!(
+        output.status.success(),
+        "replace junction setup: {output:?}"
+    );
+    assert!(
+        private
+            .replace_file("replace-safe", "replace-junction", Some(source_identity))
+            .is_err()
+    );
     fs::remove_dir(&junction)?;
     assert_eq!(fs::read(ordinary_path.join("keep"))?, b"ordinary");
     assert_eq!(fs::read(private.path.join("replace-hardlink"))?, b"keep");
-    assert_eq!(fs::read(private.path.join("active.json"))?, b"new descriptor");
+    assert_eq!(
+        fs::read(private.path.join("active.json"))?,
+        b"new descriptor"
+    );
     println!("cm_private passed=active-replace-unsafe");
 
-    for name in ["", ".", "..", "../escaped", "..\\escaped", "stream:ads", "tail.", "tail ", "nul\0"] {
-        assert!(private.replace_file("replace-safe", name, Some(next_identity)).is_err());
-        assert!(private.replace_file(name, "active.json", Some(next_identity)).is_err());
+    for name in [
+        "",
+        ".",
+        "..",
+        "../escaped",
+        "..\\escaped",
+        "stream:ads",
+        "tail.",
+        "tail ",
+        "nul\0",
+    ] {
+        assert!(
+            private
+                .replace_file("replace-safe", name, Some(next_identity))
+                .is_err()
+        );
+        assert!(
+            private
+                .replace_file(name, "active.json", Some(next_identity))
+                .is_err()
+        );
     }
-    assert!(private.replace_file("replace-safe", &"x".repeat(256), Some(next_identity)).is_err());
-    assert!(private.replace_file(&"x".repeat(256), "active.json", Some(next_identity)).is_err());
-    assert!(private.replace_file("missing-source", "active.json", Some(next_identity)).is_err());
-    assert!(private.replace_file("replace-safe", "missing-target", Some(next_identity)).is_err());
+    assert!(
+        private
+            .replace_file("replace-safe", &"x".repeat(256), Some(next_identity))
+            .is_err()
+    );
+    assert!(
+        private
+            .replace_file(&"x".repeat(256), "active.json", Some(next_identity))
+            .is_err()
+    );
+    assert!(
+        private
+            .replace_file("missing-source", "active.json", Some(next_identity))
+            .is_err()
+    );
+    assert!(
+        private
+            .replace_file("replace-safe", "missing-target", Some(next_identity))
+            .is_err()
+    );
     let before = inventory()?;
     control("private-change")?;
-    assert!(private.replace_file("replace-safe", "active.json", Some(next_identity)).is_err());
+    assert!(
+        private
+            .replace_file("replace-safe", "active.json", Some(next_identity))
+            .is_err()
+    );
     assert_eq!(inventory()?, before);
     control("private-restore")?;
     private.replace_file("replace-safe", "active.json", Some(next_identity))?;

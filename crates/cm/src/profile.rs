@@ -16,8 +16,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 
 use crate::LoadError;
-use crate::loader::{self, InputPin};
 use crate::loader::Handle as File;
+use crate::loader::{self, InputPin};
 use crate::package::ManagedHost;
 
 mod directory;
@@ -448,13 +448,15 @@ impl Transaction {
             if !home.exists() {
                 #[cfg(not(windows))]
                 {
-                let parent = loader::open_directory(home.parent().ok_or("missing home parent")?)?;
-                let name = CString::new(home.file_name().ok_or("missing home name")?.as_bytes())
-                    .map_err(|e| e.to_string())?;
-                if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
-                    return Err(std::io::Error::last_os_error().to_string());
-                }
-                parent.sync_all().map_err(|e| e.to_string())?;
+                    let parent =
+                        loader::open_directory(home.parent().ok_or("missing home parent")?)?;
+                    let name =
+                        CString::new(home.file_name().ok_or("missing home name")?.as_bytes())
+                            .map_err(|e| e.to_string())?;
+                    if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+                        return Err(std::io::Error::last_os_error().to_string());
+                    }
+                    parent.sync_all().map_err(|e| e.to_string())?;
                 }
                 #[cfg(windows)]
                 Directory::create_home(home)?;
@@ -602,22 +604,24 @@ impl Transaction {
         if publication.is_err() {
             #[cfg(not(windows))]
             {
-            let temporary = CString::new(name.as_str()).expect("temporary name");
-            unsafe {
-                libc::unlinkat(self.generations.file.as_raw_fd(), temporary.as_ptr(), 0);
-            }
+                let temporary = CString::new(name.as_str()).expect("temporary name");
+                unsafe {
+                    libc::unlinkat(self.generations.file.as_raw_fd(), temporary.as_ptr(), 0);
+                }
             }
             #[cfg(windows)]
-            let _ = self.generations.remove(OsStr::new(&name), generation_identity, false);
+            let _ = self
+                .generations
+                .remove(OsStr::new(&name), generation_identity, false);
         }
         let published = publication.map_err(|e| failure(&e))?;
         if !published {
             #[cfg(not(windows))]
             {
-            let c_name = CString::new(name).expect("temporary name");
-            unsafe {
-                libc::unlinkat(self.generations.file.as_raw_fd(), c_name.as_ptr(), 0);
-            }
+                let c_name = CString::new(name).expect("temporary name");
+                unsafe {
+                    libc::unlinkat(self.generations.file.as_raw_fd(), c_name.as_ptr(), 0);
+                }
             }
             #[cfg(windows)]
             self.generations
@@ -656,22 +660,26 @@ impl Transaction {
             check(&prepared)?;
             #[cfg(not(windows))]
             {
-            let source = CString::new(name.as_str()).expect("temporary name");
-            if unsafe {
-                libc::renameat(
-                    self.root.file.as_raw_fd(),
-                    source.as_ptr(),
-                    self.root.file.as_raw_fd(),
-                    c"cm-profile.json".as_ptr(),
-                )
-            } != 0
-            {
-                return Err(failure("active descriptor rename failed"));
-            }
+                let source = CString::new(name.as_str()).expect("temporary name");
+                if unsafe {
+                    libc::renameat(
+                        self.root.file.as_raw_fd(),
+                        source.as_ptr(),
+                        self.root.file.as_raw_fd(),
+                        c"cm-profile.json".as_ptr(),
+                    )
+                } != 0
+                {
+                    return Err(failure("active descriptor rename failed"));
+                }
             }
             #[cfg(windows)]
             self.root
-                .replace_file(&name, "cm-profile.json", self.old.as_ref().map(InputPin::identity))
+                .replace_file(
+                    &name,
+                    "cm-profile.json",
+                    self.old.as_ref().map(InputPin::identity),
+                )
                 .map_err(|error| failure(&error))?;
             fault(4)?;
             self.root.sync().map_err(|_| {
@@ -682,10 +690,10 @@ impl Transaction {
         if result.is_err() {
             #[cfg(not(windows))]
             {
-            let source = CString::new(name).expect("temporary name");
-            unsafe {
-                libc::unlinkat(self.root.file.as_raw_fd(), source.as_ptr(), 0);
-            }
+                let source = CString::new(name).expect("temporary name");
+                unsafe {
+                    libc::unlinkat(self.root.file.as_raw_fd(), source.as_ptr(), 0);
+                }
             }
             #[cfg(windows)]
             if let Some(expected) = profile_identity {

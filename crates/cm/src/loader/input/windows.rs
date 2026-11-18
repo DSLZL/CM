@@ -197,9 +197,8 @@ impl Handle {
     pub(crate) fn create_home(&self, name: &OsStr) -> Result<Self, String> {
         let name = wide(name)?;
         let mut created = 0;
-        let raw = unsafe {
-            cm_windows_home_create(self.pin.0.as_ptr(), name.as_ptr(), &mut created)
-        };
+        let raw =
+            unsafe { cm_windows_home_create(self.pin.0.as_ptr(), name.as_ptr(), &mut created) };
         Self::take(raw).map_err(|error| {
             if created != 0 {
                 format!("committed: private home created; {error}")
