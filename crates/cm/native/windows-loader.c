@@ -268,7 +268,8 @@ CmWindowsPin *cm_windows_directory_open(const wchar_t *name) {
         DWORD end = i == 2 ? 3 : i;
         memcpy(path, p->path, end * sizeof(wchar_t));
         path[end] = 0;
-        HANDLE handle = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+        /* Directory write sharing permits child publication; no delete sharing pins its own name. */
+        HANDLE handle = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
         if (handle == INVALID_HANDLE_VALUE) goto failed;
         BY_HANDLE_FILE_INFORMATION info;
@@ -327,7 +328,8 @@ CmWindowsPin *cm_windows_child_open(const CmWindowsPin *parent, const wchar_t *n
         ? FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE
         : FILE_GENERIC_READ;
     NTSTATUS result = open_file(&p->file, access, &attributes, &status, NULL, 0,
-        FILE_SHARE_READ, 1, 0x00200000 | 0x20 | (directory ? 0 : 0x40), NULL, 0);
+        FILE_SHARE_READ | (directory ? FILE_SHARE_WRITE : 0), 1,
+        0x00200000 | 0x20 | (directory ? 0 : 0x40), NULL, 0);
     if (result < 0) { SetLastError(dos_error(result)); goto failed; }
     return cm_windows_input_finish(p, directory);
 failed: {

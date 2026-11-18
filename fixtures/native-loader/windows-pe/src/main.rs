@@ -28,6 +28,7 @@ compile_error!("This fixture requires native 64-bit Windows");
 fn input_controls(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     use std::ffi::OsStr;
     use std::fs;
+    use std::os::windows::fs::OpenOptionsExt;
 
     fn passed(name: &str) {
         println!("cm_input passed={name}");
@@ -145,6 +146,12 @@ fn input_controls(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     assert!(fs::rename(&path, root.join("moved")).is_err());
     drop(file);
     passed("retained-file");
+    let mut directory_writer = fs::OpenOptions::new();
+    directory_writer.write(true).custom_flags(0x02000000);
+    let writer = directory_writer.open(root);
+    let writer = writer.expect("retained parent permits namespace writes");
+    drop(writer);
+    assert!(fs::rename(root, root.with_extension("moved")).is_err());
     let branch = root.join("parent");
     fs::create_dir(&branch).expect("retained-ancestors create directory");
     fs::write(branch.join("child"), b"child").expect("retained-ancestors write child");
