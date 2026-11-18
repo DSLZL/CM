@@ -503,39 +503,45 @@ int cm_windows_private_copy_metadata(const CmWindowsPin *target, const CmWindows
     CmWindowsFileInformation before, after, destination;
     if (!cm_windows_file_information(source, &before)
         || !cm_windows_private_metadata(source, &attributes, expected, 4096)
-        || !cm_windows_private_check(target) || !cm_windows_file_information(target, &destination)) return 0;
+        || !cm_windows_private_check(target) || !cm_windows_file_information(target, &destination)) return -1;
     if (!!(before.attributes & FILE_ATTRIBUTE_DIRECTORY) != !!(destination.attributes & FILE_ATTRIBUTE_DIRECTORY)
         || (before.volume == destination.volume && !memcmp(before.id, destination.id, sizeof(before.id)))) {
-        SetLastError(ERROR_INVALID_DATA); return 0;
+        SetLastError(ERROR_INVALID_DATA); return -2;
     }
     PSECURITY_DESCRIPTOR descriptor = cm_windows_private_security(source);
-    if (!descriptor) return 0;
+    if (!descriptor) return -3;
     PACL dacl = NULL;
     BOOL present, defaulted;
-    int ok = 0;
+    int result = -4;
     if (!GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted) || !present || !dacl) {
         SetLastError(ERROR_INVALID_ACL); goto done;
     }
-    DWORD result = SetSecurityInfo(target->file, SE_FILE_OBJECT,
+    result = -5;
+    DWORD security_result = SetSecurityInfo(target->file, SE_FILE_OBJECT,
         DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, NULL, NULL, dacl, NULL);
-    if (result != ERROR_SUCCESS) { SetLastError(result); goto done; }
+    if (security_result != ERROR_SUCCESS) { SetLastError(security_result); goto done; }
     FILE_BASIC_INFO basic = {0};
     basic.FileAttributes = attributes;
+    result = -6;
     if (!SetFileInformationByHandle(target->file, FileBasicInfo, &basic, sizeof(basic))
-        || !FlushFileBuffers(target->file)
-        || !cm_windows_private_metadata(source, &actual, current, 4096)) goto done;
+        || !FlushFileBuffers(target->file)) goto done;
+    result = -7;
+    if (!cm_windows_private_metadata(source, &actual, current, 4096)) goto done;
+    result = -8;
     if (attributes != actual || wcscmp(expected, current)
         || !cm_windows_file_information(source, &after) || !cm_windows_same_information(&before, &after)) {
         SetLastError(ERROR_INVALID_DATA); goto done;
     }
+    result = -9;
     if (!cm_windows_private_metadata(target, &actual, current, 4096)) goto done;
+    result = -10;
     if (attributes != actual || wcscmp(expected, current)) { SetLastError(ERROR_INVALID_DATA); goto done; }
-    ok = 1;
+    result = 1;
 done: {
-    DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+    DWORD error = result == 1 ? ERROR_SUCCESS : GetLastError();
     free(descriptor);
     SetLastError(error);
-    return ok;
+    return result;
 }}
 
 static int cm_windows_private_parent(const CmWindowsPin *parent) {

@@ -133,10 +133,12 @@ impl Handle {
 
     // Only use on unpublished output; failure can leave partially copied metadata.
     pub(crate) fn copy_metadata(&self, source: &Self) -> Result<(), String> {
-        if unsafe { cm_windows_private_copy_metadata(self.pin.0.as_ptr(), source.pin.0.as_ptr()) }
-            == 0
-        {
-            return Err(io::Error::last_os_error().to_string());
+        let target = self.pin.0.as_ptr();
+        let source = source.pin.0.as_ptr();
+        let result = unsafe { cm_windows_private_copy_metadata(target, source) };
+        if result != 1 {
+            let error = io::Error::last_os_error();
+            return Err(format!("private metadata copy failed ({result}): {error}"));
         }
         Ok(())
     }

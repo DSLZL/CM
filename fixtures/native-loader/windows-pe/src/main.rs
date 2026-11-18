@@ -269,11 +269,16 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     println!("cm_private passed=streamed-invalid-inputs");
 
     let read_only = input::open_at(&parent, OsStr::new("read-only-file"), false)?;
-    let source_metadata = read_only.private_metadata()?;
+    let source_metadata = read_only.private_metadata().expect("read-only metadata");
     let output = private.create_output("metadata-read-only-文件")?;
     let output_identity = output.identity()?;
     assert_ne!(read_only.identity()?, output_identity);
-    output.copy_metadata(&read_only)?;
+    let copied = output.copy_metadata(&read_only);
+    assert!(
+        copied.is_ok(),
+        "{copied:?}; expected={source_metadata:?}; actual={:?}",
+        output.private_metadata()
+    );
     assert_eq!(output.private_metadata()?, source_metadata);
     output.sync_all()?;
     drop(output);

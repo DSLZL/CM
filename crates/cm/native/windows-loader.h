@@ -39,6 +39,7 @@ CmWindowsPin *cm_windows_child_open(const CmWindowsPin *parent, const wchar_t *n
 int cm_windows_file_information(const CmWindowsPin *pin, CmWindowsFileInformation *information);
 int cm_windows_private_check(const CmWindowsPin *pin);
 int cm_windows_private_metadata(const CmWindowsPin *pin, DWORD *attributes, wchar_t *text, size_t capacity);
+/* Returns 1 on success, or a negative operation stage with GetLastError preserved. */
 int cm_windows_private_copy_metadata(const CmWindowsPin *target, const CmWindowsPin *source);
 CmWindowsPin *cm_windows_private_create(const CmWindowsPin *parent, const wchar_t *name);
 int cm_windows_private_write(const CmWindowsPin *parent, const wchar_t *name,
