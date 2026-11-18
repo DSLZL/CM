@@ -104,7 +104,8 @@ def main():
         for name, path in (("cl", cl), ("link", link), ("lib", cl.with_name("lib.exe"))):
             tools[name] = {"path": str(path), **pe_fixture(path.read_bytes(), False, expected_machine=0xAA64)}
         with tempfile.TemporaryDirectory(prefix="cm-runtime-", dir=os.environ["RUNNER_TEMP"]) as directory:
-            temp = Path(directory)
+            temp = Path(directory).resolve()
+            report["temporary_root"] = str(temp)
             toolchain = cfg["rust_toolchain"] + "-" + TARGET
             run("library-native-toolchain", ["rustup", "toolchain", "install", toolchain, "--profile", "minimal"], 180)
             run("library-native-components", ["rustup", "component", "add", "rustfmt", "clippy", "--toolchain", toolchain], 180)
@@ -114,7 +115,8 @@ def main():
             version = run("library-rustc-version", [tools["rustc"]["path"], "-Vv"])
             if "host: " + TARGET not in version.splitlines():
                 raise RuntimeError("Library Rust compiler is not native ARM64")
-            os.environ.update({"CARGO_HOME": str(temp / "c"), "CARGO_TARGET_DIR": str(temp / "t"),
+            os.environ.update({"TEMP": str(temp), "TMP": str(temp),
+                "CARGO_HOME": str(temp / "c"), "CARGO_TARGET_DIR": str(temp / "t"),
                 "CARGO_INCREMENTAL": "0", "RUSTUP_TOOLCHAIN": toolchain, "RUSTC": tools["rustc"]["path"],
                 "RUSTFLAGS": "-Ctarget-feature=+crt-static", "CC": str(cl), "AR": tools["lib"]["path"],
                 "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER": str(link)})
