@@ -337,7 +337,7 @@ def verify_sources(root, logs):
     if native_path.is_file():
         native_inputs = read(native_path)
         verifier = native_inputs["distribution_verifier"]
-        verifier_path = Path(os.environ["RUNNER_TEMP"]) / "cm-distribution-verifier/gh"
+        verifier_path = Path(os.environ["RUNNER_TEMP"]) / "cm-distribution-verifier" / ("gh.exe" if os.name == "nt" else "gh")
         if sha(verifier_path) != verifier["sha256"] or os.environ.get("CM_DISTRIBUTION_GH_SHA256") != verifier["sha256"]:
             raise RuntimeError("Distribution verifier or compiled-in pin drift")
         for key, entry in native_inputs["v8"].items():

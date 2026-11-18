@@ -18,8 +18,12 @@ from cm_platforms import linux_native
 
 REPORTS = ("binary-provenance.json", "distribution-sbom-license.json",
     "source-closure-no-install-build.json", "artifact-identity-boundaries.json", "release-runtime-trace.json")
-POLICY_PATH = "crates/cm/src/" + ("distribution-policy-arm64.json"
-    if linux_native()["machine"] == 183 else "distribution-policy.json")
+POLICY_PATH = "crates/cm/src/" + {
+    "x86_64-unknown-linux-gnu": "distribution-policy.json",
+    "aarch64-unknown-linux-gnu": "distribution-policy-arm64.json",
+    "x86_64-pc-windows-msvc": "distribution-policy-windows-x64.json",
+    "aarch64-pc-windows-msvc": "distribution-policy-windows-arm64.json",
+}[os.environ.get("CM_TARGET", "x86_64-unknown-linux-gnu")]
 ROOT_PATH = "crates/cm/src/distribution-root.jsonl"
 LIMIT = 32 * 1024 * 1024
 CARGO_BINDING_SOURCE_PIN = ("denoland/rusty_v8", "v8", "152.2.0",
@@ -154,6 +158,74 @@ def go_proxy_source(module, version):
     return "https://proxy.golang.org/" + path + ".zip"
 
 
+def verifier_executable(archive, pin):
+    if pin["archive"].endswith(".zip"):
+        prefix = pin["archive"].removesuffix(".zip")
+        with zipfile.ZipFile(io.BytesIO(archive)) as stream:
+            members = stream.infolist()
+            assert 0 < len(members) <= 2048 and sum(row.file_size for row in members) <= 256 * 1024 * 1024
+            selected = [row for row in members if row.filename in ("bin/gh.exe", prefix + "/bin/gh.exe")]
+            assert len(selected) == 1, "Missing or duplicate Windows verifier"
+            member = selected[0]
+            assert not member.is_dir() and (member.external_attr >> 16) & 0o170000 in (0, 0o100000)
+            assert 0 < member.file_size <= 128 * 1024 * 1024
+            return stream.read(member)
+    name = pin["archive"].removesuffix(".tar.gz") + "/bin/gh"
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as stream:
+        members = stream.getmembers()
+        assert 0 < len(members) <= 2048 and sum(row.size for row in members) <= 256 * 1024 * 1024
+        selected = [row for row in members if row.name == name]
+        assert len(selected) == 1, "Missing or duplicate GNU Linux verifier"
+        member = selected[0]
+        assert member.isfile() and 0 < member.size <= 128 * 1024 * 1024
+        return stream.extractfile(member).read()
+
+
+def verifier_archive_self_check():
+    def zipped(rows):
+        value = io.BytesIO()
+        with zipfile.ZipFile(value, "w") as stream:
+            for name, mode, data in rows:
+                member = zipfile.ZipInfo(name)
+                member.external_attr = mode << 16
+                stream.writestr(member, data)
+        return value.getvalue()
+
+    pin = {"archive": "gh_2.103.3_windows_arm64.zip"}
+    for name in ("bin/gh.exe", "gh_2.103.3_windows_arm64/bin/gh.exe"):
+        assert verifier_executable(zipped([(name, 0o100644, b"fixed")]), pin) == b"fixed"
+    for rows in (
+        [("elsewhere/gh.exe", 0o100644, b"fixed")],
+        [("bin/gh.exe", 0o120777, b"target")],
+        [("bin/gh.exe", 0o100644, b"")],
+        [("bin/gh.exe", 0o100644, b"one"), ("gh_2.103.3_windows_arm64/bin/gh.exe", 0o100644, b"two")],
+    ):
+        try:
+            verifier_executable(zipped(rows), pin)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("Invalid Windows verifier archive accepted")
+    pin = {"archive": "gh_fixed_linux_arm64.tar.gz"}
+    for kind, count in ((tarfile.REGTYPE, 1), (tarfile.SYMTYPE, 1), (tarfile.REGTYPE, 2)):
+        value = io.BytesIO()
+        with tarfile.open(fileobj=value, mode="w:gz") as stream:
+            for _ in range(count):
+                member = tarfile.TarInfo("gh_fixed_linux_arm64/bin/gh")
+                member.type, member.size = kind, 5 if kind == tarfile.REGTYPE else 0
+                member.linkname = "elsewhere" if kind == tarfile.SYMTYPE else ""
+                stream.addfile(member, io.BytesIO(b"fixed") if member.size else None)
+        if kind == tarfile.REGTYPE and count == 1:
+            assert verifier_executable(value.getvalue(), pin) == b"fixed"
+        else:
+            try:
+                verifier_executable(value.getvalue(), pin)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError("Invalid GNU Linux verifier archive accepted")
+
+
 def verifier(root, logs):
     """Download before the Host seal; the compiled pin covers the extracted executable."""
     policy = read(root / POLICY_PATH)
@@ -162,12 +234,8 @@ def verifier(root, logs):
     directory.mkdir()
     archive = fetch(pin["url"], 128 * 1024 * 1024)
     assert hashlib.sha256(archive).hexdigest() == pin["archive_sha256"], "Verifier archive pin mismatch"
-    name = pin["archive"].removesuffix(".tar.gz") + "/bin/gh"
-    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as stream:
-        member = stream.getmember(name)
-        assert member.isfile() and 0 < member.size <= 128 * 1024 * 1024
-        data = stream.extractfile(member).read()
-    executable = directory / "gh"
+    data = verifier_executable(archive, pin)
+    executable = directory / ("gh.exe" if pin["archive"].endswith(".zip") else "gh")
     executable.write_bytes(data)
     executable.chmod(0o755)
     material = directory / "licenses"
@@ -1071,6 +1139,7 @@ def reports(evidence, steps, audit):
 def self_check():
     from record_run import require_hosted_linux
     require_hosted_linux()
+    verifier_archive_self_check()
     import tempfile
     import runtime_consumer
     runtime_consumer.check_distribution_verifier_binding(Path(os.environ["CM_SOURCE_DIR"]))

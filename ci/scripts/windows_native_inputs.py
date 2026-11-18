@@ -175,7 +175,7 @@ def ninja_file(path):
     return data
 
 
-def native_protoc(temp, tools, report, run):
+def protoc_tools(temp, tools, report, run):
     archive, ninja = temp / "ninja-winarm64.zip", temp / "ninja.exe"
     report["native_ninja_input"] = download("https://github.com/ninja-build/ninja/releases/download/v1.13.1/ninja-winarm64.zip",
         archive, "fb959b674970e36a7c9a23191524b80fb5298fc71fc98bfa42456bcc0a8dfb2f", 1024 * 1024)
@@ -187,6 +187,11 @@ def native_protoc(temp, tools, report, run):
         **{name: sdk_bin / (name + ".exe") for name in ("rc", "mt")}}
     for name, path in paths.items():
         tools[name] = {"path": str(path), **pe_fixture(path.read_bytes(), False, expected_machine=0xAA64)}
+    return paths
+
+
+def native_protoc(temp, tools, report, run):
+    paths = protoc_tools(temp, tools, report, run)
     result = report["protoc_replacement"] = {"version_expected": "libprotoc 31.1", "native": False,
         "executed": False, "build_scope": "protoc-only", "sources": {}, "host_build_integration": "not_run"}
     result["cmake_version"] = run("native-cmake-version", [paths["cmake"], "--version"])

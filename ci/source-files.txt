@@ -301,3 +301,4 @@ crates/cm/native/windows-loader.h
 crates/cm/src/loader/windows.rs
 crates/cm/src/loader/input.rs
 crates/cm/src/loader/input/windows.rs
+ci/scripts/windows_host_preflight.py
