@@ -759,7 +759,10 @@ mod tests {
             let home = root();
             let mut transaction = Transaction::begin(&home, host()).unwrap();
             let old = b"old descriptor bytes";
-            transaction.root.create_file("cm-profile.json", old).unwrap();
+            transaction
+                .root
+                .create_file("cm-profile.json", old)
+                .unwrap();
             transaction.old = Some(
                 loader::read_input(&home.join("cm-profile.json"), LIMIT)
                     .unwrap()
@@ -800,7 +803,10 @@ mod tests {
             let home = root();
             let mut transaction = Transaction::begin(&home, host()).unwrap();
             let old = b"old descriptor bytes";
-            transaction.root.create_file("cm-profile.json", old).unwrap();
+            transaction
+                .root
+                .create_file("cm-profile.json", old)
+                .unwrap();
             transaction.old = Some(
                 loader::read_input(&home.join("cm-profile.json"), LIMIT)
                     .unwrap()
@@ -842,7 +848,10 @@ mod tests {
                 let source = root();
                 let mut transaction = Transaction::begin(&home, host()).unwrap();
                 let old = b"accepted profile";
-                transaction.root.create_file("cm-profile.json", old).unwrap();
+                transaction
+                    .root
+                    .create_file("cm-profile.json", old)
+                    .unwrap();
                 transaction.old = Some(
                     loader::read_input(&home.join("cm-profile.json"), LIMIT)
                         .unwrap()

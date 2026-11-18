@@ -2226,9 +2226,11 @@ mod tests {
         }
         #[cfg(windows)]
         {
+            let directory = owner_directory(&source, "example-tool", &owner(1)).unwrap();
+            let pinned = regular(&directory, "value").unwrap();
+            drop(directory);
             assert!(cleanup(&source, "example-tool", &owner(1)).is_err());
-            drop(old);
-            drop(copied);
+            drop(pinned);
         }
         cleanup(&source, "example-tool", &owner(1)).unwrap();
         assert!(!source.path.join("example-tool").exists());
@@ -2279,9 +2281,11 @@ mod tests {
             .join("value");
         assert!(fs::metadata(&value).unwrap().permissions().readonly());
         assert_eq!(fs::read(&value).unwrap(), b"example-tool");
+        let directory = owner_directory(&source, "example-tool", &owner(1)).unwrap();
+        let pinned = regular(&directory, "value").unwrap();
+        drop(directory);
         assert!(cleanup(&source, "example-tool", &owner(1)).is_err());
-        drop(original);
-        drop(copied);
+        drop(pinned);
         cleanup(&source, "example-tool", &owner(1)).unwrap();
         cleanup(&destination, "example-tool", &owner(1)).unwrap();
         assert!(!value.exists());
@@ -2365,15 +2369,15 @@ mod tests {
         let path = own.path.join("value");
         #[cfg(windows)]
         {
+            let pinned = regular(&own, "value").unwrap();
             assert!(fs::rename(&path, home.0.join("old-value")).is_err());
             for pin in &capture.pins {
                 pin.revalidate().unwrap();
             }
-            drop(capture);
+            drop(pinned);
         }
         fs::rename(&path, home.0.join("old-value")).unwrap();
         own.create_file("value", b"example-tool").unwrap();
-        #[cfg(not(windows))]
         assert!(capture.pins.iter().any(|pin| pin.revalidate().is_err()));
         assert_eq!(fs::read(home.0.join("old-value")).unwrap(), b"example-tool");
         let mut captured = Capture::default();
@@ -2536,8 +2540,8 @@ mod tests {
             capture_tree(&copied, &new.owners).unwrap().entries
         );
         let relative = "example-tool/notes/1/value";
-        let a = original.path.join(relative);
-        let b = copied.path.join(relative);
+        let a = state_path(&original.path, relative);
+        let b = state_path(&copied.path, relative);
         let file_identity = |path: &Path| {
             let parent = loader::open_directory(path.parent().unwrap()).unwrap();
             let file = loader::open_at(&parent, path.file_name().unwrap(), false).unwrap();
