@@ -43,6 +43,10 @@ RUST_TESTS = {
     "v21::tests::linux_x64_additive_layout", "v22::tests::linux_x64_layout_and_unchanged_prefixes",
     "v23::tests::additive_layout_keeps_the_legacy_prefix",
 }
+PROTOC_SOURCES = (
+    ("protobuf", "protocolbuffers/protobuf", "74211c0dfc2777318ab53c2cd2c317a2ef9012de"),
+    ("absl", "abseil/abseil-cpp", "9ac7062b1860d895fb5a8cbf58c3e9ef8f674b5f"),
+)
 
 
 def sha(path):
@@ -142,6 +146,56 @@ def rust_results(text):
         raise RuntimeError("All five unfiltered existing Rust ABI tests must pass")
     return {"tests": sorted(names), "passed": 5, "failed": 0, "filtered": 0,
         "historical_test_names": True, "experimental_abi_2_3_separate": True}
+
+
+def native_protoc(temp, tools, report, run):
+    cmake_root = Path(os.environ["VSINSTALLDIR"]) / "Common7/IDE/CommonExtensions/Microsoft/CMake"
+    sdk_bin = Path(os.environ["WindowsSdkDir"]) / "bin" / os.environ["WindowsSDKVersion"].strip("\\/") / "arm64"
+    paths = {"cmake": cmake_root / "CMake/bin/cmake.exe", "ninja": cmake_root / "Ninja/ninja.exe",
+        **{name: Path(tools["cl"]["path"]).with_name(name + ".exe") for name in ("link", "lib")},
+        **{name: sdk_bin / (name + ".exe") for name in ("rc", "mt")}}
+    for name, path in paths.items():
+        tools[name] = {"path": str(path), **pe_fixture(path.read_bytes(), False, expected_machine=0xAA64)}
+    result = report["protoc_replacement"] = {"version_expected": "libprotoc 31.1", "native": False,
+        "executed": False, "build_scope": "protoc-only", "sources": {}, "host_build_integration": "not_run"}
+    result["cmake_version"] = run("native-cmake-version", [paths["cmake"], "--version"])
+    result["ninja_version"] = run("native-ninja-version", [paths["ninja"], "--version"])
+    for name, repository, revision in PROTOC_SOURCES:
+        source = temp / name
+        run("protoc-" + name + "-init", ["git", "init", source])
+        run("protoc-" + name + "-fetch", ["git", "-C", source, "fetch", "--depth=1", "--no-tags",
+            "https://github.com/" + repository + ".git", revision], 180)
+        run("protoc-" + name + "-checkout", ["git", "-c", "core.hooksPath=NUL", "-C", source, "checkout", "--detach", revision], 180)
+        if run("protoc-" + name + "-identity", ["git", "-C", source, "rev-parse", "HEAD"]) != revision:
+            raise RuntimeError("Native protoc source checkout differs: " + name)
+        result["sources"][name] = {"repository": repository, "commit": revision}
+    build = temp / "protoc-build"
+    run("native-protoc-configure", [paths["cmake"], "-S", temp / "protobuf", "-B", build, "-G", "Ninja",
+        "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_COMPILER=" + tools["cl"]["path"],
+        "-DCMAKE_CXX_COMPILER=" + tools["cl"]["path"], "-DCMAKE_LINKER=" + str(paths["link"]),
+        "-DCMAKE_AR=" + str(paths["lib"]), "-DCMAKE_MAKE_PROGRAM=" + str(paths["ninja"]),
+        "-DCMAKE_RC_COMPILER=" + str(paths["rc"]), "-DCMAKE_MT=" + str(paths["mt"]),
+        "-Dprotobuf_BUILD_TESTS=OFF", "-Dprotobuf_BUILD_CONFORMANCE=OFF", "-Dprotobuf_BUILD_EXAMPLES=OFF",
+        "-Dprotobuf_BUILD_LIBUPB=OFF", "-Dprotobuf_BUILD_SHARED_LIBS=OFF", "-Dprotobuf_MSVC_STATIC_RUNTIME=ON",
+        "-Dprotobuf_WITH_ZLIB=OFF", "-Dprotobuf_INSTALL=OFF", "-Dprotobuf_FORCE_FETCH_DEPENDENCIES=ON",
+        "-DFETCHCONTENT_SOURCE_DIR_ABSL=" + str(temp / "absl"), "-DFETCHCONTENT_FULLY_DISCONNECTED=ON"], 180)
+    run("native-protoc-build", [paths["cmake"], "--build", build, "--target", "protoc", "--parallel", "2"], 1200)
+    protoc = build / "protoc.exe"
+    result["binary"] = pe_fixture(protoc.read_bytes(), False, expected_machine=0xAA64)
+    result["native"] = True
+    result["executed"] = True
+    result["version"] = run("native-built-protoc-version", [protoc, "--version"])
+    if result["version"] != result["version_expected"]:
+        raise RuntimeError("Native protoc version differs from the fixed vendored version")
+    proto, descriptor = temp / "native-smoke.proto", temp / "native-smoke.pb"
+    proto.write_text('syntax = "proto3"; package cm.preflight; message Probe { uint64 value = 1; }\n', encoding="utf-8")
+    run("native-built-protoc-descriptor", [protoc, "--proto_path=" + str(temp), "--descriptor_set_out=" + str(descriptor), proto])
+    if not descriptor.is_file() or not 0 < descriptor.stat().st_size <= 4096:
+        raise RuntimeError("Missing bounded native protoc descriptor")
+    result["descriptor_sha256"] = sha(descriptor)
+    for name, _, _ in PROTOC_SOURCES:
+        if run("protoc-" + name + "-pristine", ["git", "-C", temp / name, "status", "--porcelain", "--untracked-files=all"]):
+            raise RuntimeError("Native protoc source changed during build: " + name)
 
 
 def main():
@@ -280,8 +334,9 @@ def main():
                 raise RuntimeError("Native input preflight changed its source inputs")
             run("source-pristine", ["git", "-C", root, "diff", "--exit-code"])
             if not report["protoc"]["native"]:
-                report["blocked_at"] = "non-native-vendored-protoc"
-                raise RuntimeError("Pinned vendored protoc is not ARM64; it was not executed and no CLI build was started")
+                if report["protoc"].get("observed_machine") != 0x14C or report["protoc"]["executed"]:
+                    raise RuntimeError("Unexpected vendored protoc input; native replacement requires the reviewed I386 original")
+                native_protoc(temp, report["tools"], report, run)
             report["status"] = "observed_native_inputs_and_abi_only"
     except BaseException as error:
         report["status"] = "failed"
@@ -292,10 +347,25 @@ def main():
 
 
 def self_check():
-    from unittest.mock import patch
+    from unittest.mock import Mock, patch
 
     with tempfile.TemporaryDirectory() as directory:
         temp = Path(directory)
+        env = {"VSINSTALLDIR": str(temp), "WindowsSdkDir": str(temp), "WindowsSDKVersion": "1"}
+        for case in ("foreign-tool", "wrong-source"):
+            command = Mock(return_value="wrong-commit")
+            with patch.dict(os.environ, env), patch.object(Path, "read_bytes", return_value=b"foreign"), \
+                    patch(__name__ + ".pe_fixture", return_value={}, side_effect=RuntimeError("foreign") if case == "foreign-tool" else None):
+                try:
+                    native_protoc(temp, {"cl": {"path": str(temp / "cl.exe")}}, {}, command)
+                except RuntimeError as error:
+                    assert str(error) == ("foreign" if case == "foreign-tool" else "Native protoc source checkout differs: protobuf")
+                else:
+                    raise AssertionError("Invalid native protoc input accepted")
+            if case == "foreign-tool":
+                command.assert_not_called()
+            else:
+                assert not any(call.args[0] == "native-protoc-configure" for call in command.call_args_list)
         def member(name, data):
             header = name.encode().ljust(16) + b"0".ljust(12) + b"0".ljust(6) * 2 + b"0".ljust(8) + str(len(data)).encode().ljust(10) + b"`\n"
             return header + data + (b"\n" if len(data) % 2 else b"")
