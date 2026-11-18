@@ -657,7 +657,13 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
             .is_err()
     );
     assert_eq!(
-        fs::read(private.path.join("discard-tree").join("nested").join("value"))?,
+        fs::read(
+            private
+                .path
+                .join("discard-tree")
+                .join("nested")
+                .join("value")
+        )?,
         bytes
     );
     println!("cm_private passed=remove-entry-kinds");
@@ -774,7 +780,10 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
         fs::read(private.path.join("discard-original").join("value"))?,
         bytes
     );
-    assert_eq!(fs::read(private.path.join("discard-saved").join("value"))?, bytes);
+    assert_eq!(
+        fs::read(private.path.join("discard-saved").join("value"))?,
+        bytes
+    );
     directory::discard(&private, "discard-original", replaced)?;
     directory::discard(&private, "discard-saved", original)?;
     println!("cm_private passed=discard-replacement-preserved");
