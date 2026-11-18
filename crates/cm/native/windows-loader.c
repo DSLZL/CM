@@ -479,6 +479,8 @@ int cm_windows_private_metadata(const CmWindowsPin *p, DWORD *attributes, wchar_
     wchar_t *serialized = NULL;
     ULONG length = 0;
     int ok = 0;
+    /* Normalize OS auto-inheritance bookkeeping only after validating the protected, explicit DACL. */
+    if (!SetSecurityDescriptorControl(descriptor, SE_DACL_AUTO_INHERITED, 0)) goto done;
     if (!ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, SDDL_REVISION_1,
         OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &serialized, &length)) goto done;
     if (!length || length > capacity || length != wcslen(serialized) + 1) {
