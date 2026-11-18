@@ -596,7 +596,10 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     stage.child("nested")?.create_file("value", bytes)?;
     assert!(private.staging("discard-tree").is_err());
     assert_eq!(fs::read(stage.path.join("nested/value"))?, bytes);
-    assert_eq!(input::identity(&private.child("discard-tree")?.file)?, stage_identity);
+    assert_eq!(
+        input::identity(&private.child("discard-tree")?.file)?,
+        stage_identity
+    );
     drop(stage);
     println!("cm_private passed=staging-create-only");
 
@@ -609,12 +612,20 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     for byte in 0..8 {
         let mut changed = expected;
         changed.0 ^= 1u64 << (byte * 8);
-        assert!(private.remove(OsStr::new("remove-文件"), changed, false).is_err());
+        assert!(
+            private
+                .remove(OsStr::new("remove-文件"), changed, false)
+                .is_err()
+        );
     }
     for byte in 0..16 {
         let mut changed = expected;
         changed.1[byte] ^= 1;
-        assert!(private.remove(OsStr::new("remove-文件"), changed, false).is_err());
+        assert!(
+            private
+                .remove(OsStr::new("remove-文件"), changed, false)
+                .is_err()
+        );
     }
     assert_eq!(entry_identity("remove-文件", false)?, expected);
     assert_eq!(fs::read(private.path.join("remove-文件"))?, bytes);
@@ -624,58 +635,118 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
 
     private.create_file("remove-file", bytes)?;
     let expected = entry_identity("remove-file", false)?;
-    assert!(private.remove(OsStr::new("remove-file"), expected, true).is_err());
+    assert!(
+        private
+            .remove(OsStr::new("remove-file"), expected, true)
+            .is_err()
+    );
     private.remove(OsStr::new("remove-file"), expected, false)?;
     let empty = private.staging("remove-empty")?;
     let expected = input::identity(&empty.file)?;
     drop(empty);
-    assert!(private.remove(OsStr::new("remove-empty"), expected, false).is_err());
+    assert!(
+        private
+            .remove(OsStr::new("remove-empty"), expected, false)
+            .is_err()
+    );
     private.remove(OsStr::new("remove-empty"), expected, true)?;
     assert!(!private.path.join("remove-empty").exists());
-    assert!(private.remove(OsStr::new("discard-tree"), stage_identity, true).is_err());
-    assert_eq!(fs::read(private.path.join("discard-tree/nested/value"))?, bytes);
+    assert!(
+        private
+            .remove(OsStr::new("discard-tree"), stage_identity, true)
+            .is_err()
+    );
+    assert_eq!(
+        fs::read(private.path.join("discard-tree/nested/value"))?,
+        bytes
+    );
     println!("cm_private passed=remove-entry-kinds");
 
     private.create_file("remove-held", bytes)?;
     let file = input::open_at(&private.file, OsStr::new("remove-held"), false)?;
     let expected = input::identity(&file)?;
     let clone = file.try_clone()?;
-    assert!(private.remove(OsStr::new("remove-held"), expected, false).is_err());
+    assert!(
+        private
+            .remove(OsStr::new("remove-held"), expected, false)
+            .is_err()
+    );
     drop(file);
-    assert!(private.remove(OsStr::new("remove-held"), expected, false).is_err());
+    assert!(
+        private
+            .remove(OsStr::new("remove-held"), expected, false)
+            .is_err()
+    );
     drop(clone);
-    let writer = fs::OpenOptions::new().write(true).open(private.path.join("remove-held"))?;
-    assert!(private.remove(OsStr::new("remove-held"), expected, false).is_err());
+    let writer = fs::OpenOptions::new()
+        .write(true)
+        .open(private.path.join("remove-held"))?;
+    assert!(
+        private
+            .remove(OsStr::new("remove-held"), expected, false)
+            .is_err()
+    );
     drop(writer);
     private.remove(OsStr::new("remove-held"), expected, false)?;
     private.create_file("remove-mapped", b"hello")?;
     let expected = entry_identity("remove-mapped", false)?;
     with_writable_mapping(&private.path.join("remove-mapped"), || {
-        assert!(private.remove(OsStr::new("remove-mapped"), expected, false).is_err());
+        assert!(
+            private
+                .remove(OsStr::new("remove-mapped"), expected, false)
+                .is_err()
+        );
     })?;
     private.remove(OsStr::new("remove-mapped"), expected, false)?;
     let descendant = directory::Directory::open(&private.path.join("discard-tree/nested"))?;
-    assert!(private.remove(OsStr::new("discard-tree"), stage_identity, true).is_err());
+    assert!(
+        private
+            .remove(OsStr::new("discard-tree"), stage_identity, true)
+            .is_err()
+    );
     descendant.check()?;
     drop(descendant);
     println!("cm_private passed=remove-retained-pins");
 
     private.create_file("remove-hardlink", bytes)?;
     let expected = entry_identity("remove-hardlink", false)?;
-    fs::hard_link(private.path.join("remove-hardlink"), private.path.join("remove-alias"))?;
-    assert!(private.remove(OsStr::new("remove-hardlink"), expected, false).is_err());
+    fs::hard_link(
+        private.path.join("remove-hardlink"),
+        private.path.join("remove-alias"),
+    )?;
+    assert!(
+        private
+            .remove(OsStr::new("remove-hardlink"), expected, false)
+            .is_err()
+    );
     assert_eq!(fs::read(private.path.join("remove-alias"))?, bytes);
     fs::remove_file(private.path.join("remove-alias"))?;
     private.remove(OsStr::new("remove-hardlink"), expected, false)?;
     let expected = entry_identity("publish-public", false)?;
-    assert!(private.remove(OsStr::new("publish-public"), expected, false).is_err());
-    assert_eq!(fs::read(private.path.join("publish-public"))?, b"unprotected");
+    assert!(
+        private
+            .remove(OsStr::new("publish-public"), expected, false)
+            .is_err()
+    );
+    assert_eq!(
+        fs::read(private.path.join("publish-public"))?,
+        b"unprotected"
+    );
     let junction = private.path.join("discard-tree/junction");
     let output = Command::new("cmd.exe")
-        .args([OsStr::new("/D"), OsStr::new("/C"), OsStr::new("mklink"),
-            OsStr::new("/J"), junction.as_os_str(), collision.as_os_str()])
+        .args([
+            OsStr::new("/D"),
+            OsStr::new("/C"),
+            OsStr::new("mklink"),
+            OsStr::new("/J"),
+            junction.as_os_str(),
+            collision.as_os_str(),
+        ])
         .output()?;
-    assert!(output.status.success(), "discard junction setup: {output:?}");
+    assert!(
+        output.status.success(),
+        "discard junction setup: {output:?}"
+    );
     assert!(directory::discard(&private, "discard-tree", stage_identity).is_err());
     assert!(fs::symlink_metadata(&junction).is_ok());
     assert_eq!(fs::read(collision.join("unchanged"))?, b"unchanged");
@@ -689,14 +760,20 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     stage.create_file("value", bytes)?;
     let original = input::identity(&stage.file)?;
     drop(stage);
-    fs::rename(private.path.join("discard-original"), private.path.join("discard-saved"))?;
+    fs::rename(
+        private.path.join("discard-original"),
+        private.path.join("discard-saved"),
+    )?;
     let replacement = private.staging("discard-original")?;
     replacement.create_file("value", bytes)?;
     let replaced = input::identity(&replacement.file)?;
     assert_ne!(original, replaced);
     drop(replacement);
     assert!(directory::discard(&private, "discard-original", original).is_err());
-    assert_eq!(fs::read(private.path.join("discard-original/value"))?, bytes);
+    assert_eq!(
+        fs::read(private.path.join("discard-original/value"))?,
+        bytes
+    );
     assert_eq!(fs::read(private.path.join("discard-saved/value"))?, bytes);
     directory::discard(&private, "discard-original", replaced)?;
     directory::discard(&private, "discard-saved", original)?;
@@ -705,14 +782,39 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     private.create_file("remove-parent-drift", bytes)?;
     let expected = entry_identity("remove-parent-drift", false)?;
     let before = inventory()?;
-    for name in ["", ".", "..", "../escaped", "..\\escaped", "stream:ads", "tail.", "tail ", "nul\0"] {
-        assert!(private.remove(OsStr::new(name), expected, false).is_err(), "{name:?}");
+    for name in [
+        "",
+        ".",
+        "..",
+        "../escaped",
+        "..\\escaped",
+        "stream:ads",
+        "tail.",
+        "tail ",
+        "nul\0",
+    ] {
+        assert!(
+            private.remove(OsStr::new(name), expected, false).is_err(),
+            "{name:?}"
+        );
     }
-    assert!(private.remove(OsStr::new(&"x".repeat(256)), expected, false).is_err());
-    assert!(private.remove(OsStr::new("remove-missing"), expected, false).is_err());
+    assert!(
+        private
+            .remove(OsStr::new(&"x".repeat(256)), expected, false)
+            .is_err()
+    );
+    assert!(
+        private
+            .remove(OsStr::new("remove-missing"), expected, false)
+            .is_err()
+    );
     assert_eq!(inventory()?, before);
     control("private-change")?;
-    assert!(private.remove(OsStr::new("remove-parent-drift"), expected, false).is_err());
+    assert!(
+        private
+            .remove(OsStr::new("remove-parent-drift"), expected, false)
+            .is_err()
+    );
     assert_eq!(inventory()?, before);
     control("private-restore")?;
     private.remove(OsStr::new("remove-parent-drift"), expected, false)?;

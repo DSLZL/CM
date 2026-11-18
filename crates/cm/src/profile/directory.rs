@@ -324,7 +324,10 @@ mod tests {
     #[test]
     fn staging_cleanup_preserves_a_replacement_directory() {
         let path = std::env::temp_dir().join(super::super::temporary("directory-test"));
-        std::fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .unwrap();
         let root = Directory::open(&path).unwrap();
         let stage = root.staging("stage").unwrap();
         stage

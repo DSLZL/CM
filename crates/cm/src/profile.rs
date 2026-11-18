@@ -1,6 +1,6 @@
 //! Immutable package generations; only cm-profile.json changes at activation.
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::{CString, OsStr};
+use std::ffi::CString;
 use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
