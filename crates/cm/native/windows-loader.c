@@ -176,6 +176,7 @@ CmWindowsPin *cm_windows_pin_copy(const unsigned char *bytes, size_t length, uns
 }
 
 void cm_windows_pin_free(CmWindowsPin *p) {
+    if (!p) return;
     cm_windows_unpin(p);
     if (p->temporary_directory[0]) {
         DeleteFileW(p->path);
