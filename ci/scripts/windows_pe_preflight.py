@@ -288,8 +288,8 @@ def main():
                 if len(matches) != 1 or sha(matches[0]) != checksum:
                     raise RuntimeError("Missing exact PE fixture registry source archive")
                 with tarfile.open(matches[0], "r:gz") as archive:
-                    members = [row for row in archive.getmembers() if row.isfile() and Path(row.name).name in (
-                        "LICENSE-MIT", "LICENSE-APACHE", "COPYING", "UNLICENSE")]
+                    members = [row for row in archive.getmembers() if row.isfile() and Path(row.name).name.upper() in (
+                        "LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "LICENSE-APACHE-2.0", "COPYING", "UNLICENSE")]
                 if not 1 <= len(members) <= 8:
                     raise RuntimeError("Missing bounded upstream dependency license files")
                 for member in members:
