@@ -234,7 +234,7 @@ int cm_windows_file_information(const CmWindowsPin *p, CmWindowsFileInformation 
     return 1;
 }
 
-static CmWindowsPin *cm_windows_input_finish(CmWindowsPin *p, int directory) {
+static CmWindowsPin *cm_windows_input_finish(CmWindowsPin *p, int directory, int created) {
     CmWindowsFileInformation info;
     wchar_t final[4096];
     DWORD length;
@@ -251,6 +251,10 @@ static CmWindowsPin *cm_windows_input_finish(CmWindowsPin *p, int directory) {
     return p;
 failed: {
     DWORD error = GetLastError();
+    if (created) {
+        FILE_DISPOSITION_INFO disposition = {TRUE};
+        SetFileInformationByHandle(p->file, FileDispositionInfo, &disposition, sizeof(disposition));
+    }
     cm_windows_pin_free(p);
     SetLastError(error);
     return NULL;
@@ -286,7 +290,7 @@ CmWindowsPin *cm_windows_directory_open(const wchar_t *name) {
         }
         p->parents[p->count++] = handle;
     }
-    return cm_windows_input_finish(p, 1);
+    return cm_windows_input_finish(p, 1, 0);
 failed: {
     DWORD error = GetLastError();
     cm_windows_pin_free(p);
@@ -294,7 +298,8 @@ failed: {
     return NULL;
 }}
 
-CmWindowsPin *cm_windows_child_open(const CmWindowsPin *parent, const wchar_t *name, int directory) {
+static CmWindowsPin *cm_windows_child(const CmWindowsPin *parent, const wchar_t *name, int directory,
+    PSECURITY_DESCRIPTOR descriptor) {
     size_t length = wcslen(name);
     if (!length || length > 255 || wcspbrk(name, L"\\/:\"<>?*|") || !wcscmp(name, L".")
         || !wcscmp(name, L"..") || name[length - 1] == L'.' || name[length - 1] == L' '
@@ -324,22 +329,27 @@ CmWindowsPin *cm_windows_child_open(const CmWindowsPin *parent, const wchar_t *n
     DosError dos_error = (DosError)(void *)GetProcAddress(ntdll, "RtlNtStatusToDosError");
     if (!open_file || !dos_error) { SetLastError(ERROR_PROC_NOT_FOUND); goto failed; }
     UNICODE_STRING relative = {(USHORT)(length * sizeof(wchar_t)), (USHORT)(length * sizeof(wchar_t)), (PWSTR)name};
-    OBJECT_ATTRIBUTES attributes = {sizeof(attributes), parent->file, &relative, 0x40, NULL, NULL};
+    OBJECT_ATTRIBUTES attributes = {sizeof(attributes), parent->file, &relative, 0x40, descriptor, NULL};
     IO_STATUS_BLOCK status;
     ACCESS_MASK access = directory
         ? FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE
         : FILE_GENERIC_READ;
+    if (descriptor) access |= FILE_GENERIC_WRITE | DELETE;
     NTSTATUS result = open_file(&p->file, access, &attributes, &status, NULL, 0,
-        FILE_SHARE_READ | (directory ? FILE_SHARE_WRITE : 0), 1,
-        0x00200000 | 0x20 | (directory ? 0 : 0x40), NULL, 0);
+        FILE_SHARE_READ | (directory ? FILE_SHARE_WRITE : 0), descriptor ? 2 : 1,
+        0x00200000 | 0x20 | (directory ? 0 : 0x40) | (descriptor ? 2 : 0), NULL, 0);
     if (result < 0) { SetLastError(dos_error(result)); goto failed; }
-    return cm_windows_input_finish(p, directory);
+    return cm_windows_input_finish(p, directory, descriptor != NULL);
 failed: {
     DWORD error = GetLastError();
     cm_windows_pin_free(p);
     SetLastError(error);
     return NULL;
 }}
+
+CmWindowsPin *cm_windows_child_open(const CmWindowsPin *parent, const wchar_t *name, int directory) {
+    return cm_windows_child(parent, name, directory, NULL);
+}
 
 static TOKEN_USER *cm_windows_user(void) {
     HANDLE token = NULL;
@@ -417,6 +427,68 @@ int cm_windows_private_check(const CmWindowsPin *p) {
 done: {
     DWORD error = ok ? ERROR_SUCCESS : GetLastError();
     free(descriptor);
+    free(user);
+    SetLastError(error);
+    return ok;
+}}
+
+int cm_windows_private_write(const CmWindowsPin *parent, const wchar_t *name,
+    const unsigned char *bytes, size_t length) {
+    CmWindowsFileInformation info;
+    wchar_t filesystem[16];
+    DWORD flags = 0;
+    if (length && !bytes) { SetLastError(ERROR_INVALID_PARAMETER); return 0; }
+    if (!cm_windows_private_check(parent) || !cm_windows_file_information(parent, &info)) return 0;
+    if (!(info.attributes & FILE_ATTRIBUTE_DIRECTORY)) { SetLastError(ERROR_DIRECTORY); return 0; }
+    if (!GetVolumeInformationByHandleW(parent->file, NULL, 0, NULL, NULL, &flags, filesystem, 16)) return 0;
+    /* shortcut: private writes require NTFS; qualify other filesystems before expanding support. */
+    if (_wcsicmp(filesystem, L"NTFS") || !(flags & FILE_PERSISTENT_ACLS)) {
+        SetLastError(ERROR_NOT_SUPPORTED); return 0;
+    }
+    typedef NTSTATUS (NTAPI *QueryFile)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
+    typedef ULONG (NTAPI *DosError)(NTSTATUS);
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll || !cm_windows_system_module(ntdll)) { SetLastError(ERROR_BAD_EXE_FORMAT); return 0; }
+    QueryFile query_file = (QueryFile)(void *)GetProcAddress(ntdll, "NtQueryInformationFile");
+    DosError dos_error = (DosError)(void *)GetProcAddress(ntdll, "RtlNtStatusToDosError");
+    if (!query_file || !dos_error) { SetLastError(ERROR_PROC_NOT_FOUND); return 0; }
+    TOKEN_USER *user = cm_windows_user();
+    if (!user) return 0;
+    CmWindowsPin *p = NULL;
+    int ok = 0;
+    union { ACL alignment; BYTE bytes[sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) + SECURITY_MAX_SID_SIZE]; } acl;
+    SECURITY_DESCRIPTOR descriptor;
+    if (!InitializeAcl((PACL)&acl, sizeof(acl), ACL_REVISION)
+        || !AddAccessAllowedAceEx((PACL)&acl, ACL_REVISION, 0, FILE_ALL_ACCESS, user->User.Sid)
+        || !InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION)
+        || !SetSecurityDescriptorOwner(&descriptor, user->User.Sid, FALSE)
+        || !SetSecurityDescriptorDacl(&descriptor, TRUE, (PACL)&acl, FALSE)
+        || !SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED)
+        || !cm_windows_private_descriptor(&descriptor, user->User.Sid)) goto done;
+    p = cm_windows_child(parent, name, 0, &descriptor);
+    if (!p || !cm_windows_private_check(p)) goto done;
+    ULONG mode = 0;
+    IO_STATUS_BLOCK status;
+    NTSTATUS result = query_file(p->file, &status, &mode, sizeof(mode), (FILE_INFORMATION_CLASS)16);
+    if (result < 0) { SetLastError(dos_error(result)); goto done; }
+    if (!(mode & 2)) { SetLastError(ERROR_INVALID_DATA); goto done; }
+    for (size_t offset = 0; offset < length;) {
+        DWORD amount = length - offset > 16384 ? 16384 : (DWORD)(length - offset), received = 0;
+        if (!WriteFile(p->file, bytes + offset, amount, &received, NULL)) goto done;
+        if (!received || received > amount) { SetLastError(ERROR_WRITE_FAULT); goto done; }
+        offset += received;
+    }
+    if (!FlushFileBuffers(p->file) || !cm_windows_private_check(p) || !cm_windows_private_check(parent)) goto done;
+    ok = 1;
+done: {
+    DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+    if (p) {
+        if (!ok) {
+            FILE_DISPOSITION_INFO disposition = {TRUE};
+            SetFileInformationByHandle(p->file, FileDispositionInfo, &disposition, sizeof(disposition));
+        }
+        cm_windows_pin_free(p);
+    }
     free(user);
     SetLastError(error);
     return ok;

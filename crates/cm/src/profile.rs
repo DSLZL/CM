@@ -2,7 +2,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CString, OsStr};
 use std::fs::File;
-use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -404,29 +403,6 @@ impl Directory {
         result.check()?;
         self.file.sync_all().map_err(|e| e.to_string())?;
         Ok(result)
-    }
-
-    pub(crate) fn create_file(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
-        let name = CString::new(name).map_err(|e| e.to_string())?;
-        let fd = unsafe {
-            libc::openat(
-                self.file.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                0o600,
-            )
-        };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-        let mut file = unsafe { File::from_raw_fd(fd) };
-        if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
-            unsafe {
-                libc::unlinkat(self.file.as_raw_fd(), name.as_ptr(), 0);
-            }
-            return Err(error.to_string());
-        }
-        Ok(())
     }
 
     pub(crate) fn publish(&self, temporary: &str, target: &str) -> Result<bool, String> {

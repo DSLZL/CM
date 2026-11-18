@@ -52,7 +52,9 @@ INPUT_CHECKS = ["bounded-read", "empty-read", "read-bounds", "unchanged-pin", "c
     "retained-file", "retained-ancestors", "hardlinks", "reparse-points", "post-close-usable"]
 PRIVATE_CHECKS = ["descriptor-owner-mismatch", "owner-directory", "owner-file", "owner-read-only",
     "foreign-file-ace", "foreign-directory-ace", "null-dacl", "empty-dacl", "unprotected-dacl",
-    "unsupported-ace", "inherited-ace", "held-dacl-drift", "restored-dacl"]
+    "unsupported-ace", "inherited-ace", "held-dacl-drift", "restored-dacl",
+    "created-private-file", "created-empty-file", "created-chunked-file", "existing-file-preserved",
+    "file-directory-collision", "create-invalid-paths", "unsafe-parent-no-write", "created-ancestor-pin"]
 
 
 def private_record(text):

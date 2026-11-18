@@ -42,6 +42,12 @@ unsafe extern "C" {
     fn cm_windows_pin_path(pin: *const std::ffi::c_void) -> *const u16;
     fn cm_windows_pin_free(pin: *mut std::ffi::c_void);
     fn cm_windows_private_check(pin: *const std::ffi::c_void) -> i32;
+    fn cm_windows_private_write(
+        parent: *const std::ffi::c_void,
+        name: *const u16,
+        bytes: *const u8,
+        length: usize,
+    ) -> i32;
 }
 
 struct Pin(NonNull<std::ffi::c_void>);
@@ -72,6 +78,22 @@ impl Handle {
 
     pub(crate) fn identity(&self) -> Result<super::Identity, String> {
         Ok(information(self)?.identity)
+    }
+
+    pub(crate) fn create_file(&self, name: &OsStr, bytes: &[u8]) -> Result<(), String> {
+        let name = wide(name)?;
+        if unsafe {
+            cm_windows_private_write(
+                self.pin.0.as_ptr(),
+                name.as_ptr(),
+                bytes.as_ptr(),
+                bytes.len(),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error().to_string());
+        }
+        Ok(())
     }
 
     fn take(raw: *mut std::ffi::c_void) -> Result<Self, String> {

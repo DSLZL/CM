@@ -30,6 +30,7 @@ compile_error!("This fixture requires native 64-bit Windows");
 
 fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     use std::ffi::OsStr;
+    use std::fs;
 
     if !root.is_absolute() || !probe.is_absolute() {
         return Err("private controls require absolute owned paths".into());
@@ -81,6 +82,106 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     clone.check_private()?;
     directory::Directory::open(&private.path)?.check()?;
     println!("cm_private passed=restored-dacl");
+
+    let name = "created-文件";
+    let bytes = "private\0内容".as_bytes();
+    private.create_file(name, bytes)?;
+    assert_eq!(fs::read(private.path.join(name))?, bytes);
+    let file = input::open_at(&private.file, OsStr::new(name), false)?;
+    file.check_private()?;
+    let created_identity = file.identity()?;
+    drop(file);
+    println!("cm_private passed=created-private-file");
+
+    private.create_file("created-empty", b"")?;
+    assert!(fs::read(private.path.join("created-empty"))?.is_empty());
+    input::open_at(&private.file, OsStr::new("created-empty"), false)?.check_private()?;
+    println!("cm_private passed=created-empty-file");
+
+    let chunked: Vec<u8> = (0..65_537).map(|i| (i % 251) as u8).collect();
+    private.create_file("created-chunked", &chunked)?;
+    assert_eq!(fs::read(private.path.join("created-chunked"))?, chunked);
+    input::open_at(&private.file, OsStr::new("created-chunked"), false)?.check_private()?;
+    println!("cm_private passed=created-chunked-file");
+
+    assert!(private.create_file(name, b"replacement").is_err());
+    fs::hard_link(private.path.join(name), private.path.join("created-link"))?;
+    assert!(private.create_file(name, b"replacement").is_err());
+    assert!(private.create_file("created-link", b"replacement").is_err());
+    assert_eq!(fs::read(private.path.join(name))?, bytes);
+    assert_eq!(fs::read(private.path.join("created-link"))?, bytes);
+    fs::remove_file(private.path.join("created-link"))?;
+    let file = input::open_at(&private.file, OsStr::new(name), false)?;
+    assert_eq!(file.identity()?, created_identity);
+    file.check_private()?;
+    drop(file);
+    println!("cm_private passed=existing-file-preserved");
+
+    let collision = private.path.join("collision-dir");
+    fs::create_dir(&collision)?;
+    fs::write(collision.join("unchanged"), b"unchanged")?;
+    assert!(private.create_file("collision-dir", b"replacement").is_err());
+    let junction = private.path.join("collision-junction");
+    let output = Command::new("cmd.exe")
+        .args([
+            OsStr::new("/D"),
+            OsStr::new("/C"),
+            OsStr::new("mklink"),
+            OsStr::new("/J"),
+            junction.as_os_str(),
+            collision.as_os_str(),
+        ])
+        .output()?;
+    assert!(output.status.success(), "junction setup: {output:?}");
+    assert!(
+        private
+            .create_file("collision-junction", b"replacement")
+            .is_err()
+    );
+    assert_eq!(fs::read(collision.join("unchanged"))?, b"unchanged");
+    fs::remove_dir(&junction)?;
+    println!("cm_private passed=file-directory-collision");
+
+    let inventory = || -> Result<Vec<_>, std::io::Error> {
+        let mut names = fs::read_dir(&private.path)?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<Result<Vec<_>, _>>()?;
+        names.sort();
+        Ok(names)
+    };
+    let before = inventory()?;
+    for name in [
+        "",
+        ".",
+        "..",
+        "../escaped",
+        "..\\escaped",
+        "stream:ads",
+        "tail.",
+        "tail ",
+        "nul\0",
+    ] {
+        assert!(private.create_file(name, b"invalid").is_err(), "{name:?}");
+    }
+    assert_eq!(inventory()?, before);
+    assert!(!root.join("escaped").exists());
+    println!("cm_private passed=create-invalid-paths");
+
+    control("private-change")?;
+    assert!(private.create_file("denied-create", b"denied").is_err());
+    assert_eq!(inventory()?, before);
+    control("private-restore")?;
+    private.check()?;
+    println!("cm_private passed=unsafe-parent-no-write");
+
+    let file = input::open_at(&private.file, OsStr::new(name), false)?;
+    assert!(fs::write(private.path.join(name), b"replacement").is_err());
+    assert!(fs::remove_file(private.path.join(name)).is_err());
+    assert!(fs::rename(&private.path, root.join("private-moved")).is_err());
+    assert_eq!(fs::read(private.path.join(name))?, bytes);
+    file.check_private()?;
+    drop(file);
+    println!("cm_private passed=created-ancestor-pin");
     Ok(0)
 }
 

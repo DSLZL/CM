@@ -1,4 +1,14 @@
 #[cfg(not(windows))]
+use std::ffi::CString;
+#[cfg(windows)]
+use std::ffi::OsStr;
+#[cfg(not(windows))]
+use std::fs::File;
+#[cfg(not(windows))]
+use std::io::Write;
+#[cfg(not(windows))]
+use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(not(windows))]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -51,5 +61,35 @@ impl Directory {
             current.check_private()?;
         }
         Ok(())
+    }
+
+    #[cfg(not(windows))]
+    pub(crate) fn create_file(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        let name = CString::new(name).map_err(|e| e.to_string())?;
+        let fd = unsafe {
+            libc::openat(
+                self.file.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let mut file = unsafe { File::from_raw_fd(fd) };
+        if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+            unsafe {
+                libc::unlinkat(self.file.as_raw_fd(), name.as_ptr(), 0);
+            }
+            return Err(error.to_string());
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn create_file(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        self.check()?;
+        self.file.create_file(OsStr::new(name), bytes)
     }
 }
