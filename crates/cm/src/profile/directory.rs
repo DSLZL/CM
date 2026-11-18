@@ -16,7 +16,9 @@ impl Directory {
         {
             let metadata = file.metadata().map_err(|e| e.to_string())?;
             if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
-                return Err("managed directory must be owned by this user and private (0700)".into());
+                return Err(
+                    "managed directory must be owned by this user and private (0700)".into(),
+                );
             }
         }
         #[cfg(windows)]
