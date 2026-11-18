@@ -37,23 +37,10 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         return Err("expected absolute DLL path".into());
     }
     let entry = args[2].to_str().ok_or("invalid entry")?;
-    let snapshot = if mode == "load" && args[5] == "guarded" {
-        Some(windows::Snapshot::open(
-            path,
-            args[4].to_str().ok_or("invalid hash")?,
-        )?)
-    } else {
-        None
-    };
-    let bytes = if let Some(snapshot) = &snapshot {
-        snapshot.read()?
-    } else {
-        let mut bytes = Vec::new();
-        std::fs::File::open(path)?
-            .take(32 * 1024 * 1024 + 1)
-            .read_to_end(&mut bytes)?;
-        bytes
-    };
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(32 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
     let audit = match pe::check(&bytes, MACHINE, entry) {
         Ok(value) => value,
         Err(error) => {
@@ -71,7 +58,14 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     if mode == "validate" {
         return Ok(0);
     }
-    let snapshot = if args[5] == "snapshot" {
+    let snapshot = if args[5] == "guarded" {
+        let snapshot = windows::Snapshot::open(path, args[4].to_str().ok_or("invalid hash")?)?;
+        assert!(
+            snapshot.read()? == bytes,
+            "retained snapshot differs from parsed bytes"
+        );
+        Some(snapshot)
+    } else if args[5] == "snapshot" {
         for (name, extension) in [
             (c"cm-mod-v1", "dll"),
             (c"cm-distribution-verifier", "exe"),
@@ -95,7 +89,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         }
         Some(windows::Snapshot::create(&bytes, c"cm-mod-v1")?)
     } else {
-        snapshot
+        None
     };
     if let Some(snapshot) = snapshot {
         let library = snapshot.load(&audit.dependencies)?;
