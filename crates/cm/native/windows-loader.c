@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
+#include <winternl.h>
 
 int cm_windows_pin(CmWindowsPin *p, const wchar_t *name) {
     ZeroMemory(p, sizeof(*p));
@@ -207,3 +208,131 @@ HMODULE cm_windows_pin_load(const CmWindowsPin *p, const wchar_t *dependencies) 
     }
     return module;
 }
+
+int cm_windows_file_information(const CmWindowsPin *p, CmWindowsFileInformation *out) {
+    BY_HANDLE_FILE_INFORMATION standard;
+    FILE_ID_INFO id;
+    FILE_BASIC_INFO basic;
+    FILE_STANDARD_INFO size;
+    if (GetFileType(p->file) != FILE_TYPE_DISK
+        || !GetFileInformationByHandle(p->file, &standard)
+        || !GetFileInformationByHandleEx(p->file, FileIdInfo, &id, sizeof(id))
+        || !GetFileInformationByHandleEx(p->file, FileBasicInfo, &basic, sizeof(basic))
+        || !GetFileInformationByHandleEx(p->file, FileStandardInfo, &size, sizeof(size))) return 0;
+    if (standard.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+        SetLastError(ERROR_REPARSE_TAG_INVALID); return 0;
+    }
+    out->volume = id.VolumeSerialNumber;
+    memcpy(out->id, id.FileId.Identifier, sizeof(out->id));
+    out->size = size.EndOfFile.QuadPart;
+    out->modified = basic.LastWriteTime.QuadPart;
+    out->changed = basic.ChangeTime.QuadPart;
+    out->links = standard.nNumberOfLinks;
+    out->attributes = standard.dwFileAttributes;
+    return 1;
+}
+
+static CmWindowsPin *cm_windows_input_finish(CmWindowsPin *p, int directory) {
+    CmWindowsFileInformation info;
+    wchar_t final[4096];
+    DWORD length;
+    if (!cm_windows_file_information(p, &info)) goto failed;
+    if (!!(info.attributes & FILE_ATTRIBUTE_DIRECTORY) != !!directory
+        || (!directory && info.links != 1)) {
+        SetLastError(ERROR_INVALID_DATA); goto failed;
+    }
+    length = GetFinalPathNameByHandleW(p->file, final, 4096, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (!length || length >= 4096 || wcsncmp(final, L"\\\\?\\", 4)
+        || _wcsicmp(final + 4, p->path)) {
+        SetLastError(ERROR_INVALID_NAME); goto failed;
+    }
+    return p;
+failed: {
+    DWORD error = GetLastError();
+    cm_windows_pin_free(p);
+    SetLastError(error);
+    return NULL;
+}}
+
+CmWindowsPin *cm_windows_directory_open(const wchar_t *name) {
+    CmWindowsPin *p = (CmWindowsPin *)calloc(1, sizeof(*p));
+    if (!p) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return NULL; }
+    p->file = INVALID_HANDLE_VALUE;
+    DWORD length = GetFullPathNameW(name, 4096, p->path, NULL);
+    if (!length || length >= 4096 || length < 3 || p->path[1] != L':' || p->path[2] != L'\\'
+        || _wcsicmp(name, p->path)) { SetLastError(ERROR_INVALID_NAME); goto failed; }
+    for (DWORD i = 2; i <= length; ++i) {
+        if (p->path[i] != L'\\' && i != length) continue;
+        if (i == length && p->path[i - 1] == L'\\') break;
+        wchar_t path[4096];
+        DWORD end = i == 2 ? 3 : i;
+        memcpy(path, p->path, end * sizeof(wchar_t));
+        path[end] = 0;
+        HANDLE handle = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+        if (handle == INVALID_HANDLE_VALUE) goto failed;
+        BY_HANDLE_FILE_INFORMATION info;
+        if (!GetFileInformationByHandle(handle, &info)
+            || !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+            CloseHandle(handle); SetLastError(ERROR_REPARSE_TAG_INVALID); goto failed;
+        }
+        if (end == length) { p->file = handle; break; }
+        if (p->count == 96) {
+            CloseHandle(handle); SetLastError(ERROR_BUFFER_OVERFLOW); goto failed;
+        }
+        p->parents[p->count++] = handle;
+    }
+    return cm_windows_input_finish(p, 1);
+failed: {
+    DWORD error = GetLastError();
+    cm_windows_pin_free(p);
+    SetLastError(error);
+    return NULL;
+}}
+
+CmWindowsPin *cm_windows_child_open(const CmWindowsPin *parent, const wchar_t *name, int directory) {
+    size_t length = wcslen(name);
+    if (!length || length > 255 || wcspbrk(name, L"\\/:\"<>?*|") || !wcscmp(name, L".")
+        || !wcscmp(name, L"..") || name[length - 1] == L'.' || name[length - 1] == L' '
+        || parent->count >= 96) { SetLastError(ERROR_INVALID_NAME); return NULL; }
+    if (wcslen(parent->path) + length + 2 > 4096) {
+        SetLastError(ERROR_BUFFER_OVERFLOW); return NULL;
+    }
+    CmWindowsPin *p = (CmWindowsPin *)calloc(1, sizeof(*p));
+    if (!p) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return NULL; }
+    p->file = INVALID_HANDLE_VALUE;
+    if (swprintf_s(p->path, 4096, L"%ls%ls%ls", parent->path,
+        parent->path[wcslen(parent->path) - 1] == L'\\' ? L"" : L"\\", name) < 0) {
+        SetLastError(ERROR_BUFFER_OVERFLOW); goto failed;
+    }
+    for (size_t i = 0; i <= parent->count; ++i) {
+        HANDLE original = i == parent->count ? parent->file : parent->parents[i];
+        if (!DuplicateHandle(GetCurrentProcess(), original, GetCurrentProcess(), &p->parents[p->count],
+            0, FALSE, DUPLICATE_SAME_ACCESS)) goto failed;
+        ++p->count;
+    }
+    typedef NTSTATUS (NTAPI *OpenFile)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+        PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+    typedef ULONG (NTAPI *DosError)(NTSTATUS);
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll || !cm_windows_system_module(ntdll)) { SetLastError(ERROR_BAD_EXE_FORMAT); goto failed; }
+    OpenFile open_file = (OpenFile)(void *)GetProcAddress(ntdll, "NtCreateFile");
+    DosError dos_error = (DosError)(void *)GetProcAddress(ntdll, "RtlNtStatusToDosError");
+    if (!open_file || !dos_error) { SetLastError(ERROR_PROC_NOT_FOUND); goto failed; }
+    UNICODE_STRING relative = {(USHORT)(length * sizeof(wchar_t)), (USHORT)(length * sizeof(wchar_t)), (PWSTR)name};
+    OBJECT_ATTRIBUTES attributes = {sizeof(attributes), parent->file, &relative, 0x40, NULL, NULL};
+    IO_STATUS_BLOCK status;
+    ACCESS_MASK access = directory
+        ? FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE
+        : FILE_GENERIC_READ;
+    NTSTATUS result = open_file(&p->file, access, &attributes, &status, NULL, 0,
+        FILE_SHARE_READ, 1, 0x00200000 | 0x20 | (directory ? 0 : 0x40), NULL, 0);
+    if (result < 0) { SetLastError(dos_error(result)); goto failed; }
+    return cm_windows_input_finish(p, directory);
+failed: {
+    DWORD error = GetLastError();
+    cm_windows_pin_free(p);
+    SetLastError(error);
+    return NULL;
+}}

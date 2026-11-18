@@ -58,6 +58,7 @@
     "crates/cm-abi/include/cm_mod_v1.h": "codex-rs/cm-abi/include/cm_mod_v1.h",
     "crates/cm/Cargo.toml": "codex-rs/cm/Cargo.toml",
     "crates/cm/src/loader/mod.rs": "codex-rs/cm/src/loader/mod.rs",
+    "crates/cm/src/loader/input.rs": "codex-rs/cm/src/loader/input.rs",
     "crates/cm/src/loader/elf.rs": "codex-rs/cm/src/loader/elf.rs",
     "crates/cm/src/loader/native.rs": "codex-rs/cm/src/loader/native.rs",
     "crates/cm/src/lib.rs": "codex-rs/cm/src/lib.rs",
@@ -120,6 +121,7 @@
       "crates/cm/native/windows-loader.c": "codex-rs/cm/native/windows-loader.c",
       "crates/cm/native/windows-loader.h": "codex-rs/cm/native/windows-loader.h",
       "crates/cm/src/loader/windows.rs": "codex-rs/cm/src/loader/windows.rs",
+      "crates/cm/src/loader/input/windows.rs": "codex-rs/cm/src/loader/input/windows.rs",
       "crates/cm/src/loader/pe.rs": "codex-rs/cm/src/loader/pe.rs",
       "adapters/codex-e4568a3/native-protoc-build.rs": "codex-rs/code-mode-protocol/build.rs"
     }

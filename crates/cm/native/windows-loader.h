@@ -16,6 +16,13 @@ typedef struct {
     wchar_t path[4096], temporary_directory[4096];
 } CmWindowsPin;
 
+typedef struct {
+    ULONGLONG volume;
+    BYTE id[16];
+    LONGLONG size, modified, changed;
+    DWORD links, attributes;
+} CmWindowsFileInformation;
+
 int cm_windows_pin(CmWindowsPin *pin, const wchar_t *path);
 void cm_windows_unpin(CmWindowsPin *pin);
 int cm_windows_sha256(HANDLE file, const wchar_t *expected);
@@ -27,4 +34,7 @@ void cm_windows_pin_free(CmWindowsPin *pin);
 HANDLE cm_windows_pin_duplicate(const CmWindowsPin *pin);
 const wchar_t *cm_windows_pin_path(const CmWindowsPin *pin);
 HMODULE cm_windows_pin_load(const CmWindowsPin *pin, const wchar_t *dependencies);
+CmWindowsPin *cm_windows_directory_open(const wchar_t *path);
+CmWindowsPin *cm_windows_child_open(const CmWindowsPin *parent, const wchar_t *name, int directory);
+int cm_windows_file_information(const CmWindowsPin *pin, CmWindowsFileInformation *information);
 #endif

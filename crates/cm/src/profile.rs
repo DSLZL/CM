@@ -386,7 +386,7 @@ fn acquire_writer(file: &File) -> Result<(), String> {
 }
 
 pub(crate) struct Directory {
-    pub file: File,
+    pub file: loader::Handle,
     pub path: PathBuf,
 }
 

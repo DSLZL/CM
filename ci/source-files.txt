@@ -294,3 +294,5 @@ crates/cm/build.rs
 crates/cm/native/windows-loader.c
 crates/cm/native/windows-loader.h
 crates/cm/src/loader/windows.rs
+crates/cm/src/loader/input.rs
+crates/cm/src/loader/input/windows.rs

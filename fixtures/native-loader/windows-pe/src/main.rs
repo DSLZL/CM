@@ -1,3 +1,5 @@
+#[path = "../../../../crates/cm/src/loader/input.rs"]
+mod input;
 #[path = "../../../../crates/cm/src/loader/pe.rs"]
 mod pe;
 #[path = "../../../../crates/cm/src/loader/windows.rs"]
@@ -23,8 +25,132 @@ const MACHINE: u16 = 0x8664;
 )))]
 compile_error!("This fixture requires native 64-bit Windows");
 
+fn input_controls(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
+    use std::ffi::OsStr;
+    use std::fs;
+
+    fn passed(name: &str) {
+        println!("cm_input passed={name}");
+    }
+    let path = root.join("value");
+    fs::write(&path, b"hello")?;
+    let (bytes, pin) = input::read_input(&path, 5)?;
+    assert_eq!(bytes, b"hello");
+    assert_eq!(pin.size, 5);
+    assert_eq!(pin.sha256, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+    passed("bounded-read");
+    let empty = root.join("empty");
+    fs::write(&empty, b"")?;
+    let (bytes, empty_pin) = input::read_input(&empty, 0)?;
+    assert!(bytes.is_empty());
+    assert_eq!(empty_pin.size, 0);
+    assert_eq!(empty_pin.sha256, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    empty_pin.revalidate()?;
+    passed("empty-read");
+    assert!(input::read_input(&path, 4).is_err());
+    assert!(input::read_input(&path, u64::MAX).is_err());
+    assert!(input::read_input(root, 32).is_err());
+    passed("read-bounds");
+    pin.revalidate()?;
+    pin.clone().revalidate()?;
+    passed("unchanged-pin");
+    fs::write(&path, b"other")?;
+    assert!(pin.revalidate().is_err());
+    passed("changed-bytes");
+    fs::write(&path, b"hello")?;
+    let (_, pin) = input::read_input(&path, 5)?;
+    let parent = input::open_directory(root)?;
+    let file = input::open_at(&parent, OsStr::new("value"), false)?;
+    let old_identity = input::identity(&file)?;
+    assert_eq!(std::mem::size_of_val(&old_identity), 24);
+    drop(file);
+    drop(parent);
+    fs::rename(&path, root.join("old"))?;
+    fs::write(&path, b"hello")?;
+    assert!(pin.revalidate().is_err());
+    let parent = input::open_directory(root)?;
+    let file = input::open_at(&parent, OsStr::new("value"), false)?;
+    assert_ne!(old_identity, input::identity(&file)?);
+    drop(file);
+    passed("same-bytes-replacement");
+    for name in [".", "..", "value:stream", "old/value", "old\\value", "value.", "value "] {
+        assert!(input::open_at(&parent, OsStr::new(name), false).is_err());
+    }
+    assert!(input::open_directory(Path::new("relative")).is_err());
+    assert!(input::open_directory(&root.join("..")).is_err());
+    passed("invalid-paths");
+    let writer = fs::OpenOptions::new().write(true).open(&path)?;
+    assert!(input::open_at(&parent, OsStr::new("value"), false).is_err());
+    drop(writer);
+    passed("preheld-writer");
+    unsafe extern "system" {
+        fn CreateFileMappingW(file: *mut std::ffi::c_void, security: *const std::ffi::c_void,
+            protection: u32, high: u32, low: u32, name: *const u16) -> *mut std::ffi::c_void;
+        fn MapViewOfFile(mapping: *mut std::ffi::c_void, access: u32, high: u32, low: u32,
+            size: usize) -> *mut std::ffi::c_void;
+        fn UnmapViewOfFile(view: *const std::ffi::c_void) -> i32;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+    }
+    use std::os::windows::io::AsRawHandle;
+    let writer = fs::OpenOptions::new().read(true).write(true).open(&path)?;
+    let mapping = unsafe { CreateFileMappingW(writer.as_raw_handle(), std::ptr::null(), 4, 0, 0, std::ptr::null()) };
+    assert!(!mapping.is_null());
+    let view = unsafe { MapViewOfFile(mapping, 2, 0, 0, 5) };
+    assert!(!view.is_null());
+    drop(writer);
+    unsafe { std::ptr::copy_nonoverlapping(b"hello".as_ptr(), view.cast::<u8>(), 5) };
+    assert!(input::open_at(&parent, OsStr::new("value"), false).is_err());
+    assert_ne!(unsafe { UnmapViewOfFile(view) }, 0);
+    assert_ne!(unsafe { CloseHandle(mapping) }, 0);
+    input::read_input(&path, 5)?;
+    passed("preheld-mapping");
+    let file = input::open_at(&parent, OsStr::new("value"), false)?;
+    assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
+    assert!(fs::remove_file(&path).is_err());
+    assert!(fs::rename(&path, root.join("moved")).is_err());
+    drop(file);
+    passed("retained-file");
+    let branch = root.join("parent");
+    fs::create_dir(&branch)?;
+    fs::write(branch.join("child"), b"child")?;
+    let directory = input::open_directory(&branch)?;
+    let child = input::open_at(&directory, OsStr::new("child"), false)?;
+    let mut cloned = child.try_clone()?;
+    assert_eq!(child.path(), branch.join("child"));
+    drop(directory);
+    drop(child);
+    assert!(fs::rename(&branch, root.join("renamed")).is_err());
+    let mut bytes = Vec::new();
+    cloned.read_to_end(&mut bytes)?;
+    assert_eq!(bytes, b"child");
+    drop(cloned);
+    fs::rename(&branch, root.join("renamed"))?;
+    fs::rename(root.join("renamed"), &branch)?;
+    passed("retained-ancestors");
+    fs::hard_link(&path, root.join("hardlink"))?;
+    assert!(input::read_input(&path, 5).is_err());
+    assert!(input::read_input(&root.join("hardlink"), 5).is_err());
+    fs::remove_file(root.join("hardlink"))?;
+    passed("hardlinks");
+    let junction = root.join("junction");
+    assert!(Command::new("cmd.exe").args([OsStr::new("/D"), OsStr::new("/C"), OsStr::new("mklink"),
+        OsStr::new("/J"), junction.as_os_str(), branch.as_os_str()]).status()?.success());
+    assert!(input::open_at(&parent, OsStr::new("junction"), true).is_err());
+    assert!(input::open_directory(&junction).is_err());
+    assert!(input::read_input(&junction.join("child"), 5).is_err());
+    fs::remove_dir(&junction)?;
+    passed("reparse-points");
+    drop(parent);
+    assert_eq!(fs::read(&path)?, b"hello");
+    passed("post-close-usable");
+    Ok(0)
+}
+
 fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.len() == 2 && args[0] == "input" {
+        return input_controls(Path::new(&args[1]));
+    }
     if args.len() != 3 && args.len() != 7 {
         return Err("expected validate DLL ENTRY, or load DLL ENTRY PROBE HASH MODE POISON".into());
     }

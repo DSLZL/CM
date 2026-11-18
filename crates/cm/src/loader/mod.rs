@@ -27,6 +27,8 @@ use sha2::Sha256;
 
 #[cfg(not(windows))]
 mod elf;
+mod input;
+pub(crate) use input::{Handle, Identity, InputPin, hash, open_at, open_directory, read_input};
 #[cfg(windows)]
 mod pe;
 pub(crate) mod native;
@@ -206,10 +208,6 @@ pub(crate) struct Preflighted {
     pub resources: Vec<ResourceSnapshot>,
 }
 
-pub(crate) fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
-
 pub(crate) fn executable_hash(path: &Path) -> Result<String, String> {
     let mut file = File::open(path).map_err(|e| e.to_string())?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
@@ -247,38 +245,6 @@ pub(crate) fn executable_hash(path: &Path) -> Result<String, String> {
     Err("Host executable changed while hashing".into())
 }
 
-pub(crate) fn open_at(
-    parent: &File,
-    name: &std::ffi::OsStr,
-    directory: bool,
-) -> Result<File, String> {
-    let name = CString::new(name.as_bytes()).map_err(|e| e.to_string())?;
-    let flags = libc::O_RDONLY
-        | libc::O_CLOEXEC
-        | libc::O_NOFOLLOW
-        | if directory { libc::O_DIRECTORY } else { 0 };
-    let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    Ok(unsafe { File::from_raw_fd(fd) })
-}
-
-pub(crate) fn open_directory(path: &Path) -> Result<File, String> {
-    if !path.is_absolute() {
-        return Err("managed path must be absolute".into());
-    }
-    let mut directory = File::open("/").map_err(|e| e.to_string())?;
-    for part in path.components() {
-        match part {
-            Component::RootDir => {}
-            Component::Normal(name) => directory = open_at(&directory, name, true)?,
-            _ => return Err("managed path must have only normal components".into()),
-        }
-    }
-    Ok(directory)
-}
-
 fn file_stamp(metadata: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
     (
         metadata.dev(),
@@ -291,81 +257,10 @@ fn file_stamp(metadata: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
     )
 }
 
-#[derive(Clone)]
-pub(crate) struct InputPin {
-    path: PathBuf,
-    pub sha256: String,
-    pub size: u64,
-    limit: u64,
-    device: u64,
-    inode: u64,
-}
-
-impl InputPin {
-    pub(crate) fn revalidate(&self) -> Result<(), String> {
-        let (_, current) = read_input(&self.path, self.limit).map_err(|error| {
-            format!(
-                "locked input {} expected size={} sha256={}: {error}",
-                self.path.display(),
-                self.size,
-                self.sha256
-            )
-        })?;
-        if self.sha256 != current.sha256
-            || self.size != current.size
-            || self.device != current.device
-            || self.inode != current.inode
-        {
-            return Err(format!(
-                "locked input changed: {} expected size={} sha256={} actual size={} sha256={}",
-                self.path.display(),
-                self.size,
-                self.sha256,
-                current.size,
-                current.sha256
-            ));
-        }
-        Ok(())
-    }
-}
-
-pub(crate) fn read_input(path: &Path, limit: u64) -> Result<(Vec<u8>, InputPin), String> {
-    let parent = open_directory(path.parent().ok_or("missing input parent")?)?;
-    let mut file = open_at(
-        &parent,
-        path.file_name().ok_or("missing input name")?,
-        false,
-    )?;
-    let before = file.metadata().map_err(|e| e.to_string())?;
-    if !before.is_file() || before.nlink() != 1 || before.len() > limit {
-        return Err("expected a bounded regular file with one link".into());
-    }
-    let mut bytes = Vec::new();
-    (&mut file)
-        .take(limit + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > limit
-        || bytes.len() as u64 != before.len()
-        || file_stamp(&before) != file_stamp(&file.metadata().map_err(|e| e.to_string())?)
-    {
-        return Err("input changed while reading or exceeded its bound".into());
-    }
-    let pin = InputPin {
-        path: path.into(),
-        sha256: hash(&bytes),
-        size: bytes.len() as u64,
-        limit,
-        device: before.dev(),
-        inode: before.ino(),
-    };
-    Ok((bytes, pin))
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Inventory {
-    pub packages: BTreeMap<String, (u64, u64)>,
-    root: Option<(u64, u64)>,
+    pub packages: BTreeMap<String, Identity>,
+    root: Option<Identity>,
 }
 
 pub(crate) fn inventory(home: &Path) -> Result<Inventory, String> {
@@ -384,9 +279,8 @@ pub(crate) fn inventory(home: &Path) -> Result<Inventory, String> {
         Ok(_) => {}
     }
     let directory = open_directory(&root)?;
-    let metadata = directory.metadata().map_err(|e| e.to_string())?;
     let mut packages = BTreeMap::new();
-    for entry in fs::read_dir(file_path(&directory)).map_err(|e| e.to_string())? {
+    for entry in fs::read_dir(directory_path(&directory)).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry
             .file_name()
@@ -400,15 +294,15 @@ pub(crate) fn inventory(home: &Path) -> Result<Inventory, String> {
             std::ffi::OsStr::new(&name),
             !name.ends_with(".cmod"),
         )?;
-        let metadata = package.metadata().map_err(|e| e.to_string())?;
-        if name.ends_with(".cmod") && (!metadata.is_file() || metadata.nlink() != 1) {
+        let metadata = input::information(&package)?;
+        if name.ends_with(".cmod") && (!metadata.regular || metadata.links != 1) {
             return Err(".cmod must be a regular file with one link".into());
         }
-        packages.insert(name, (metadata.dev(), metadata.ino()));
+        packages.insert(name, input::identity(&package)?);
     }
     Ok(Inventory {
         packages,
-        root: Some((metadata.dev(), metadata.ino())),
+        root: Some(input::identity(&directory)?),
     })
 }
 
@@ -732,7 +626,7 @@ impl Candidate {
 }
 
 fn walk(
-    directory: &File,
+    directory: &Handle,
     prefix: &str,
     depth: usize,
     entries: &mut BTreeSet<String>,
@@ -740,7 +634,7 @@ fn walk(
     if depth > 16 {
         return Err("package: directory depth limit".into());
     }
-    for item in fs::read_dir(file_path(directory)).map_err(|e| e.to_string())? {
+    for item in fs::read_dir(directory_path(directory)).map_err(|e| e.to_string())? {
         let item = item.map_err(|e| e.to_string())?;
         let name = item
             .file_name()
@@ -1085,6 +979,13 @@ pub(crate) fn sealed_named_snapshot(bytes: &[u8], name: &std::ffi::CStr) -> Resu
 
 fn file_path(snapshot: &File) -> PathBuf {
     format!("/proc/self/fd/{}", snapshot.as_raw_fd()).into()
+}
+
+fn directory_path(directory: &Handle) -> PathBuf {
+    #[cfg(windows)]
+    return directory.path().to_path_buf();
+    #[cfg(not(windows))]
+    file_path(directory)
 }
 
 pub(crate) fn snapshot_path(snapshot: &Snapshot) -> PathBuf {

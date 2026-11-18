@@ -25,17 +25,30 @@ INPUTS = (
     "ci/scripts/windows_pe_preflight.py",
     "crates/cm/src/loader/windows.rs", "crates/cm/native/windows-loader.c", "crates/cm/native/windows-loader.h",
     "crates/cm/build.rs", "crates/cm/Cargo.toml",
+    "crates/cm/src/loader/input.rs", "crates/cm/src/loader/input/windows.rs",
 )
 LOCKED = {
+    "block-buffer": ("0.10.4", "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"),
     "cc": ("1.2.55", "47b26a0954ae34af09b50f0de26458fa95369a0d478d8236d3f93082b219bd29"),
     "cfg-if": ("1.0.4", "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"),
+    "cpufeatures": ("0.2.17", "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"),
+    "crypto-common": ("0.1.7", "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"),
+    "digest": ("0.10.7", "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"),
     "find-msvc-tools": ("0.1.9", "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"),
+    "generic-array": ("0.14.7", "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"),
+    "libc": ("0.2.186", "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"),
     "libloading": ("0.8.9", "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"),
     "object": ("0.37.3", "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"),
     "memchr": ("2.8.1", "6b947ae49db0d222b1dbc6b113ce7248a3fc3a6ca21b696717bfc000ba4484d8"),
     "shlex": ("1.3.0", "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"),
+    "sha2": ("0.10.9", "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"),
+    "typenum": ("1.20.0", "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"),
+    "version_check": ("0.9.5", "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"),
     "windows-link": ("0.2.1", "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"),
 }
+INPUT_CHECKS = ["bounded-read", "empty-read", "read-bounds", "unchanged-pin", "changed-bytes",
+    "same-bytes-replacement", "invalid-paths", "preheld-writer", "preheld-mapping",
+    "retained-file", "retained-ancestors", "hardlinks", "reparse-points", "post-close-usable"]
 
 
 def inventory(metadata):
@@ -259,7 +272,7 @@ def main():
             if "host: " + TARGET not in version.splitlines():
                 raise RuntimeError("PE fixture Rust compiler is not native ARM64")
             formatted = {"parser": INPUTS[0], "main": INPUTS[5], "payload": INPUTS[6],
-                "snapshot": INPUTS[8], "product-build": INPUTS[11]}
+                "snapshot": INPUTS[8], "product-build": INPUTS[11], "input": INPUTS[13], "input-windows": INPUTS[14]}
             for name, relative in formatted.items():
                 run("pe-format-" + name, [tools["rustfmt"]["path"], "--edition", "2024", "--emit", "stdout", root / relative])
             run("pe-format-check", [tools["rustfmt"]["path"], "--edition", "2024", "--check",
@@ -302,6 +315,8 @@ def main():
             run("pe-clippy", [*cargo, "clippy", "--locked", "--target", TARGET, "--all-targets", "-j", "2",
                 "--", "-D", "warnings"], 300, cwd=fixture)
             run("pe-build", [*cargo, "build", "--locked", "--target", TARGET, "--bins", "--lib", "-j", "2"], 300, cwd=fixture)
+            run("pe-input-identity-test", [*cargo, "test", "--locked", "--target", TARGET, "--bin", "cm-pe",
+                "input::tests::revalidation_compares_the_complete_file_identity", "--", "--exact", "--nocapture"], 120, cwd=fixture)
             validator = temp / "t" / TARGET / "debug/cm-pe.exe"
             rust_payload = temp / "t" / TARGET / "debug/cm_pe_rust_payload.dll"
             run("pe-rust-dependencies", [tools["dumpbin"]["path"], "/nologo", "/dependents", rust_payload])
@@ -330,6 +345,14 @@ def main():
             report["binaries"] = {name: pe_fixture(path.read_bytes(), dll, expected_machine=0xAA64) for name, path, dll in (
                 ("validator", validator, False), ("control", probe, False), ("rust", rust_payload, True),
                 *((name, path, True) for name, path in payloads.items()))}
+            input_root = temp / "input-controls"
+            input_root.mkdir()
+            _, text = run("pe-case-inputs", [validator, "input", input_root])
+            checks = re.findall(r"^cm_input passed=([a-z-]+)$", text, re.M)
+            if checks != INPUT_CHECKS:
+                raise RuntimeError("Actual input module controls differ")
+            report["input_controls"] = {"status": "pass", "checks": checks, "identity_bytes": 24,
+                "full_file_id_mutation_test": "pass", "actual_product_module": INPUTS[13]}
 
             def observe(label, data, *, abi="cm_mod_entry_v1", expected_code=0, mode="guarded",
                     expected_value=41, constructor=True, poison_marker=False, location=None):
@@ -438,7 +461,7 @@ def self_check():
     root = Path(__file__).resolve().parents[2]
     import host
     production = {row["path"] for row in host.product_manifest(root)}
-    shared = {"crates/cm/Cargo.toml"}
+    shared = {"crates/cm/Cargo.toml", "crates/cm/src/loader/input.rs"}
     assert not ((set(INPUTS) - shared) & production), "Windows-only loader/fixture must stay outside Linux H"
     assert shared <= production, "Shared crate build inputs must change the Linux H identity"
     import retry
@@ -454,8 +477,9 @@ def self_check():
                 baseline = retry.product_inputs(root, "HEAD")
                 with patch.object(retry, "git", return_value=rows + additions):
                     assert retry.product_inputs(root, "HEAD") == baseline
-                with patch.object(retry, "git", return_value=rows + additions + b"100644 blob cccc\tcrates/cm/Cargo.toml\x00"):
-                    assert retry.product_inputs(root, "HEAD") != baseline
+                for name in shared:
+                    with patch.object(retry, "git", return_value=rows + additions + b"100644 blob cccc\t" + name.encode() + b"\x00"):
+                        assert retry.product_inputs(root, "HEAD") != baseline
     record = "cm_pe dependencies=kernel32.dll,version.dll imports=2 ordinals=1 entry=4096"
     assert audit_record(record)["ordinal_imports"] == 1
     for text in (record + "\n" + record, record.replace("ordinals=1", "ordinals=3"),
