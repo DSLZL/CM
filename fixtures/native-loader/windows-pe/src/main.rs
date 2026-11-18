@@ -698,7 +698,7 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
         );
     })?;
     private.remove(OsStr::new("remove-mapped"), expected, false)?;
-    let descendant = directory::Directory::open(&private.path.join("discard-tree/nested"))?;
+    let descendant = directory::Directory::open(&private.path.join("discard-tree").join("nested"))?;
     assert!(
         private
             .remove(OsStr::new("discard-tree"), stage_identity, true)
