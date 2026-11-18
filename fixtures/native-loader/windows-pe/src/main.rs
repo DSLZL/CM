@@ -1,3 +1,5 @@
+#[path = "../../../../crates/cm/src/profile/directory.rs"]
+mod directory;
 #[path = "../../../../crates/cm/src/loader/input.rs"]
 mod input;
 #[path = "../../../../crates/cm/src/loader/pe.rs"]
@@ -5,6 +7,7 @@ mod pe;
 #[path = "../../../../crates/cm/src/loader/windows.rs"]
 mod windows;
 
+use input as loader;
 use std::io::Read;
 use std::path::Path;
 use std::process::Command;
@@ -24,6 +27,62 @@ const MACHINE: u16 = 0x8664;
     any(target_arch = "aarch64", target_arch = "x86_64")
 )))]
 compile_error!("This fixture requires native 64-bit Windows");
+
+fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error::Error>> {
+    use std::ffi::OsStr;
+
+    if !root.is_absolute() || !probe.is_absolute() {
+        return Err("private controls require absolute owned paths".into());
+    }
+    let parent = input::open_directory(root)?;
+    let control = |mode: &str| -> Result<(), Box<dyn std::error::Error>> {
+        let output = Command::new(probe)
+            .args([OsStr::new(mode), root.as_os_str()])
+            .output()?;
+        if !output.status.success() || !output.stdout.is_empty() || !output.stderr.is_empty() {
+            return Err(format!("private native setup failed: {output:?}").into());
+        }
+        Ok(())
+    };
+    control("private-setup")?;
+    println!("cm_private passed=descriptor-owner-mismatch");
+    for (name, is_directory, expected, check) in [
+        ("private-dir", true, true, "owner-directory"),
+        ("private-file", false, true, "owner-file"),
+        ("read-only-file", false, true, "owner-read-only"),
+        ("everyone-file", false, false, "foreign-file-ace"),
+        ("everyone-dir", true, false, "foreign-directory-ace"),
+        ("null-dacl", false, false, "null-dacl"),
+        ("empty-dacl", false, false, "empty-dacl"),
+        ("unprotected-file", false, false, "unprotected-dacl"),
+        ("denied-ace", false, false, "unsupported-ace"),
+        ("inherited-ace", false, false, "inherited-ace"),
+    ] {
+        let result = if is_directory {
+            directory::Directory::open(&root.join(name)).and_then(|value| value.check())
+        } else {
+            input::open_at(&parent, OsStr::new(name), false).and_then(|file| file.check_private())
+        };
+        assert_eq!(result.is_ok(), expected, "{name}: {result:?}");
+        println!("cm_private passed={check}");
+    }
+    let private = directory::Directory::open(&root.join("private-dir"))?;
+    let clone = private.file.try_clone()?;
+    let identity = private.file.identity()?;
+    assert_eq!(identity, clone.identity()?);
+    control("private-change")?;
+    assert_eq!(identity, private.file.identity()?);
+    assert!(private.check().is_err());
+    assert!(clone.check_private().is_err());
+    assert!(directory::Directory::open(&private.path).is_err());
+    println!("cm_private passed=held-dacl-drift");
+    control("private-restore")?;
+    private.check()?;
+    clone.check_private()?;
+    directory::Directory::open(&private.path)?.check()?;
+    println!("cm_private passed=restored-dacl");
+    Ok(0)
+}
 
 fn input_controls(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     use std::ffi::OsStr;
@@ -206,6 +265,9 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() == 2 && args[0] == "input" {
         return input_controls(Path::new(&args[1]));
+    }
+    if args.len() == 3 && args[0] == "private" {
+        return private_controls(Path::new(&args[1]), Path::new(&args[2]));
     }
     if args.len() != 3 && args.len() != 7 {
         return Err("expected validate DLL ENTRY, or load DLL ENTRY PROBE HASH MODE POISON".into());

@@ -26,6 +26,7 @@ INPUTS = (
     "crates/cm/src/loader/windows.rs", "crates/cm/native/windows-loader.c", "crates/cm/native/windows-loader.h",
     "crates/cm/build.rs", "crates/cm/Cargo.toml",
     "crates/cm/src/loader/input.rs", "crates/cm/src/loader/input/windows.rs",
+    "crates/cm/src/profile/directory.rs",
 )
 LOCKED = {
     "block-buffer": ("0.10.4", "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"),
@@ -49,6 +50,16 @@ LOCKED = {
 INPUT_CHECKS = ["bounded-read", "empty-read", "read-bounds", "unchanged-pin", "changed-bytes",
     "same-bytes-replacement", "invalid-paths", "preheld-writer", "preheld-mapping",
     "retained-file", "retained-ancestors", "hardlinks", "reparse-points", "post-close-usable"]
+PRIVATE_CHECKS = ["descriptor-owner-mismatch", "owner-directory", "owner-file", "owner-read-only",
+    "foreign-file-ace", "foreign-directory-ace", "null-dacl", "empty-dacl", "unprotected-dacl",
+    "unsupported-ace", "inherited-ace", "held-dacl-drift", "restored-dacl"]
+
+
+def private_record(text):
+    if text.splitlines() != ["cm_private passed=" + name for name in PRIVATE_CHECKS]:
+        raise RuntimeError("Actual private owner/DACL controls differ")
+    return {"status": "pass", "checks": PRIVATE_CHECKS, "actual_directory_module": INPUTS[15],
+        "actual_handle_module": INPUTS[14], "foreign_owner_control": "descriptor-only", "foreign_owned_file": "not_run"}
 
 
 def inventory(metadata):
@@ -272,7 +283,8 @@ def main():
             if "host: " + TARGET not in version.splitlines():
                 raise RuntimeError("PE fixture Rust compiler is not native ARM64")
             formatted = {"parser": INPUTS[0], "main": INPUTS[5], "payload": INPUTS[6],
-                "snapshot": INPUTS[8], "product-build": INPUTS[11], "input": INPUTS[13], "input-windows": INPUTS[14]}
+                "snapshot": INPUTS[8], "product-build": INPUTS[11], "input": INPUTS[13], "input-windows": INPUTS[14],
+                "directory": INPUTS[15]}
             for name, relative in formatted.items():
                 run("pe-format-" + name, [tools["rustfmt"]["path"], "--edition", "2024", "--emit", "stdout", root / relative])
             run("pe-format-check", [tools["rustfmt"]["path"], "--edition", "2024", "--check",
@@ -353,6 +365,10 @@ def main():
                 raise RuntimeError("Actual input module controls differ")
             report["input_controls"] = {"status": "pass", "checks": checks, "identity_bytes": 24,
                 "full_file_id_mutation_test": "pass", "actual_product_module": INPUTS[13]}
+            private_root = temp / "private-controls"
+            private_root.mkdir()
+            _, text = run("pe-case-private", [validator, "private", private_root, probe])
+            report["private_controls"] = private_record(text)
 
             def observe(label, data, *, abi="cm_mod_entry_v1", expected_code=0, mode="guarded",
                     expected_value=41, constructor=True, poison_marker=False, location=None):
@@ -461,7 +477,7 @@ def self_check():
     root = Path(__file__).resolve().parents[2]
     import host
     production = {row["path"] for row in host.product_manifest(root)}
-    shared = {"crates/cm/Cargo.toml", "crates/cm/src/loader/input.rs"}
+    shared = {"crates/cm/Cargo.toml", "crates/cm/src/loader/input.rs", "crates/cm/src/profile/directory.rs"}
     assert not ((set(INPUTS) - shared) & production), "Windows-only loader/fixture must stay outside Linux H"
     assert shared <= production, "Shared crate build inputs must change the Linux H identity"
     import retry
@@ -480,6 +496,16 @@ def self_check():
                 for name in shared:
                     with patch.object(retry, "git", return_value=rows + additions + b"100644 blob cccc\t" + name.encode() + b"\x00"):
                         assert retry.product_inputs(root, "HEAD") != baseline
+    private_text = "\n".join("cm_private passed=" + name for name in PRIVATE_CHECKS)
+    assert private_record(private_text)["checks"] == PRIVATE_CHECKS
+    for text in (private_text + "\n" + private_text, private_text.replace("owner-file", "unknown"),
+            private_text.split("\n", 1)[1], private_text + "\nnoise"):
+        try:
+            private_record(text)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Incomplete or unrelated private-control evidence accepted")
     record = "cm_pe dependencies=kernel32.dll,version.dll imports=2 ordinals=1 entry=4096"
     assert audit_record(record)["ordinal_imports"] == 1
     for text in (record + "\n" + record, record.replace("ordinals=1", "ordinals=3"),

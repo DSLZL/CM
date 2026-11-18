@@ -6,6 +6,8 @@
 #include <wchar.h>
 #include <winternl.h>
 
+#pragma comment(lib, "advapi32.lib")
+
 int cm_windows_pin(CmWindowsPin *p, const wchar_t *name) {
     ZeroMemory(p, sizeof(*p));
     p->file = INVALID_HANDLE_VALUE;
@@ -337,4 +339,85 @@ failed: {
     cm_windows_pin_free(p);
     SetLastError(error);
     return NULL;
+}}
+
+static TOKEN_USER *cm_windows_user(void) {
+    HANDLE token = NULL;
+    DWORD length = 0;
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token)
+        && (GetLastError() != ERROR_NO_TOKEN || !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)))
+        return NULL;
+    if (GetTokenInformation(token, TokenUser, NULL, 0, &length)
+        || GetLastError() != ERROR_INSUFFICIENT_BUFFER || length < sizeof(TOKEN_USER) || length > 65536) {
+        CloseHandle(token); SetLastError(ERROR_INVALID_DATA); return NULL;
+    }
+    TOKEN_USER *user = (TOKEN_USER *)malloc(length);
+    if (!user) { CloseHandle(token); SetLastError(ERROR_NOT_ENOUGH_MEMORY); return NULL; }
+    int ok = GetTokenInformation(token, TokenUser, user, length, &length);
+    if (ok && !IsValidSid(user->User.Sid)) { SetLastError(ERROR_INVALID_SID); ok = 0; }
+    DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(token);
+    if (!ok) { free(user); user = NULL; }
+    SetLastError(error);
+    return user;
+}
+
+static int cm_windows_private_descriptor(PSECURITY_DESCRIPTOR descriptor, PSID user) {
+    /* Managed objects must not inherit grants from a public parent. */
+    PSID owner = NULL;
+    PACL dacl = NULL;
+    BOOL present, defaulted;
+    SECURITY_DESCRIPTOR_CONTROL control;
+    DWORD revision;
+    if (!IsValidSecurityDescriptor(descriptor)
+        || !GetSecurityDescriptorOwner(descriptor, &owner, &defaulted) || !owner || !IsValidSid(owner)
+        || !EqualSid(owner, user)
+        || !GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted) || !present || !dacl
+        || !IsValidAcl(dacl) || !dacl->AceCount
+        || !GetSecurityDescriptorControl(descriptor, &control, &revision) || !(control & SE_DACL_PROTECTED))
+        goto rejected;
+    for (DWORD index = 0; index < dacl->AceCount; ++index) {
+        ACCESS_ALLOWED_ACE *ace = NULL;
+        if (!GetAce(dacl, index, (void **)&ace) || ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE
+            || (ace->Header.AceFlags & ~(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | NO_PROPAGATE_INHERIT_ACE))
+            || ace->Header.AceSize < offsetof(ACCESS_ALLOWED_ACE, SidStart) + 8)
+            goto rejected;
+        SID *sid = (SID *)&ace->SidStart;
+        if (sid->SubAuthorityCount > SID_MAX_SUB_AUTHORITIES
+            || GetSidLengthRequired(sid->SubAuthorityCount) > ace->Header.AceSize - offsetof(ACCESS_ALLOWED_ACE, SidStart)
+            || !IsValidSid(sid) || !EqualSid(sid, user))
+            goto rejected;
+    }
+    return 1;
+rejected:
+    SetLastError(ERROR_ACCESS_DENIED);
+    return 0;
+}
+
+int cm_windows_private_check(const CmWindowsPin *p) {
+    CmWindowsFileInformation info;
+    if (!cm_windows_file_information(p, &info)) return 0;
+    if (!(info.attributes & FILE_ATTRIBUTE_DIRECTORY) && info.links != 1) {
+        SetLastError(ERROR_INVALID_DATA); return 0;
+    }
+    TOKEN_USER *user = cm_windows_user();
+    if (!user) return 0;
+    DWORD length = 0;
+    PSECURITY_DESCRIPTOR descriptor = NULL;
+    int ok = 0;
+    const SECURITY_INFORMATION requested = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    if (GetKernelObjectSecurity(p->file, requested, NULL, 0, &length)
+        || GetLastError() != ERROR_INSUFFICIENT_BUFFER || length < SECURITY_DESCRIPTOR_MIN_LENGTH || length > 65536) {
+        SetLastError(ERROR_INVALID_DATA); goto done;
+    }
+    descriptor = (PSECURITY_DESCRIPTOR)malloc(length);
+    if (!descriptor) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); goto done; }
+    if (!GetKernelObjectSecurity(p->file, requested, descriptor, length, &length)) goto done;
+    ok = cm_windows_private_descriptor(descriptor, user->User.Sid);
+done: {
+    DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+    free(descriptor);
+    free(user);
+    SetLastError(error);
+    return ok;
 }}

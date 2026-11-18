@@ -290,6 +290,7 @@ fixtures/native-loader/windows-pe/Cargo.toml
 fixtures/native-loader/windows-pe/Cargo.lock
 fixtures/native-loader/windows-pe/src/payload.rs
 fixtures/native-loader/windows-pe/src/main.rs
+crates/cm/src/profile/directory.rs
 crates/cm/build.rs
 crates/cm/native/windows-loader.c
 crates/cm/native/windows-loader.h

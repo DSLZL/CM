@@ -59,6 +59,7 @@
     "crates/cm/Cargo.toml": "codex-rs/cm/Cargo.toml",
     "crates/cm/src/loader/mod.rs": "codex-rs/cm/src/loader/mod.rs",
     "crates/cm/src/loader/input.rs": "codex-rs/cm/src/loader/input.rs",
+    "crates/cm/src/profile/directory.rs": "codex-rs/cm/src/profile/directory.rs",
     "crates/cm/src/loader/elf.rs": "codex-rs/cm/src/loader/elf.rs",
     "crates/cm/src/loader/native.rs": "codex-rs/cm/src/loader/native.rs",
     "crates/cm/src/lib.rs": "codex-rs/cm/src/lib.rs",

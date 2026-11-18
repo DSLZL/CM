@@ -37,4 +37,5 @@ HMODULE cm_windows_pin_load(const CmWindowsPin *pin, const wchar_t *dependencies
 CmWindowsPin *cm_windows_directory_open(const wchar_t *path);
 CmWindowsPin *cm_windows_child_open(const CmWindowsPin *parent, const wchar_t *name, int directory);
 int cm_windows_file_information(const CmWindowsPin *pin, CmWindowsFileInformation *information);
+int cm_windows_private_check(const CmWindowsPin *pin);
 #endif

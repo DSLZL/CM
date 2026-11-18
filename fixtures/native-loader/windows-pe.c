@@ -45,6 +45,108 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
 #define system_module cm_windows_system_module
 #define system_dependencies cm_windows_system_dependencies
 
+#include <aclapi.h>
+#include <sddl.h>
+
+static PSECURITY_DESCRIPTOR private_descriptor(const wchar_t *user, const wchar_t *permissions) {
+    wchar_t dacl[1536], text[2048];
+    PSECURITY_DESCRIPTOR descriptor = NULL;
+    const wchar_t *marker = wcsstr(permissions, L"%ls");
+    if (marker) {
+        if (swprintf_s(dacl, 1536, L"%.*ls%ls%ls", (int)(marker - permissions), permissions, user, marker + 3) < 0)
+            return NULL;
+    } else if (wcscpy_s(dacl, 1536, permissions)) return NULL;
+    if (swprintf_s(text, 2048, L"O:%ls%ls", user, dacl) < 0
+        || !ConvertStringSecurityDescriptorToSecurityDescriptorW(text, SDDL_REVISION_1, &descriptor, NULL))
+        return NULL;
+    return descriptor;
+}
+
+static int private_fixture(const wchar_t *root, int change) {
+    TOKEN_USER *user = cm_windows_user();
+    wchar_t *sid = NULL;
+    PSECURITY_DESCRIPTOR descriptor = NULL;
+    CmWindowsPin *parent = cm_windows_directory_open(root);
+    const wchar_t *target = L"initial";
+    int ok = 0;
+    if (!parent || !user || !ConvertSidToStringSidW(user->User.Sid, &sid)) goto done;
+    if (change) {
+        target = L"private-dir";
+        CmWindowsPin *child = cm_windows_child_open(parent, L"private-dir", 1);
+        wchar_t path[4096];
+        if (!child) goto done;
+        wcscpy_s(path, 4096, child->path);
+        descriptor = private_descriptor(sid, change == 1 ? L"D:P(A;;FA;;;WD)" : L"D:P(A;;FA;;;%ls)");
+        HANDLE writer = CreateFileW(path, WRITE_DAC | READ_CONTROL | FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+        PACL dacl = NULL;
+        BOOL present, defaulted;
+        FILE_ID_INFO id, expected;
+        ok = descriptor && writer != INVALID_HANDLE_VALUE
+            && GetFileInformationByHandleEx(child->file, FileIdInfo, &expected, sizeof(expected))
+            && GetFileInformationByHandleEx(writer, FileIdInfo, &id, sizeof(id))
+            && !memcmp(&id, &expected, sizeof(id))
+            && GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted) && present && dacl;
+        if (ok) {
+            DWORD result = SetSecurityInfo(writer, SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, NULL, NULL, dacl, NULL);
+            ok = result == ERROR_SUCCESS;
+            if (!ok) SetLastError(result);
+        }
+        if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
+        cm_windows_pin_free(child);
+        goto done;
+    }
+    const struct {
+        const wchar_t *name, *dacl;
+        int directory, private;
+    } cases[] = {
+        {L"private-dir", L"D:P(A;;FA;;;%ls)", 1, 1},
+        {L"private-file", L"D:P(A;;FA;;;%ls)", 0, 1},
+        {L"read-only-file", L"D:P(A;;FR;;;%ls)", 0, 1},
+        {L"everyone-file", L"D:P(A;;FA;;;%ls)(A;;FR;;;WD)", 0, 0},
+        {L"everyone-dir", L"D:P(A;;FA;;;%ls)(A;;FR;;;WD)", 1, 0},
+        {L"null-dacl", L"D:NO_ACCESS_CONTROL", 0, 0},
+        {L"empty-dacl", L"D:P", 0, 0},
+        {L"unprotected-file", L"D:(A;;FA;;;%ls)", 0, 0},
+        {L"denied-ace", L"D:P(D;;0x2;;;WD)(A;;FA;;;%ls)", 0, 0},
+        {L"inherited-ace", L"D:P(A;ID;FA;;;%ls)", 0, 0},
+    };
+    for (size_t index = 0; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        target = cases[index].name;
+        wchar_t path[4096];
+        descriptor = private_descriptor(sid, cases[index].dacl);
+        if (!descriptor || cm_windows_private_descriptor(descriptor, user->User.Sid) != cases[index].private
+            || swprintf_s(path, 4096, L"%ls\\%ls", root, cases[index].name) < 0)
+            goto done;
+        SECURITY_ATTRIBUTES security = {sizeof(security), descriptor, FALSE};
+        if (cases[index].directory) {
+            if (!CreateDirectoryW(path, &security)) goto done;
+        } else {
+            HANDLE file = CreateFileW(path, READ_CONTROL, 0, &security, CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+            if (file == INVALID_HANDLE_VALUE) goto done;
+            CloseHandle(file);
+        }
+        LocalFree(descriptor); descriptor = NULL;
+    }
+    wchar_t mismatch[2048];
+    target = L"foreign-owner-descriptor";
+    if (swprintf_s(mismatch, 2048, L"O:WDD:P(A;;FA;;;%ls)", sid) < 0
+        || !ConvertStringSecurityDescriptorToSecurityDescriptorW(mismatch, SDDL_REVISION_1, &descriptor, NULL)
+        || cm_windows_private_descriptor(descriptor, user->User.Sid))
+        goto done;
+    ok = 1;
+done: {
+    DWORD error = GetLastError();
+    if (descriptor) LocalFree(descriptor);
+    if (sid) LocalFree(sid);
+    free(user);
+    if (parent) cm_windows_pin_free(parent);
+    if (!ok) fwprintf(stderr, L"private fixture target=%ls change=%d\n", target, change);
+    return ok ? 0 : rejected("private-fixture", error ? error : ERROR_INVALID_DATA);
+}}
+
 int wmain(int argc, wchar_t **argv) {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
 #if defined(_M_ARM64) && !defined(_M_ARM64EC)
@@ -58,6 +160,9 @@ int wmain(int argc, wchar_t **argv) {
     if (!IsWow64Process2(GetCurrentProcess(), &process_machine, &native_machine)
         || process_machine != IMAGE_FILE_MACHINE_UNKNOWN || native_machine != expected_machine)
         return rejected("native-architecture", ERROR_BAD_EXE_FORMAT);
+    if (argc == 3 && !wcscmp(argv[1], L"private-setup")) return private_fixture(argv[2], 0);
+    if (argc == 3 && !wcscmp(argv[1], L"private-change")) return private_fixture(argv[2], 1);
+    if (argc == 3 && !wcscmp(argv[1], L"private-restore")) return private_fixture(argv[2], 2);
     if (argc != 7) return rejected("arguments", ERROR_INVALID_PARAMETER);
     BOOL unsafe_search = !wcscmp(argv[1], L"unsafe");
     BOOL preloaded = !wcscmp(argv[1], L"unchecked-preloaded") || !wcscmp(argv[1], L"guarded-preloaded");

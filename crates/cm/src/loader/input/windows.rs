@@ -41,6 +41,7 @@ unsafe extern "C" {
     fn cm_windows_pin_duplicate(pin: *const std::ffi::c_void) -> *mut std::ffi::c_void;
     fn cm_windows_pin_path(pin: *const std::ffi::c_void) -> *const u16;
     fn cm_windows_pin_free(pin: *mut std::ffi::c_void);
+    fn cm_windows_private_check(pin: *const std::ffi::c_void) -> i32;
 }
 
 struct Pin(NonNull<std::ffi::c_void>);
@@ -62,6 +63,17 @@ pub(crate) struct Handle {
 }
 
 impl Handle {
+    pub(crate) fn check_private(&self) -> Result<(), String> {
+        if unsafe { cm_windows_private_check(self.pin.0.as_ptr()) } == 0 {
+            return Err(io::Error::last_os_error().to_string());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn identity(&self) -> Result<super::Identity, String> {
+        Ok(information(self)?.identity)
+    }
+
     fn take(raw: *mut std::ffi::c_void) -> Result<Self, String> {
         let pin = Arc::new(Pin(
             NonNull::new(raw).ok_or_else(|| io::Error::last_os_error().to_string())?

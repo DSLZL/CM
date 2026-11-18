@@ -15,6 +15,9 @@ use crate::LoadError;
 use crate::loader::{self, InputPin};
 use crate::package::ManagedHost;
 
+mod directory;
+pub(crate) use directory::Directory;
+
 const LIMIT: u64 = 4 * 1024 * 1024;
 const OWNER: &[u8] = b"{\"schema_version\":1,\"domain\":\"cm.home.v1\"}\n";
 static TEMP: AtomicU64 = AtomicU64::new(0);
@@ -385,24 +388,7 @@ fn acquire_writer(file: &File) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) struct Directory {
-    pub file: loader::Handle,
-    pub path: PathBuf,
-}
-
 impl Directory {
-    pub(crate) fn open(path: &Path) -> Result<Self, String> {
-        let file = loader::open_directory(path)?;
-        let metadata = file.metadata().map_err(|e| e.to_string())?;
-        if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
-            return Err("managed directory must be owned by this user and private (0700)".into());
-        }
-        Ok(Self {
-            file,
-            path: path.into(),
-        })
-    }
-
     pub(crate) fn child(&self, name: &str) -> Result<Self, String> {
         let name_c = CString::new(name).map_err(|e| e.to_string())?;
         if unsafe { libc::mkdirat(self.file.as_raw_fd(), name_c.as_ptr(), 0o700) } != 0
@@ -418,19 +404,6 @@ impl Directory {
         result.check()?;
         self.file.sync_all().map_err(|e| e.to_string())?;
         Ok(result)
-    }
-
-    pub(crate) fn check(&self) -> Result<(), String> {
-        let current = loader::open_directory(&self.path)?;
-        let old = self.file.metadata().map_err(|e| e.to_string())?;
-        let now = current.metadata().map_err(|e| e.to_string())?;
-        if (old.dev(), old.ino()) != (now.dev(), now.ino())
-            || now.uid() != unsafe { libc::geteuid() }
-            || now.mode() & 0o077 != 0
-        {
-            return Err("managed directory identity/ownership changed".into());
-        }
-        Ok(())
     }
 
     pub(crate) fn create_file(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
