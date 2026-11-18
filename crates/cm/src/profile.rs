@@ -759,7 +759,7 @@ mod tests {
             let home = root();
             let mut transaction = Transaction::begin(&home, host()).unwrap();
             let old = b"old descriptor bytes";
-            std::fs::write(home.join("cm-profile.json"), old).unwrap();
+            transaction.root.create_file("cm-profile.json", old).unwrap();
             transaction.old = Some(
                 loader::read_input(&home.join("cm-profile.json"), LIMIT)
                     .unwrap()
@@ -800,13 +800,27 @@ mod tests {
             let home = root();
             let mut transaction = Transaction::begin(&home, host()).unwrap();
             let old = b"old descriptor bytes";
-            std::fs::write(home.join("cm-profile.json"), old).unwrap();
+            transaction.root.create_file("cm-profile.json", old).unwrap();
             transaction.old = Some(
                 loader::read_input(&home.join("cm-profile.json"), LIMIT)
                     .unwrap()
                     .1,
             );
             let path = home.join(name);
+            #[cfg(windows)]
+            if name == ".cm-write.lock" {
+                assert_eq!(std::fs::read(&path).unwrap_err().raw_os_error(), Some(33));
+                assert_eq!(
+                    std::fs::rename(&path, home.join("swapped-input"))
+                        .unwrap_err()
+                        .raw_os_error(),
+                    Some(32)
+                );
+                transaction.revalidate().unwrap();
+                drop(transaction);
+                std::fs::remove_dir_all(home).unwrap();
+                continue;
+            }
             let bytes = std::fs::read(&path).unwrap();
             std::fs::rename(&path, home.join("swapped-input")).unwrap();
             std::fs::write(&path, bytes).unwrap();
@@ -828,7 +842,7 @@ mod tests {
                 let source = root();
                 let mut transaction = Transaction::begin(&home, host()).unwrap();
                 let old = b"accepted profile";
-                std::fs::write(home.join("cm-profile.json"), old).unwrap();
+                transaction.root.create_file("cm-profile.json", old).unwrap();
                 transaction.old = Some(
                     loader::read_input(&home.join("cm-profile.json"), LIMIT)
                         .unwrap()
@@ -866,6 +880,7 @@ mod tests {
         assert!(!directory.publish("new", "old").unwrap());
         assert_eq!(std::fs::read(home.join("old")).unwrap(), b"old");
         assert_eq!(std::fs::read(home.join("new")).unwrap(), b"new");
+        drop(directory);
         std::fs::remove_dir_all(home).unwrap();
     }
 

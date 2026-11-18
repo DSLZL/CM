@@ -2125,7 +2125,9 @@ mod tests {
         let held = guard(&home.0, true).unwrap();
         let view = fixture(&held.store);
         let tree = held.store.tree(&view).unwrap();
-        let before = capture_tree(&tree, &view.owners).unwrap().entries;
+        let before = capture_tree(&tree, &view.owners)
+            .unwrap_or_else(|error| panic!("{}", error.message))
+            .entries;
         let names_before = names(&held.store.trees).unwrap();
         let generation = Generation {
             state: Some(view.clone()),
