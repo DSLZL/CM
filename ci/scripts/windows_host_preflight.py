@@ -155,10 +155,11 @@ def restore(origin, temp):
     return destination, receipt, job
 
 
-def sdk_inventory():
+def sdk_inventory(llvm_root):
     result, seen, total = [], set(), 0
-    for variable in ("INCLUDE", "LIB"):
-        roots = os.environ[variable].split(";")
+    inputs = {name: os.environ[name].split(";") for name in ("INCLUDE", "LIB")}
+    inputs["LLVM"] = [str(llvm_root)]
+    for variable, roots in inputs.items():
         for index, name in enumerate(roots):
             if not name:
                 continue
@@ -296,10 +297,15 @@ def main():
         cl = Path(shutil.which("cl.exe") or "")
         if not cl.is_absolute() or tuple(part.lower() for part in cl.parts[-3:]) != ("hostarm64", "arm64", "cl.exe"):
             raise RuntimeError("Host requires installed native ARM64 MSVC")
+        llvm_root = Path(os.environ["VCToolsInstallDir"]).parents[1] / "Llvm/ARM64"
         for name, path in (("cl", cl), ("link", cl.with_name("link.exe")), ("lib", cl.with_name("lib.exe")),
-                ("go", Path(shutil.which("go.exe") or ""))):
+                ("clang-cl", llvm_root / "bin/clang-cl.exe"), ("go", Path(shutil.which("go.exe") or ""))):
             tools[name] = {"path": str(path), **pe_fixture(path.read_bytes(), False, expected_machine=0xAA64,
                 maximum_bytes=PE_MAXIMUM)}
+        report["tools"] = tools
+        tools["clang-cl"]["version"] = run("host-clang-cl-version", [tools["clang-cl"]["path"], "--version"])
+        if "Target: " + TARGET not in tools["clang-cl"]["version"].splitlines():
+            raise RuntimeError("Host requires native ARM64 clang-cl targeting the MSVC ABI")
 
         with tempfile.TemporaryDirectory(prefix="cm-host-", dir=os.environ["RUNNER_TEMP"]) as directory:
             temp = Path(directory).resolve()
@@ -325,7 +331,7 @@ def main():
                 provenance = host.verify_sources(root, logs)
                 tree = root / host.HOST
                 with ci_progress.stage("host-native-sdk-inventory"):
-                    sdk = sdk_inventory()
+                    sdk = sdk_inventory(llvm_root)
                 host.write(logs / "native-files.json", sdk)
                 if origin:
                     restored, receipt, original_job = restore(origin, temp)
@@ -370,7 +376,7 @@ def main():
 
                 os.environ.update({**v8, "CM_NATIVE_PROTOC": str(protoc), "CM_DISTRIBUTION_GH_SHA256": verifier["sha256"],
                     "CARGO_INCREMENTAL": "0", "RUSTC": tools["rustc"]["path"], "RUSTC_WRAPPER": tools["sccache"]["path"],
-                    "RUSTFLAGS": "-Ctarget-feature=+crt-static", "CC": tools["cl"]["path"], "CXX": tools["cl"]["path"],
+                    "RUSTFLAGS": "-Ctarget-feature=+crt-static", "CC": tools["clang-cl"]["path"], "CXX": tools["clang-cl"]["path"],
                     "AR": tools["lib"]["path"], "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER": tools["link"]["path"],
                     "SCCACHE_DIR": str(temp / "sccache"), "SCCACHE_GHA_ENABLED": "false", "SCCACHE_CACHE_SIZE": "2G",
                     "SCCACHE_IDLE_TIMEOUT": "0", "SCCACHE_BASEDIRS": str(root), "CODEX_HOME": str(temp / "codex-home")})
@@ -397,13 +403,15 @@ def main():
                 provenance = host.verify_sources(root, logs)
                 profiles = {name: "dev-small" for name in ("build_profile", "test_profile", "clippy_profile")}
                 compile_tools = {name: {key: value for key, value in tools[name].items() if key != "path"}
-                    for name in ("cl", "link", "lib", "rc", "mt", "rustc", "cargo", "sccache")}
+                    for name in ("cl", "clang-cl", "link", "lib", "rc", "mt", "rustc", "cargo", "sccache")}
                 inputs = {"source": provenance["host_manifest_sha256"], "cm_inputs": host.manifest_digest(host.product_manifest(root)),
                     "lock": provenance["host_lock_sha256"], "target": TARGET,
                     "toolchain": {"declared": cfg["rust_toolchain"], **{name: row["version"] for name, row in rust_tools.items()}},
                     "profiles": profiles, "units": [{"id": "host", "packages": list(PACKAGES)}, {"id": "windows-helper",
                         "packages": ["codex-windows-sandbox"], "binaries": list(BINS[2:])}],
-                    "flags": {"RUSTFLAGS": os.environ["RUSTFLAGS"], "CARGO_INCREMENTAL": "0", "RUSTC_WRAPPER": "sccache"},
+                    "flags": {"RUSTFLAGS": os.environ["RUSTFLAGS"], "CARGO_INCREMENTAL": "0", "RUSTC_WRAPPER": "sccache",
+                        "native_compilers": {name: host.sha(Path(os.environ[name])) for name in
+                            ("CC", "CXX", "AR", "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER")}},
                     "cargo_configuration": {".cargo/config.toml": host.sha(tree / "codex-rs/.cargo/config.toml")},
                     "native_tools": compile_tools, "native": native_identity,
                     "helper": {"package": "codex-windows-sandbox", "binaries": list(BINS[2:]), "build": "same sealed source/target",
@@ -529,6 +537,23 @@ def self_check():
 
     with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as directory:
         temp = Path(directory)
+        sdk, llvm = temp / "sdk", temp / "llvm"
+        sdk.mkdir()
+        llvm.mkdir()
+        (sdk / "header.h").write_bytes(b"sdk")
+        resource = llvm / "intrinsics.h"
+        resource.write_bytes(b"compiler resource")
+        with patch.dict(os.environ, {"INCLUDE": str(sdk), "LIB": str(sdk)}):
+            original = sdk_inventory(llvm)
+            assert [row["input"] for row in original] == ["INCLUDE/0/header.h", "LLVM/0/intrinsics.h"]
+            resource.write_bytes(b"changed compiler resource")
+            assert sdk_inventory(llvm) != original
+            try:
+                sdk_inventory(resource)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Non-directory compiler resource root accepted")
         fixture = temp / "fixture"
         for name in BINS:
             (fixture / "bin").mkdir(parents=True, exist_ok=True)
