@@ -29,6 +29,7 @@ struct NativeInformation {
 }
 
 unsafe extern "C" {
+    fn cm_windows_snapshot_root() -> *mut std::ffi::c_void;
     fn cm_windows_directory_open(path: *const u16) -> *mut std::ffi::c_void;
     fn cm_windows_child_open(
         parent: *const std::ffi::c_void,
@@ -119,6 +120,10 @@ pub(crate) struct Handle {
 }
 
 impl Handle {
+    pub(crate) fn snapshot_root() -> Result<Self, String> {
+        Self::take(unsafe { cm_windows_snapshot_root() })
+    }
+
     pub(crate) fn private_metadata(&self) -> Result<(u32, String), String> {
         let mut text = vec![0; 4096];
         let mut attributes = 0;

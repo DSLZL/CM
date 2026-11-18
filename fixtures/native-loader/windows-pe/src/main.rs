@@ -1547,8 +1547,108 @@ fn input_controls(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     Ok(0)
 }
 
+fn snapshot_cleanup(
+    root: &Path,
+    args: &[std::ffi::OsString],
+) -> Result<i32, Box<dyn std::error::Error>> {
+    use directory::Directory;
+    use std::ffi::OsStr;
+    use std::fs;
+
+    let created = Directory::create_home(root)?;
+    let root_identity = input::identity(&created.file)?;
+    drop(created);
+    let home = Directory::open(root)?;
+    assert_eq!(input::identity(&home.file)?, root_identity);
+    Directory::snapshots()?.check()?;
+    let mut command = Command::new(std::env::current_exe()?);
+    command.args([
+        OsStr::new("load"),
+        args[0].as_os_str(),
+        args[1].as_os_str(),
+        args[2].as_os_str(),
+        args[3].as_os_str(),
+        OsStr::new("snapshot"),
+        args[4].as_os_str(),
+    ]);
+    assert!(home.run_snapshot_child("loaded", &mut command)?.success());
+    assert!(!root.join("loaded").exists());
+    println!("cm_snapshot passed=loaded-child-exit-cleanup");
+
+    let mut missing = Command::new(root.join("missing-program.exe"));
+    assert!(home.run_snapshot_child("spawn-error", &mut missing).is_err());
+    assert!(!root.join("spawn-error").exists());
+    println!("cm_snapshot passed=spawn-error-cleanup");
+
+    let mut nonzero = Command::new(std::env::current_exe()?);
+    nonzero.arg("snapshot-exit");
+    assert_eq!(
+        home.run_snapshot_child("nonzero", &mut nonzero)?.code(),
+        Some(37)
+    );
+    assert!(!root.join("nonzero").exists());
+    println!("cm_snapshot passed=nonzero-status-cleanup");
+
+    let existing = home.staging("existing")?;
+    let expected = input::identity(&existing.file)?;
+    existing.create_file("unchanged", b"owned")?;
+    drop(existing);
+    assert!(home.run_snapshot_child("existing", &mut command).is_err());
+    assert_eq!(fs::read(root.join("existing").join("unchanged"))?, b"owned");
+    directory::discard(&home, "existing", expected)?;
+    println!("cm_snapshot passed=existing-stage-preserved");
+
+    for name in ["unprotected", "missing", "regular-file"] {
+        let path = root.join(name);
+        match name {
+            "unprotected" => fs::create_dir(&path)?,
+            "regular-file" => home.create_file(name, b"unchanged")?,
+            _ => (),
+        }
+        let output = Command::new(std::env::current_exe()?)
+            .args([OsStr::new("snapshot-root-reject")])
+            .env("CM_WINDOWS_SNAPSHOT_ROOT", &path)
+            .output()?;
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stdout.is_empty() && output.stderr.is_empty());
+    }
+    assert_eq!(fs::read(root.join("regular-file"))?, b"unchanged");
+    fs::remove_file(root.join("regular-file"))?;
+    fs::remove_dir(root.join("unprotected"))?;
+    println!("cm_snapshot passed=invalid-root-no-write");
+    assert!(fs::read_dir(root)?.next().is_none());
+    drop(home);
+    fs::remove_dir(root)?;
+    Ok(0)
+}
+
 fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.len() == 1 && args[0] == "snapshot-exit" {
+        return Ok(37);
+    }
+    if args.len() == 1 && args[0] == "snapshot-root-reject" {
+        assert!(windows::Snapshot::create(b"must reject", c"cm-mod-v1").is_err());
+        return Ok(0);
+    }
+    if args.len() == 7 && args[0] == "snapshot-cleanup" {
+        return snapshot_cleanup(Path::new(&args[1]), &args[2..]);
+    }
+    if args.len() == 7
+        && args[0] == "load"
+        && args[5] == "snapshot"
+        && std::env::var_os("CM_WINDOWS_SNAPSHOT_ROOT").is_none()
+    {
+        let root = directory::Directory::snapshots()?;
+        let mut command = Command::new(std::env::current_exe()?);
+        command.args(&args);
+        let name = format!(".fixture.{}", std::process::id());
+        let status = root.run_snapshot_child(&name, &mut command)?;
+        assert!(!root.path.join(&name).exists());
+        return status
+            .code()
+            .ok_or_else(|| "snapshot child terminated abnormally".into());
+    }
     if args.len() == 3 && args[0] == "lock-probe" {
         let exclusive = match args[2].to_str() {
             Some("exclusive") => true,

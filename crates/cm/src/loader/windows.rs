@@ -63,7 +63,7 @@ impl Snapshot {
     pub(crate) fn load(self, needed: &[String]) -> Result<&'static Library, String> {
         let dependencies = wide(OsStr::new(&needed.join(",")))?;
         // Constructors can publish pointers even if loading or negotiation fails.
-        // shortcut: loaded temp snapshots need launcher cleanup after exit before Windows is enabled.
+        // The Windows entry supervisor discards its owned stage after the child exits.
         let pinned = Box::leak(Box::new(self));
         let module = unsafe { cm_windows_pin_load(pinned.pin.as_ptr(), dependencies.as_ptr()) };
         if module.is_null() {

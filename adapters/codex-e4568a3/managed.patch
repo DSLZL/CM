@@ -101,8 +101,10 @@ index 7bd8ec8..cd27673 100644
  #[derive(Debug, Parser)]
  struct FeaturesCli {
      #[command(subcommand)]
-@@ -1067,6 +1137,29 @@ fn stage_str(stage: Stage) -> &'static str {
+@@ -1067,6 +1137,31 @@ fn stage_str(stage: Stage) -> &'static str {
  fn main() -> anyhow::Result<()> {
++    #[cfg(windows)]
++    cm_runtime::launcher::supervise_windows()?;
      codex_build_info::initialize!();
      let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
 +    // Management must not create arg0 aliases or load .env from an inherited official home.

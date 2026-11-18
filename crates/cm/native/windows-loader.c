@@ -10,6 +10,8 @@
 
 #pragma comment(lib, "advapi32.lib")
 
+static void cm_windows_snapshot_discard(const CmWindowsPin *pin);
+
 static int cm_windows_pin_limit(CmWindowsPin *p, const wchar_t *name, size_t limit) {
     ZeroMemory(p, sizeof(*p));
     p->file = INVALID_HANDLE_VALUE;
@@ -139,27 +141,57 @@ CmWindowsPin *cm_windows_pin_copy(const unsigned char *bytes, size_t length, uns
     if (!bytes || !length || kind >= 4 || length > limits[kind]) {
         SetLastError(ERROR_INVALID_PARAMETER); return NULL;
     }
-    wchar_t temp[4096], directory[4096], path[4096], token[33];
+    wchar_t temp[4096], path[4096], token[33], name[32];
     BYTE random[16];
-    DWORD received = GetTempPathW(4096, temp);
-    if (!received || received > 4000) return NULL;
-    received = GetLongPathNameW(temp, temp, 4096);
-    if (!received || received > 4000 || BCryptGenRandom(NULL, random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG))
-        return NULL;
+    DWORD received = GetEnvironmentVariableW(L"CM_WINDOWS_SNAPSHOT_ROOT", temp, 4096);
+    CmWindowsPin *root = NULL;
+    if (received && received < 4096) root = cm_windows_directory_open(temp);
+    else if (!received && GetLastError() == ERROR_ENVVAR_NOT_FOUND) root = cm_windows_snapshot_root();
+    else { SetLastError(ERROR_INVALID_NAME); return NULL; }
+    if (!root) return NULL;
+    CmWindowsPin *p = NULL, *stage = NULL, *writer = NULL;
+    FILE_ID_INFO directory_id = {0}, file_id = {0};
+    int ok = 0, have_directory_id = 0, have_file_id = 0;
+    p = (CmWindowsPin *)calloc(1, sizeof(*p));
+    if (!p) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); goto done; }
+    p->file = INVALID_HANDLE_VALUE;
+    temp[0] = 0;
+    if (BCryptGenRandom(NULL, random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG)) {
+        SetLastError(ERROR_GEN_FAILURE); goto done;
+    }
     for (size_t i = 0; i < 16; ++i) {
         const wchar_t hex[] = L"0123456789abcdef";
         token[2 * i] = hex[random[i] >> 4]; token[2 * i + 1] = hex[random[i] & 15];
     }
     token[32] = 0;
-    if (swprintf_s(directory, 4096, L"%lscm-%ls", temp, token) < 0
-        || swprintf_s(path, 4096, L"%ls\\snapshot.%ls", directory, extensions[kind]) < 0
-        || !CreateDirectoryW(directory, NULL)) return NULL;
-    CmWindowsPin *p = (CmWindowsPin *)calloc(1, sizeof(*p));
-    HANDLE writer = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-    int ok = p && writer != INVALID_HANDLE_VALUE
-        && WriteFile(writer, bytes, (DWORD)length, &received, NULL) && received == length && FlushFileBuffers(writer);
-    if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
-    if (ok) ok = cm_windows_pin_limit(p, path, limits[kind]) && p->size.QuadPart == (LONGLONG)length;
+    stage = cm_windows_private_directory(root, token, 1);
+    if (!stage) goto done;
+    wcscpy_s(temp, 4096, stage->path);
+    have_directory_id = GetFileInformationByHandleEx(stage->file, FileIdInfo, &directory_id, sizeof(directory_id));
+    if (!have_directory_id) goto done;
+    if (swprintf_s(name, 32, L"snapshot.%ls", extensions[kind]) < 0
+        || swprintf_s(path, 4096, L"%ls\\%ls", stage->path, name) < 0) goto done;
+    writer = cm_windows_private_create(stage, name);
+    if (!writer) goto done;
+    have_file_id = GetFileInformationByHandleEx(writer->file, FileIdInfo, &file_id, sizeof(file_id));
+    if (!have_file_id || !WriteFile(writer->file, bytes, (DWORD)length, &received, NULL)
+        || received != length || !FlushFileBuffers(writer->file)) goto done;
+    cm_windows_pin_free(writer);
+    writer = NULL;
+    cm_windows_pin_free(stage);
+    stage = NULL;
+    /* Release our creation writer before applying no-write sharing to every ancestor. */
+    ok = cm_windows_pin_limit(p, path, limits[kind]) && p->size.QuadPart == (LONGLONG)length
+        && p->id.VolumeSerialNumber == file_id.VolumeSerialNumber
+        && !memcmp(&p->id.FileId, &file_id.FileId, sizeof(file_id.FileId));
+    if (ok) {
+        stage = cm_windows_directory_open(temp);
+        FILE_ID_INFO current;
+        ok = stage && GetFileInformationByHandleEx(stage->file, FileIdInfo, &current, sizeof(current))
+            && current.VolumeSerialNumber == directory_id.VolumeSerialNumber
+            && !memcmp(&current.FileId, &directory_id.FileId, sizeof(current.FileId))
+            && cm_windows_private_check(p) && cm_windows_private_check(stage) && cm_windows_private_check(root);
+    }
     BYTE buffer[16384];
     size_t offset = 0;
     while (ok && offset < length) {
@@ -170,25 +202,27 @@ CmWindowsPin *cm_windows_pin_copy(const unsigned char *bytes, size_t length, uns
     }
     LARGE_INTEGER zero = {0};
     if (ok) ok = SetFilePointerEx(p->file, zero, NULL, FILE_BEGIN);
-    if (ok) {
-        wcscpy_s(p->temporary_directory, 4096, directory);
-        return p;
+done: {
+    DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+    cm_windows_pin_free(writer);
+    if (p && have_directory_id) {
+        wcscpy_s(p->temporary_directory, 4096, temp);
+        p->temporary_id = directory_id;
+        p->temporary_file = have_file_id;
+        if (have_file_id) { p->id = file_id; wcscpy_s(p->path, 4096, path); }
     }
-    DWORD error = GetLastError();
-    if (p) { cm_windows_unpin(p); free(p); }
-    DeleteFileW(path);
-    RemoveDirectoryW(directory);
+    cm_windows_pin_free(stage);
+    cm_windows_pin_free(root);
+    if (ok) return p;
+    cm_windows_pin_free(p);
     SetLastError(error ? error : ERROR_INVALID_DATA);
     return NULL;
-}
+}}
 
 void cm_windows_pin_free(CmWindowsPin *p) {
     if (!p) return;
     cm_windows_unpin(p);
-    if (p->temporary_directory[0]) {
-        DeleteFileW(p->path);
-        RemoveDirectoryW(p->temporary_directory);
-    }
+    if (p->temporary_directory[0]) cm_windows_snapshot_discard(p);
     free(p);
 }
 
@@ -724,6 +758,39 @@ CmWindowsPin *cm_windows_home_create(const CmWindowsPin *parent, const wchar_t *
     return p;
 }
 
+CmWindowsPin *cm_windows_snapshot_root(void) {
+    wchar_t temp[4096];
+    DWORD length = GetTempPathW(4096, temp);
+    if (!length || length >= 4096) return NULL;
+    length = GetLongPathNameW(temp, temp, 4096);
+    if (!length || length >= 4096) return NULL;
+    if (length > 3 && temp[length - 1] == L'\\') temp[length - 1] = 0;
+    CmWindowsPin *parent = cm_windows_directory_open(temp);
+    if (!parent) return NULL;
+    int created = 0;
+    CmWindowsPin *root = cm_windows_home_create(parent, L"cm-snapshots", &created);
+    DWORD error = root ? ERROR_SUCCESS : GetLastError();
+    if (!root && !created && (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS))
+        root = cm_windows_child_open(parent, L"cm-snapshots", 1);
+    if (root && (!cm_windows_private_check(root) || !cm_windows_storage_directory(root))) {
+        error = GetLastError(); cm_windows_pin_free(root); root = NULL;
+    } else if (!root) error = GetLastError();
+    if (root && created) {
+        CmWindowsFileInformation before, after;
+        int ok = cm_windows_file_information(root, &before);
+        cm_windows_pin_free(root);
+        root = ok ? cm_windows_child_open(parent, L"cm-snapshots", 1) : NULL;
+        if (!root || !cm_windows_private_check(root) || !cm_windows_file_information(root, &after)
+            || before.volume != after.volume || memcmp(before.id, after.id, sizeof(before.id))) {
+            error = GetLastError(); if (!error) error = ERROR_INVALID_DATA;
+            cm_windows_pin_free(root); root = NULL;
+        }
+    }
+    cm_windows_pin_free(parent);
+    SetLastError(root ? ERROR_SUCCESS : error);
+    return root;
+}
+
 static int cm_windows_private_rename(const CmWindowsPin *parent, const wchar_t *source,
     const wchar_t *target, const CmWindowsFileInformation *expected) {
     if (!cm_windows_private_parent(parent) || !cm_windows_component(parent, target)) return -1;
@@ -853,6 +920,28 @@ done: {
     SetLastError(error);
     return result;
 }}
+
+static void cm_windows_snapshot_discard(const CmWindowsPin *pin) {
+    wchar_t parent_path[4096];
+    wcscpy_s(parent_path, 4096, pin->temporary_directory);
+    wchar_t *name = wcsrchr(parent_path, L'\\');
+    if (!name) return;
+    *name++ = 0;
+    CmWindowsPin *parent = cm_windows_directory_open(parent_path);
+    if (!parent) return;
+    CmWindowsPin *stage = cm_windows_child_open(parent, name, 1);
+    CmWindowsFileInformation info;
+    int ok = stage && cm_windows_private_check(stage) && cm_windows_file_information(stage, &info)
+        && info.volume == pin->temporary_id.VolumeSerialNumber
+        && !memcmp(info.id, &pin->temporary_id.FileId, sizeof(info.id));
+    const wchar_t *file = wcsrchr(pin->path, L'\\');
+    if (ok && pin->temporary_file) ok = file && cm_windows_private_remove(stage, file + 1,
+        pin->id.VolumeSerialNumber, pin->id.FileId.Identifier, 0) == 1;
+    cm_windows_pin_free(stage);
+    if (ok) cm_windows_private_remove(parent, name, pin->temporary_id.VolumeSerialNumber,
+        pin->temporary_id.FileId.Identifier, 1);
+    cm_windows_pin_free(parent);
+}
 
 CmWindowsPin *cm_windows_lock_open(const CmWindowsPin *parent, const wchar_t *name, int create) {
     if (!cm_windows_private_check(parent)) return NULL;

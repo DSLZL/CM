@@ -12,6 +12,8 @@ typedef struct {
     size_t count;
     BOOL file_attempted;
     FILE_ID_INFO id;
+    FILE_ID_INFO temporary_id;
+    BOOL temporary_file;
     LARGE_INTEGER size;
     wchar_t path[4096], temporary_directory[4096];
 } CmWindowsPin;
@@ -30,6 +32,7 @@ int cm_windows_system_module(HMODULE module);
 int cm_windows_system_dependencies(const wchar_t *csv);
 CmWindowsPin *cm_windows_pin_open(const wchar_t *path, const wchar_t *expected);
 CmWindowsPin *cm_windows_pin_copy(const unsigned char *bytes, size_t length, unsigned kind);
+CmWindowsPin *cm_windows_snapshot_root(void);
 void cm_windows_pin_free(CmWindowsPin *pin);
 HANDLE cm_windows_pin_duplicate(const CmWindowsPin *pin);
 const wchar_t *cm_windows_pin_path(const CmWindowsPin *pin);

@@ -7,6 +7,25 @@ use std::path::Path;
 use crate::config::Options;
 use crate::{LoadError, mod_install, profile};
 
+#[cfg(windows)]
+pub fn supervise_windows() -> Result<(), LoadError> {
+    if let Some(path) = std::env::var_os("CM_WINDOWS_SNAPSHOT_ROOT") {
+        profile::Directory::open(Path::new(&path)).map_err(|error| profile::failure(&error))?;
+        return Ok(());
+    }
+    let root = profile::Directory::snapshots().map_err(|error| profile::failure(&error))?;
+    let executable =
+        crate::loader::current_executable().map_err(|error| profile::failure(&error.to_string()))?;
+    let mut command = std::process::Command::new(executable);
+    command.args(std::env::args_os().skip(1));
+    // shortcut: forced supervisor termination preserves its stage until owned crash recovery is qualified.
+    let status = root
+        .run_snapshot_child(&profile::temporary("snapshots"), &mut command)
+        .map_err(|error| profile::failure(&error))?;
+    drop(root);
+    crate::exit_after_shutdown(status.code().unwrap_or(1))
+}
+
 pub fn launch(home: &Path, args: &[OsString], options: &Options) -> Result<(), LoadError> {
     profile::validate_environment(home)?;
     let value = mod_install::run(home, mod_install::Command::Scan, options)?;

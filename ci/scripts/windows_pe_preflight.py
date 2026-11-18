@@ -476,6 +476,19 @@ def main():
             for abi in ("cm_mod_entry_v1", "cm_mod_entry_v2"):
                 observe("rust-" + abi, rust_payload.read_bytes(), abi=abi, constructor=False)
                 observe("snapshot-" + abi, original, abi=abi, mode="snapshot")
+            cleanup_root = temp / "snapshot-cleanup"
+            cleanup_marker = temp / "snapshot-cleanup.marker"
+            _, text = run("pe-case-snapshot-cleanup", [validator, "snapshot-cleanup", cleanup_root,
+                payloads["ordinary"], "cm_mod_entry_v1", probe, sha(payloads["ordinary"]), poison],
+                environ={"CM_CONSTRUCTOR_MARKER": str(cleanup_marker)})
+            cleanup_checks = re.findall(r"^cm_snapshot passed=([a-z-]+)$", text, re.M)
+            if cleanup_checks != ["loaded-child-exit-cleanup", "spawn-error-cleanup", "nonzero-status-cleanup",
+                    "existing-stage-preserved", "invalid-root-no-write"] or cleanup_root.exists() or (
+                    cleanup_marker.read_bytes() != b"constructor41"):
+                raise RuntimeError("Actual snapshot child exit cleanup controls differ")
+            report["snapshot_cleanup"] = {"status": "pass", "checks": cleanup_checks,
+                "constructor": "constructor41", "actual_directory_module": INPUTS[15],
+                "actual_snapshot_module": INPUTS[8], "direct_host_entry": "not_run"}
             if any(sha(root / name) != expected for name, expected in report["source_sha256"].items()) or any(
                     sha(Path(tool["path"])) != tool["sha256"] for tool in tools.values()):
                 raise RuntimeError("PE fixture source or native tool changed")

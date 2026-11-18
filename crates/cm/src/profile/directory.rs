@@ -21,6 +21,35 @@ pub(crate) struct Directory {
 }
 
 impl Directory {
+    #[cfg(windows)]
+    pub(crate) fn snapshots() -> Result<Self, String> {
+        let file = loader::Handle::snapshot_root()?;
+        let path = file.path().to_owned();
+        Ok(Self { file, path })
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn run_snapshot_child(
+        &self,
+        name: &str,
+        command: &mut std::process::Command,
+    ) -> Result<std::process::ExitStatus, String> {
+        let stage = self.staging(name)?;
+        let expected = loader::identity(&stage.file)?;
+        let path = stage.path.clone();
+        drop(stage);
+        let stage = Self::open(&path)?;
+        if loader::identity(&stage.file)? != expected {
+            return Err("snapshot staging identity changed before launch".into());
+        }
+        let status = command.env("CM_WINDOWS_SNAPSHOT_ROOT", &path).status();
+        drop(stage);
+        discard(self, name, expected).map_err(|error| {
+            format!("snapshot cleanup failed; retained {}: {error}", path.display())
+        })?;
+        status.map_err(|error| format!("snapshot child launch failed: {error}"))
+    }
+
     pub(crate) fn sync(&self) -> Result<(), String> {
         #[cfg(not(windows))]
         {
