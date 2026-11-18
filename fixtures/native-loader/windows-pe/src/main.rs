@@ -162,8 +162,7 @@ fn input_controls(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
         .expect("retained-ancestors read clone");
     assert_eq!(bytes, b"child");
     drop(cloned);
-    fs::rename(&branch, root.join("renamed"))
-        .expect("retained-ancestors rename after final drop");
+    fs::rename(&branch, root.join("renamed")).expect("retained-ancestors rename after final drop");
     fs::rename(root.join("renamed"), &branch).expect("retained-ancestors restore directory");
     passed("retained-ancestors");
     fs::hard_link(&path, root.join("hardlink"))?;
