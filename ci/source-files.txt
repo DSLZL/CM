@@ -282,3 +282,4 @@ ci/scripts/windows_arm64_preflight.py
 ci/scripts/windows_native_inputs.py
 ci/worker-files-windows-arm64.json
 ci/worker/windows-arm64-preflight.yml
+adapters/codex-e4568a3/native-protoc-build.rs

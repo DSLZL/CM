@@ -25,6 +25,7 @@ on:
           - isolation-inputs
           - native-inputs
           - v8-link
+          - native-protocol
 
 permissions:
   contents: read
@@ -42,7 +43,7 @@ defaults:
 jobs:
   native-preflight:
     runs-on: windows-11-arm
-    timeout-minutes: ${{ inputs.stage == 'v8-link' && 25 || 15 }}
+    timeout-minutes: ${{ inputs.stage == 'native-protocol' && 35 || inputs.stage == 'v8-link' && 25 || 15 }}
     cache-mode: none
     env:
       CM_PLATFORM: windows-arm64
@@ -73,7 +74,7 @@ jobs:
         env:
           CM_POLICY_TOKEN: ${{ github.token }}
         run: |
-          if ($env:CM_PREFLIGHT_STAGE -notin @('isolation-surface', 'isolation-availability', 'loader-terminal', 'isolation-process', 'isolation-network', 'isolation-inputs', 'native-inputs', 'v8-link')) { throw 'Unknown mechanism stage' }
+          if ($env:CM_PREFLIGHT_STAGE -notin @('isolation-surface', 'isolation-availability', 'loader-terminal', 'isolation-process', 'isolation-network', 'isolation-inputs', 'native-inputs', 'v8-link', 'native-protocol')) { throw 'Unknown mechanism stage' }
           python -B .github/scripts/worker_policy.py native-preflight-self-check
           if ($LASTEXITCODE -ne 0) { throw 'Native authority self-check failed' }
           python -B .github/scripts/worker_policy.py native-preflight
@@ -149,6 +150,10 @@ jobs:
 
       - name: Verify native V8 link and runtime without rebuilding protoc
         if: env.CM_PREFLIGHT_STAGE == 'v8-link'
+        run: python -B cm-source/ci/scripts/windows_native_inputs.py
+
+      - name: Compile actual protocol library with verified native protoc
+        if: env.CM_PREFLIGHT_STAGE == 'native-protocol'
         run: python -B cm-source/ci/scripts/windows_native_inputs.py
 
       - name: Record final native job status
