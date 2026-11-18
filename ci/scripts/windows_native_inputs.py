@@ -190,8 +190,9 @@ def native_protoc(temp, tools, report, run):
         result["sources"][name] = {"repository": repository, "commit": revision}
     build = temp / "protoc-build"
     cl = Path(tools["cl"]["path"]).as_posix()
-    run("native-protoc-configure", [paths["cmake"], "-S", temp / "protobuf", "-B", build, "-G", "Ninja",
-        "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_COMPILER=" + cl,
+    configured = run("native-protoc-configure", [paths["cmake"], "-S", temp / "protobuf", "-B", build, "-G", "Ninja",
+        "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_CXX_STANDARD=17", "-DCMAKE_CXX_STANDARD_REQUIRED=ON",
+        "-DCMAKE_C_COMPILER=" + cl,
         "-DCMAKE_CXX_COMPILER=" + cl, "-DCMAKE_LINKER=" + paths["link"].as_posix(),
         "-DCMAKE_AR=" + paths["lib"].as_posix(), "-DCMAKE_MAKE_PROGRAM=" + paths["ninja"].as_posix(),
         "-DCMAKE_RC_COMPILER=" + paths["rc"].as_posix(), "-DCMAKE_MT=" + paths["mt"].as_posix(),
@@ -199,6 +200,9 @@ def native_protoc(temp, tools, report, run):
         "-Dprotobuf_BUILD_SHARED_LIBS=OFF", "-Dprotobuf_MSVC_STATIC_RUNTIME=ON",
         "-Dprotobuf_WITH_ZLIB=OFF", "-Dprotobuf_INSTALL=OFF", "-Dprotobuf_FORCE_FETCH_DEPENDENCIES=ON",
         "-DFETCHCONTENT_SOURCE_DIR_ABSL=" + (temp / "absl").as_posix(), "-DFETCHCONTENT_FULLY_DISCONNECTED=ON"], 180)
+    if "-- Performing Test ABSL_INTERNAL_AT_LEAST_CXX17 - Success" not in configured.splitlines():
+        raise RuntimeError("Native protoc requires one C++17 ABI for Abseil and protobuf")
+    result["cxx_standard"] = 17
     # Check the bootstrap include path before building the compiler's other objects.
     run("native-protoc-upb-input", [paths["cmake"], "--build", build, "--target",
         "CMakeFiles/libprotoc.dir/upb_generator/common.cc.obj", "--parallel", "2"], 120)
@@ -392,9 +396,13 @@ def self_check():
             else:
                 raise AssertionError("Invalid native Ninja ZIP accepted")
         env = {"VSINSTALLDIR": str(temp), "WindowsSdkDir": str(temp), "WindowsSDKVersion": "1"}
-        for case in ("foreign-tool", "wrong-source", "upb-input"):
-            def invoke(label, *_):
-                if case == "upb-input":
+        for case in ("foreign-tool", "wrong-source", "cxx-standard", "upb-input"):
+            def invoke(label, args, *_):
+                if case in ("cxx-standard", "upb-input"):
+                    if label == "native-protoc-configure":
+                        assert "-DCMAKE_CXX_STANDARD=17" in args and "-DCMAKE_CXX_STANDARD_REQUIRED=ON" in args
+                        return "-- Performing Test ABSL_INTERNAL_AT_LEAST_CXX17 - " + (
+                            "Failed" if case == "cxx-standard" else "Success")
                     if label == "native-protoc-upb-input":
                         raise RuntimeError("upb-input")
                     for name, _, revision in PROTOC_SOURCES:
@@ -409,7 +417,8 @@ def self_check():
                     native_protoc(temp, {"cl": {"path": str(temp / "cl.exe")}}, {}, command)
                 except RuntimeError as error:
                     assert str(error) == {"foreign-tool": "foreign", "wrong-source":
-                        "Native protoc source checkout differs: protobuf", "upb-input": "upb-input"}[case]
+                        "Native protoc source checkout differs: protobuf", "cxx-standard":
+                        "Native protoc requires one C++17 ABI for Abseil and protobuf", "upb-input": "upb-input"}[case]
                 else:
                     raise AssertionError("Invalid native protoc input accepted")
             if case == "foreign-tool":
@@ -418,7 +427,10 @@ def self_check():
                 assert not any(call.args[0] == "native-protoc-configure" for call in command.call_args_list)
             else:
                 labels = [call.args[0] for call in command.call_args_list]
-                assert labels[-1] == "native-protoc-upb-input" and "native-protoc-build" not in labels
+                assert labels[-1] == ("native-protoc-configure" if case == "cxx-standard" else "native-protoc-upb-input")
+                assert "native-protoc-build" not in labels
+                if case == "cxx-standard":
+                    assert "native-protoc-upb-input" not in labels
         def member(name, data):
             header = name.encode().ljust(16) + b"0".ljust(12) + b"0".ljust(6) * 2 + b"0".ljust(8) + str(len(data)).encode().ljust(10) + b"`\n"
             return header + data + (b"\n" if len(data) % 2 else b"")
