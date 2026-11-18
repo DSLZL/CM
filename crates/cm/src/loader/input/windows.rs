@@ -63,9 +63,9 @@ pub(crate) struct Handle {
 
 impl Handle {
     fn take(raw: *mut std::ffi::c_void) -> Result<Self, String> {
-        let pin = Arc::new(Pin(NonNull::new(raw).ok_or_else(|| {
-            io::Error::last_os_error().to_string()
-        })?));
+        let pin = Arc::new(Pin(
+            NonNull::new(raw).ok_or_else(|| io::Error::last_os_error().to_string())?
+        ));
         let raw = unsafe { cm_windows_pin_duplicate(pin.0.as_ptr()) };
         if raw.is_null() {
             return Err(io::Error::last_os_error().to_string());
@@ -80,7 +80,11 @@ impl Handle {
             return Err("pinned input path exceeds its bound".into());
         }
         let path = OsString::from_wide(unsafe { std::slice::from_raw_parts(path, length) });
-        Ok(Self { file, pin, path: path.into() })
+        Ok(Self {
+            file,
+            pin,
+            path: path.into(),
+        })
     }
 
     pub(crate) fn path(&self) -> &Path {

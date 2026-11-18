@@ -37,14 +37,20 @@ fn input_controls(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     let (bytes, pin) = input::read_input(&path, 5)?;
     assert_eq!(bytes, b"hello");
     assert_eq!(pin.size, 5);
-    assert_eq!(pin.sha256, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+    assert_eq!(
+        pin.sha256,
+        "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    );
     passed("bounded-read");
     let empty = root.join("empty");
     fs::write(&empty, b"")?;
     let (bytes, empty_pin) = input::read_input(&empty, 0)?;
     assert!(bytes.is_empty());
     assert_eq!(empty_pin.size, 0);
-    assert_eq!(empty_pin.sha256, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    assert_eq!(
+        empty_pin.sha256,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
     empty_pin.revalidate()?;
     passed("empty-read");
     assert!(input::read_input(&path, 4).is_err());
@@ -73,7 +79,15 @@ fn input_controls(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     assert_ne!(old_identity, input::identity(&file)?);
     drop(file);
     passed("same-bytes-replacement");
-    for name in [".", "..", "value:stream", "old/value", "old\\value", "value.", "value "] {
+    for name in [
+        ".",
+        "..",
+        "value:stream",
+        "old/value",
+        "old\\value",
+        "value.",
+        "value ",
+    ] {
         assert!(input::open_at(&parent, OsStr::new(name), false).is_err());
     }
     assert!(input::open_directory(Path::new("relative")).is_err());
@@ -84,16 +98,36 @@ fn input_controls(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     drop(writer);
     passed("preheld-writer");
     unsafe extern "system" {
-        fn CreateFileMappingW(file: *mut std::ffi::c_void, security: *const std::ffi::c_void,
-            protection: u32, high: u32, low: u32, name: *const u16) -> *mut std::ffi::c_void;
-        fn MapViewOfFile(mapping: *mut std::ffi::c_void, access: u32, high: u32, low: u32,
-            size: usize) -> *mut std::ffi::c_void;
+        fn CreateFileMappingW(
+            file: *mut std::ffi::c_void,
+            security: *const std::ffi::c_void,
+            protection: u32,
+            high: u32,
+            low: u32,
+            name: *const u16,
+        ) -> *mut std::ffi::c_void;
+        fn MapViewOfFile(
+            mapping: *mut std::ffi::c_void,
+            access: u32,
+            high: u32,
+            low: u32,
+            size: usize,
+        ) -> *mut std::ffi::c_void;
         fn UnmapViewOfFile(view: *const std::ffi::c_void) -> i32;
         fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
     }
     use std::os::windows::io::AsRawHandle;
     let writer = fs::OpenOptions::new().read(true).write(true).open(&path)?;
-    let mapping = unsafe { CreateFileMappingW(writer.as_raw_handle(), std::ptr::null(), 4, 0, 0, std::ptr::null()) };
+    let mapping = unsafe {
+        CreateFileMappingW(
+            writer.as_raw_handle(),
+            std::ptr::null(),
+            4,
+            0,
+            0,
+            std::ptr::null(),
+        )
+    };
     assert!(!mapping.is_null());
     let view = unsafe { MapViewOfFile(mapping, 2, 0, 0, 5) };
     assert!(!view.is_null());
@@ -133,8 +167,19 @@ fn input_controls(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     fs::remove_file(root.join("hardlink"))?;
     passed("hardlinks");
     let junction = root.join("junction");
-    assert!(Command::new("cmd.exe").args([OsStr::new("/D"), OsStr::new("/C"), OsStr::new("mklink"),
-        OsStr::new("/J"), junction.as_os_str(), branch.as_os_str()]).status()?.success());
+    assert!(
+        Command::new("cmd.exe")
+            .args([
+                OsStr::new("/D"),
+                OsStr::new("/C"),
+                OsStr::new("mklink"),
+                OsStr::new("/J"),
+                junction.as_os_str(),
+                branch.as_os_str()
+            ])
+            .status()?
+            .success()
+    );
     assert!(input::open_at(&parent, OsStr::new("junction"), true).is_err());
     assert!(input::open_directory(&junction).is_err());
     assert!(input::read_input(&junction.join("child"), 5).is_err());

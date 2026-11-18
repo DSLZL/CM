@@ -128,7 +128,11 @@ impl InputPin {
 pub(crate) fn read_input(path: &Path, limit: u64) -> Result<(Vec<u8>, InputPin), String> {
     let bound = limit.checked_add(1).ok_or("invalid input bound")?;
     let parent = open_directory(path.parent().ok_or("missing input parent")?)?;
-    let mut file = open_at(&parent, path.file_name().ok_or("missing input name")?, false)?;
+    let mut file = open_at(
+        &parent,
+        path.file_name().ok_or("missing input name")?,
+        false,
+    )?;
     let before = information(&file)?;
     if !before.regular || before.links != 1 || before.size > limit {
         return Err("expected a bounded regular file with one link".into());
