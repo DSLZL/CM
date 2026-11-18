@@ -352,9 +352,17 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     let cleanup_name = OsStr::new("metadata-attributes-文件");
     let file = input::open_at(&private.file, cleanup_name, false)?;
     let retained_metadata = file.try_clone()?;
-    assert!(private.remove(cleanup_name, attributes_identity, false).is_err());
+    assert!(
+        private
+            .remove(cleanup_name, attributes_identity, false)
+            .is_err()
+    );
     drop(file);
-    assert!(private.remove(cleanup_name, attributes_identity, false).is_err());
+    assert!(
+        private
+            .remove(cleanup_name, attributes_identity, false)
+            .is_err()
+    );
     drop(retained_metadata);
     let mut wrong_identity = attributes_identity;
     wrong_identity.1[15] ^= 1;
@@ -370,10 +378,16 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     let mapping_identity = file.identity()?;
     drop(file);
     with_writable_mapping(&private.path.join(mapped_name), || {
-        let mut permissions = fs::metadata(private.path.join(mapped_name)).unwrap().permissions();
+        let mut permissions = fs::metadata(private.path.join(mapped_name))
+            .unwrap()
+            .permissions();
         permissions.set_readonly(true);
         fs::set_permissions(private.path.join(mapped_name), permissions).unwrap();
-        assert!(private.remove(mapped_name, mapping_identity, false).is_err());
+        assert!(
+            private
+                .remove(mapped_name, mapping_identity, false)
+                .is_err()
+        );
     })?;
     private.remove(mapped_name, mapping_identity, false)?;
     assert!(!private.path.join(mapped_name).exists());
