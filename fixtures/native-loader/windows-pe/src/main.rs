@@ -66,6 +66,7 @@ fn input_controls(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     fs::write(&path, b"hello")?;
     let (_, pin) = input::read_input(&path, 5)?;
     let parent = input::open_directory(root)?;
+    assert_eq!(parent.path(), root);
     let file = input::open_at(&parent, OsStr::new("value"), false)?;
     let old_identity = input::identity(&file)?;
     assert_eq!(std::mem::size_of_val(&old_identity), 24);

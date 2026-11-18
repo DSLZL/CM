@@ -14,6 +14,7 @@ pub(crate) type Identity = (u64, u64);
 #[cfg(windows)]
 pub(crate) type Identity = (u64, [u8; 16]);
 #[cfg(windows)]
+#[path = "input/windows.rs"]
 mod windows;
 #[cfg(windows)]
 pub(crate) use windows::{Handle, open_at, open_directory};
