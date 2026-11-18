@@ -44,6 +44,19 @@ RUST_TESTS = {
     "v21::tests::linux_x64_additive_layout", "v22::tests::linux_x64_layout_and_unchanged_prefixes",
     "v23::tests::additive_layout_keeps_the_legacy_prefix",
 }
+V8_TESTS = {
+    "tests::exposes_expected_bazel_target", "tests::exposes_embedded_v8_version",
+    "tests::sandbox_feature_matches_linked_v8", "tests::evaluates_integer_addition",
+    "tests::evaluates_string_concatenation", "tests::parses_crdtp_dispatchable_messages",
+}
+V8_SOURCE_HASHES = {
+    "codex-rs/Cargo.toml": "05c9740164aa212e1719bae3ad2ec50320b14480ac4171e11cc4ba77782c4f9c",
+    "codex-rs/.cargo/config.toml": "b8ae1cea341beb2d4a3c8fb81f97a96f4aee1fd53f769c57f140dfe949806a80",
+    "codex-rs/v8-poc/Cargo.toml": "e98d307ee1683087debb02cf5fba46cc1a23177a25cd6b03f74f1539239312c9",
+    "codex-rs/v8-poc/src/lib.rs": "7121f241941ebc18758bbc9dbfb0848a9ea25a93a65eecd34c890fc86ccecfcc",
+}
+
+
 PROTOC_SOURCES = (
     ("protobuf", "protocolbuffers/protobuf", "74211c0dfc2777318ab53c2cd2c317a2ef9012de"),
     ("absl", "abseil/abseil-cpp", "9ac7062b1860d895fb5a8cbf58c3e9ef8f674b5f"),
@@ -140,13 +153,12 @@ def crate_file(archive, name, limit):
         return data
 
 
-def rust_results(text):
+def rust_results(text, *, tests=RUST_TESTS):
     names = re.findall(r"^test (\S+) \.\.\. ok$", text, re.MULTILINE)
-    if set(names) != RUST_TESTS or len(names) != len(RUST_TESTS) or not re.search(
-            r"^test result: ok\. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;", text, re.MULTILINE):
-        raise RuntimeError("All five unfiltered existing Rust ABI tests must pass")
-    return {"tests": sorted(names), "passed": 5, "failed": 0, "filtered": 0,
-        "historical_test_names": True, "experimental_abi_2_3_separate": True}
+    if set(names) != tests or len(names) != len(tests) or not re.search(
+            rf"^test result: ok\. {len(tests)} passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;", text, re.MULTILINE):
+        raise RuntimeError("All expected unfiltered Rust tests must pass")
+    return {"tests": sorted(names), "passed": len(tests), "failed": 0, "filtered": 0}
 
 
 def ninja_file(path):
@@ -225,18 +237,101 @@ def native_protoc(temp, tools, report, run):
             raise RuntimeError("Native protoc source changed during build: " + name)
 
 
+def v8_executable(text, target, source):
+    if len(text) > 1024 * 1024:
+        raise RuntimeError("Oversized V8 Cargo evidence")
+    found = []
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict) or row.get("reason") != "compiler-artifact":
+            continue
+        item, profile = row.get("target"), row.get("profile")
+        if not isinstance(item, dict) or not isinstance(profile, dict):
+            raise RuntimeError("Malformed V8 compiler artifact")
+        if item.get("name") != "codex_v8_poc" or profile.get("test") is not True:
+            continue
+        if not isinstance(item.get("src_path"), str) or not isinstance(row.get("executable"), str):
+            raise RuntimeError("Missing V8 test source/executable path")
+        if Path(item["src_path"]).resolve() != source.resolve() or not row["executable"]:
+            raise RuntimeError("V8 test artifact differs from the fixed proof of concept")
+        path = Path(row["executable"]).resolve()
+        if not path.is_relative_to(target.resolve()) or path.suffix.lower() != ".exe":
+            raise RuntimeError("V8 test executable escapes its private native target")
+        found.append(path)
+    if len(found) != 1:
+        raise RuntimeError("Expected exactly one native V8 test executable")
+    return found[0]
+
+
+def v8_link(temp, tools, values, report, run):
+    if any(os.environ.get(name) for name in (
+            "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "V8_FROM_SOURCE")):
+        raise RuntimeError("V8 proof of concept requires the fixed native compiler without overrides")
+    checkout = temp / "v8-upstream"
+    run("v8-source-init", ["git", "init", checkout])
+    run("v8-source-fetch", ["git", "-C", checkout, "fetch", "--depth=1", "--no-tags",
+        "https://github.com/openai/codex.git", REVISION], 180)
+    run("v8-source-checkout", ["git", "-c", "core.hooksPath=NUL", "-c", "core.autocrlf=false", "-C", checkout,
+        "checkout", "--detach", REVISION], 180)
+    if run("v8-source-identity", ["git", "-C", checkout, "rev-parse", "HEAD"]) != REVISION:
+        raise RuntimeError("V8 proof of concept checkout differs")
+    expected = {**SOURCE_HASHES, **V8_SOURCE_HASHES}
+    if any(sha(checkout / path) != digest for path, digest in expected.items()):
+        raise RuntimeError("V8 proof of concept source inputs differ")
+    target, cargo_home = temp / "v8-target", temp / "v8-cargo"
+    target.mkdir()
+    cargo_home.mkdir()
+    linker = Path(tools["cl"]["path"]).with_name("link.exe")
+    tools["link"] = {"path": str(linker), **pe_fixture(linker.read_bytes(), False, expected_machine=0xAA64)}
+    result = report["v8_runtime"] = {"scope": "fixed-upstream-proof-of-concept-only", "builds": 0,
+        "executed": False, "source_sha256": expected, "cli_builds": 0, "native_protoc_builds": 0,
+        "host_integration": "not_run"}
+    os.environ.update({**values, "CARGO_HOME": str(cargo_home), "CARGO_TARGET_DIR": str(target),
+        "CARGO_INCREMENTAL": "0", "RUSTC": tools["rustc"]["path"], "RUSTUP_TOOLCHAIN": "1.95.0-" + TARGET,
+        "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER": str(linker)})
+    previous = Path.cwd()
+    try:
+        os.chdir(checkout / "codex-rs")
+        result["builds"] = 1
+        output = run("native-v8-build", [tools["cargo"]["path"], "test", "--locked", "--target", TARGET,
+            "-p", "codex-v8-poc", "--features", "sandbox", "--lib", "--no-run",
+            "--message-format=json-render-diagnostics", "-j", "2"], 1080)
+        binary = v8_executable(output, target, checkout / "codex-rs/v8-poc/src/lib.rs")
+        result["binary"] = pe_fixture(binary.read_bytes(), False, expected_machine=0xAA64)
+        if any(sha(checkout / path) != digest for path, digest in expected.items()) or any(
+                sha(Path(values[name])) != report["v8"][digest] for name, digest in (
+                    ("RUSTY_V8_ARCHIVE", "archive_sha256"), ("RUSTY_V8_SRC_BINDING_PATH", "binding_sha256"))):
+            raise RuntimeError("V8 source/archive/binding changed during compilation")
+        if run("v8-source-pristine-before-run", ["git", "-C", checkout, "status", "--porcelain", "--untracked-files=all"]):
+            raise RuntimeError("V8 source checkout changed before execution")
+        result["executed"] = True
+        result.update(rust_results(run("native-v8-tests", [binary, "--test-threads=1"], 120), tests=V8_TESTS))
+        if sha(binary) != result["binary"]["sha256"] or any(sha(checkout / path) != digest for path, digest in expected.items()):
+            raise RuntimeError("V8 test executable or source changed during execution")
+        if run("v8-source-pristine-after-run", ["git", "-C", checkout, "status", "--porcelain", "--untracked-files=all"]):
+            raise RuntimeError("V8 source checkout changed during execution")
+        report["v8"]["link_test"] = "pass"
+    finally:
+        os.chdir(previous)
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     entry = record_run.require_hosted_worker(enabled=False)
     authority(json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text()), entry, os.environ, key=KEY)
-    if os.environ.get("CM_PREFLIGHT_STAGE") != "native-inputs" or Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
+    stage = os.environ.get("CM_PREFLIGHT_STAGE")
+    if stage not in ("native-inputs", "v8-link") or Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
         raise RuntimeError("Native input preflight requires its exact reviewed stage/source")
     logs = Path(os.environ["CM_CI_LOG_DIR"]).resolve()
     if not logs.is_relative_to(Path(os.environ["RUNNER_TEMP"]).resolve()):
         raise RuntimeError("Native input text evidence must stay in runner temporary storage")
     logs.mkdir(parents=True, exist_ok=True)
     record_run.record(logs)
-    report = {"schema_version": 1, "status": "running", "scope": "V01g-native-inputs-and-abi-only",
+    report = {"schema_version": 1, "status": "running", "stage": stage,
+        "scope": "V01h-native-v8-runtime-only" if stage == "v8-link" else "V01g-native-inputs-and-abi-only",
         "platform": KEY, "target": TARGET, "source_sha": os.environ["CM_SOURCE_SHA"],
         "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"], "request_id": os.environ["CM_REQUEST_ID"],
         "run_id": int(os.environ["GITHUB_RUN_ID"]), "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
@@ -289,7 +384,8 @@ def main():
             run("compile-rust-abi", [report["tools"]["rustc"]["path"], "--edition=2021", "--test",
                 "--target", TARGET, root / "crates/cm-abi/src/lib.rs", "-o", tests], 120)
             report["rust_abi"] = {"binary": pe_fixture(tests.read_bytes(), False, expected_machine=0xAA64),
-                **rust_results(run("run-rust-abi", [tests, "--test-threads=1"]))}
+                **rust_results(run("run-rust-abi", [tests, "--test-threads=1"])),
+                "historical_test_names": True, "experimental_abi_2_3_separate": True}
             upstream = temp / "fixed-upstream-inputs"
             report["upstream"] = {"repository": "openai/codex", "commit": REVISION, "scope": "six-fixed-files-only", "files": {}}
             for relative, expected in SOURCE_HASHES.items():
@@ -360,11 +456,15 @@ def main():
                     sha(root / relative) != expected for relative, expected in report["abi_source_sha256"].items()):
                 raise RuntimeError("Native input preflight changed its source inputs")
             run("source-pristine", ["git", "-C", root, "diff", "--exit-code"])
-            if not report["protoc"]["native"]:
+            if stage == "v8-link":
+                v8_link(temp, report["tools"], values, report, run)
+                run("source-pristine-after-v8", ["git", "-C", root, "diff", "--exit-code"])
+            elif not report["protoc"]["native"]:
                 if report["protoc"].get("observed_machine") != 0x14C or report["protoc"]["executed"]:
                     raise RuntimeError("Unexpected vendored protoc input; native replacement requires the reviewed I386 original")
                 native_protoc(temp, report["tools"], report, run)
-            report["status"] = "observed_native_inputs_and_abi_only"
+            report["status"] = ("observed_native_v8_runtime_only" if stage == "v8-link" else
+                "observed_native_inputs_and_abi_only")
     except BaseException as error:
         report["status"] = "failed"
         report["error"] = {"type": type(error).__name__, "message": str(error)}
@@ -431,6 +531,55 @@ def self_check():
                 assert "native-protoc-build" not in labels
                 if case == "cxx-standard":
                     assert "native-protoc-upb-input" not in labels
+        poc_source, poc_target = temp / "poc/lib.rs", temp / "private-target"
+        artifact = {"reason": "compiler-artifact", "target": {"name": "codex_v8_poc", "src_path": str(poc_source)},
+            "profile": {"test": True}, "executable": str(poc_target / "v8-tests.exe")}
+        assert v8_executable("progress\n" + json.dumps(artifact), poc_target, poc_source) == Path(artifact["executable"]).resolve()
+        for text in ("", "[]", json.dumps(artifact) + "\n" + json.dumps(artifact),
+                json.dumps({**artifact, "target": []}), json.dumps({**artifact, "executable": 1}),
+                json.dumps({**artifact, "executable": str(temp / "outside.exe")}),
+                json.dumps({**artifact, "executable": str(poc_target / "wrong.dll")}),
+                json.dumps({**artifact, "target": {**artifact["target"], "src_path": str(temp / "other.rs")}}),
+                json.dumps({**artifact, "profile": {"test": False}}), "x" * (1024 * 1024 + 1)):
+            try:
+                v8_executable(text, poc_target, poc_source)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Missing, ambiguous or escaping V8 test executable accepted")
+        for variable in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "V8_FROM_SOURCE"):
+            command = Mock()
+            with patch.dict(os.environ, {variable: "untrusted"}, clear=True):
+                try:
+                    v8_link(temp, {}, {}, {}, command)
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError("V8 compiler override accepted")
+            command.assert_not_called()
+        for wrong_source in ("commit", "hash"):
+            command = Mock(return_value="wrong-source" if wrong_source == "commit" else REVISION)
+            with patch.dict(os.environ, {}, clear=True), patch(__name__ + ".sha", return_value="0" * 64):
+                try:
+                    v8_link(temp, {}, {}, {}, command)
+                except RuntimeError as error:
+                    assert str(error) == ("V8 proof of concept checkout differs" if wrong_source == "commit" else
+                        "V8 proof of concept source inputs differ")
+                else:
+                    raise AssertionError("Changed V8 source reached Cargo")
+            assert not any(call.args[0].startswith("native-v8") for call in command.call_args_list)
+        poc = "\n".join("test " + name + " ... ok" for name in sorted(V8_TESTS)) + (
+            "\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;\n")
+        assert rust_results(poc, tests=V8_TESTS)["passed"] == 6
+        for invalid in (poc.replace("6 passed", "5 passed"), poc.replace("0 ignored", "1 ignored"),
+                poc.replace("0 filtered out", "1 filtered out"), poc + "test extra ... ok\n"):
+            try:
+                rust_results(invalid, tests=V8_TESTS)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Incomplete V8 proof of concept tests accepted")
+
         def member(name, data):
             header = name.encode().ljust(16) + b"0".ljust(12) + b"0".ljust(6) * 2 + b"0".ljust(8) + str(len(data)).encode().ljust(10) + b"`\n"
             return header + data + (b"\n" if len(data) % 2 else b"")
