@@ -313,7 +313,7 @@ static int cm_windows_component(const CmWindowsPin *parent, const wchar_t *name)
 }
 
 static CmWindowsPin *cm_windows_child(const CmWindowsPin *parent, const wchar_t *name, int directory,
-    PSECURITY_DESCRIPTOR descriptor, int writable, int mutation) {
+    PSECURITY_DESCRIPTOR descriptor, int writable, int mutation, int *created) {
     if (!cm_windows_component(parent, name)) return NULL;
     size_t length = wcslen(name);
     CmWindowsPin *p = (CmWindowsPin *)calloc(1, sizeof(*p));
@@ -360,6 +360,7 @@ static CmWindowsPin *cm_windows_child(const CmWindowsPin *parent, const wchar_t 
         FILE_SHARE_READ | ((!mutation && (directory || writable)) ? FILE_SHARE_WRITE : 0), descriptor ? 2 : 1,
         options, NULL, 0);
     if (result < 0) { SetLastError(dos_error(result)); goto failed; }
+    if (created && descriptor) *created = 1;
     return cm_windows_input_finish(p, directory, descriptor != NULL && !directory);
 failed: {
     DWORD error = GetLastError();
@@ -369,7 +370,7 @@ failed: {
 }}
 
 CmWindowsPin *cm_windows_child_open(const CmWindowsPin *parent, const wchar_t *name, int directory) {
-    return cm_windows_child(parent, name, directory, NULL, 0, 0);
+    return cm_windows_child(parent, name, directory, NULL, 0, 0, NULL);
 }
 
 static TOKEN_USER *cm_windows_user(void) {
@@ -547,11 +548,11 @@ done: {
     return result;
 }}
 
-static int cm_windows_private_parent(const CmWindowsPin *parent) {
+static int cm_windows_storage_directory(const CmWindowsPin *parent) {
     CmWindowsFileInformation info;
     wchar_t filesystem[16];
     DWORD flags = 0;
-    if (!cm_windows_private_check(parent) || !cm_windows_file_information(parent, &info)) return 0;
+    if (!cm_windows_file_information(parent, &info)) return 0;
     if (!(info.attributes & FILE_ATTRIBUTE_DIRECTORY)) { SetLastError(ERROR_DIRECTORY); return 0; }
     if (!GetVolumeInformationByHandleW(parent->file, NULL, 0, NULL, NULL, &flags, filesystem, 16)) return 0;
     /* shortcut: private writes require NTFS; qualify other filesystems before expanding support. */
@@ -559,6 +560,10 @@ static int cm_windows_private_parent(const CmWindowsPin *parent) {
         SetLastError(ERROR_NOT_SUPPORTED); return 0;
     }
     return 1;
+}
+
+static int cm_windows_private_parent(const CmWindowsPin *parent) {
+    return cm_windows_private_check(parent) && cm_windows_storage_directory(parent);
 }
 
 CmWindowsPin *cm_windows_private_create(const CmWindowsPin *parent, const wchar_t *name) {
@@ -583,7 +588,7 @@ CmWindowsPin *cm_windows_private_create(const CmWindowsPin *parent, const wchar_
         || !SetSecurityDescriptorDacl(&descriptor, TRUE, (PACL)&acl, FALSE)
         || !SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED)
         || !cm_windows_private_descriptor(&descriptor, user->User.Sid)) goto done;
-    p = cm_windows_child(parent, name, 0, &descriptor, 0, 0);
+    p = cm_windows_child(parent, name, 0, &descriptor, 0, 0, NULL);
     if (!p || !cm_windows_private_check(p)) goto done;
     ULONG mode = 0;
     IO_STATUS_BLOCK status;
@@ -632,8 +637,9 @@ done: {
     return ok;
 }}
 
-CmWindowsPin *cm_windows_private_directory(const CmWindowsPin *parent, const wchar_t *name, int create_only) {
-    if (!cm_windows_private_parent(parent)) return NULL;
+static CmWindowsPin *cm_windows_owned_directory(const CmWindowsPin *parent, const wchar_t *name,
+    int create_only, int private_parent, int *created) {
+    if (!(private_parent ? cm_windows_private_parent(parent) : cm_windows_storage_directory(parent))) return NULL;
     TOKEN_USER *user = cm_windows_user();
     if (!user) return NULL;
     CmWindowsPin *p = NULL;
@@ -646,10 +652,11 @@ CmWindowsPin *cm_windows_private_directory(const CmWindowsPin *parent, const wch
         || !SetSecurityDescriptorDacl(&descriptor, TRUE, (PACL)&acl, FALSE)
         || !SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED)
         || !cm_windows_private_descriptor(&descriptor, user->User.Sid)) goto done;
-    p = cm_windows_child(parent, name, 1, &descriptor, 0, 0);
+    p = cm_windows_child(parent, name, 1, &descriptor, 0, 0, created);
     if (!p && !create_only && (GetLastError() == ERROR_ALREADY_EXISTS || GetLastError() == ERROR_FILE_EXISTS))
-        p = cm_windows_child(parent, name, 1, NULL, 0, 0);
-    if (p && (!cm_windows_private_check(p) || !cm_windows_private_check(parent))) {
+        p = cm_windows_child(parent, name, 1, NULL, 0, 0, NULL);
+    if (p && (!cm_windows_private_check(p)
+        || !(private_parent ? cm_windows_private_parent(parent) : cm_windows_storage_directory(parent)))) {
         DWORD error = GetLastError();
         cm_windows_pin_free(p);
         p = NULL;
@@ -662,9 +669,14 @@ done: {
     return p;
 }}
 
-int cm_windows_private_sync(const CmWindowsPin *directory) {
-    if (!cm_windows_private_parent(directory)) return 0;
-    if (FlushFileBuffers(directory->file)) return cm_windows_private_check(directory);
+CmWindowsPin *cm_windows_private_directory(const CmWindowsPin *parent, const wchar_t *name, int create_only) {
+    return cm_windows_owned_directory(parent, name, create_only, 1, NULL);
+}
+
+static int cm_windows_directory_sync(const CmWindowsPin *directory, int private_directory) {
+    if (!(private_directory ? cm_windows_private_parent(directory) : cm_windows_storage_directory(directory))) return 0;
+    if (FlushFileBuffers(directory->file))
+        return private_directory ? cm_windows_private_parent(directory) : cm_windows_storage_directory(directory);
     if (GetLastError() != ERROR_ACCESS_DENIED) return 0;
     HANDLE handle = CreateFileW(directory->path, GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
@@ -678,8 +690,10 @@ int cm_windows_private_sync(const CmWindowsPin *directory) {
     if (before.volume != now.volume || memcmp(before.id, now.id, sizeof(before.id))) {
         SetLastError(ERROR_INVALID_DATA); goto done;
     }
-    if (!cm_windows_private_check(&current) || !FlushFileBuffers(handle)
-        || !cm_windows_private_check(directory) || !cm_windows_private_check(&current)) goto done;
+    if (!(private_directory ? cm_windows_private_parent(&current) : cm_windows_storage_directory(&current))
+        || !FlushFileBuffers(handle)
+        || !(private_directory ? cm_windows_private_parent(directory) : cm_windows_storage_directory(directory))
+        || !(private_directory ? cm_windows_private_parent(&current) : cm_windows_storage_directory(&current))) goto done;
     ok = 1;
 done: {
     DWORD error = ok ? ERROR_SUCCESS : GetLastError();
@@ -688,16 +702,52 @@ done: {
     return ok;
 }}
 
-int cm_windows_private_publish(const CmWindowsPin *parent, const wchar_t *source, const wchar_t *target) {
+int cm_windows_private_sync(const CmWindowsPin *directory) {
+    return cm_windows_directory_sync(directory, 1);
+}
+
+CmWindowsPin *cm_windows_home_create(const CmWindowsPin *parent, const wchar_t *name, int *created) {
+    if (!created) { SetLastError(ERROR_INVALID_PARAMETER); return NULL; }
+    *created = 0;
+    CmWindowsPin *p = cm_windows_owned_directory(parent, name, 1, 0, created);
+    if (p && !cm_windows_directory_sync(parent, 0)) {
+        DWORD error = GetLastError();
+        cm_windows_pin_free(p);
+        p = NULL;
+        SetLastError(error);
+    }
+    return p;
+}
+
+static int cm_windows_private_rename(const CmWindowsPin *parent, const wchar_t *source,
+    const wchar_t *target, const CmWindowsFileInformation *expected) {
     if (!cm_windows_private_parent(parent) || !cm_windows_component(parent, target)) return -1;
-    CmWindowsPin *p = cm_windows_child(parent, source, -1, NULL, 0, 1);
+    CmWindowsPin *p = cm_windows_child(parent, source, -1, NULL, 0, 1, NULL);
     if (!p) return -3;
+    CmWindowsPin *old = NULL;
     int result = -4;
     if (!cm_windows_private_check(p) || !cm_windows_private_check(parent)) goto done;
     result = -5;
     int comparison = CompareStringOrdinal(source, -1, target, -1, TRUE);
     if (!comparison) goto done;
-    if (comparison == CSTR_EQUAL) { result = 0; goto done; }
+    if (comparison == CSTR_EQUAL) {
+        if (!expected) result = 0;
+        else SetLastError(ERROR_INVALID_NAME);
+        goto done;
+    }
+    if (expected) {
+        CmWindowsFileInformation info;
+        if (!cm_windows_file_information(p, &info)) goto done;
+        if (info.attributes & FILE_ATTRIBUTE_DIRECTORY) { SetLastError(ERROR_DIRECTORY); goto done; }
+        old = cm_windows_child(parent, target, 0, NULL, 0, 1, NULL);
+        if (!old || !cm_windows_private_check(old) || !cm_windows_file_information(old, &info)) goto done;
+        if (info.volume != expected->volume || memcmp(info.id, expected->id, sizeof(info.id))) {
+            SetLastError(ERROR_INVALID_DATA); goto done;
+        }
+        /* Normal replacement needs our validation handle closed; outside pins remain authoritative. */
+        cm_windows_pin_free(old);
+        old = NULL;
+    }
     size_t length = wcslen(target);
     union {
         FILE_RENAME_INFO alignment;
@@ -705,7 +755,7 @@ int cm_windows_private_publish(const CmWindowsPin *parent, const wchar_t *source
     } buffer;
     ZeroMemory(&buffer, sizeof(buffer));
     FILE_RENAME_INFO *rename = (FILE_RENAME_INFO *)buffer.bytes;
-    rename->ReplaceIfExists = FALSE;
+    rename->ReplaceIfExists = expected != NULL;
     rename->RootDirectory = parent->file;
     rename->FileNameLength = (DWORD)(length * sizeof(wchar_t));
     memcpy(rename->FileName, target, length * sizeof(wchar_t));
@@ -727,7 +777,7 @@ int cm_windows_private_publish(const CmWindowsPin *parent, const wchar_t *source
         (ULONG)(sizeof(FILE_RENAME_INFO) + length * sizeof(wchar_t)), (FILE_INFORMATION_CLASS)10);
     if (renamed < 0) {
         DWORD error = dos_error(renamed);
-        if (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS) result = 0;
+        if (!expected && (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS)) result = 0;
         SetLastError(error);
         goto done;
     }
@@ -738,15 +788,29 @@ int cm_windows_private_publish(const CmWindowsPin *parent, const wchar_t *source
     result = 1;
 done: {
     DWORD error = result == 1 ? ERROR_SUCCESS : GetLastError();
+    cm_windows_pin_free(old);
     cm_windows_pin_free(p);
     SetLastError(error);
     return result;
 }}
 
+int cm_windows_private_publish(const CmWindowsPin *parent, const wchar_t *source, const wchar_t *target) {
+    return cm_windows_private_rename(parent, source, target, NULL);
+}
+
+int cm_windows_private_replace(const CmWindowsPin *parent, const wchar_t *source, const wchar_t *target,
+    ULONGLONG volume, const BYTE id[16]) {
+    if (!id) { SetLastError(ERROR_INVALID_PARAMETER); return -1; }
+    CmWindowsFileInformation expected = {0};
+    expected.volume = volume;
+    memcpy(expected.id, id, sizeof(expected.id));
+    return cm_windows_private_rename(parent, source, target, &expected);
+}
+
 int cm_windows_private_remove(const CmWindowsPin *parent, const wchar_t *name,
     ULONGLONG volume, const BYTE id[16], int directory) {
     if (!cm_windows_private_parent(parent)) return -1;
-    CmWindowsPin *p = cm_windows_child(parent, name, directory, NULL, 0, 1);
+    CmWindowsPin *p = cm_windows_child(parent, name, directory, NULL, 0, 1, NULL);
     if (!p) return -3;
     int result = -4;
     CmWindowsFileInformation info;
@@ -787,13 +851,13 @@ done: {
 
 CmWindowsPin *cm_windows_lock_open(const CmWindowsPin *parent, const wchar_t *name, int create) {
     if (!cm_windows_private_check(parent)) return NULL;
-    CmWindowsPin *p = cm_windows_child(parent, name, 0, NULL, 1, 0);
+    CmWindowsPin *p = cm_windows_child(parent, name, 0, NULL, 1, 0, NULL);
     if (!p && create && GetLastError() == ERROR_FILE_NOT_FOUND) {
         if (!cm_windows_private_write(parent, name, NULL, 0)) {
             DWORD error = GetLastError();
             if (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS) return NULL;
         }
-        p = cm_windows_child(parent, name, 0, NULL, 1, 0);
+        p = cm_windows_child(parent, name, 0, NULL, 1, 0, NULL);
     }
     if (!p) return NULL;
     if (!cm_windows_private_check(p) || !cm_windows_private_check(parent)) {

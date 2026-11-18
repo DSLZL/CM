@@ -45,8 +45,12 @@ CmWindowsPin *cm_windows_private_create(const CmWindowsPin *parent, const wchar_
 int cm_windows_private_write(const CmWindowsPin *parent, const wchar_t *name,
     const unsigned char *bytes, size_t length);
 CmWindowsPin *cm_windows_private_directory(const CmWindowsPin *parent, const wchar_t *name, int create_only);
+/* Fresh home only; created remains true on a later verification or durability failure. */
+CmWindowsPin *cm_windows_home_create(const CmWindowsPin *parent, const wchar_t *name, int *created);
 int cm_windows_private_sync(const CmWindowsPin *directory);
 int cm_windows_private_publish(const CmWindowsPin *parent, const wchar_t *source, const wchar_t *target);
+int cm_windows_private_replace(const CmWindowsPin *parent, const wchar_t *source, const wchar_t *target,
+    ULONGLONG volume, const BYTE id[16]);
 int cm_windows_private_remove(const CmWindowsPin *parent, const wchar_t *name,
     ULONGLONG volume, const BYTE id[16], int directory);
 CmWindowsPin *cm_windows_lock_open(const CmWindowsPin *parent, const wchar_t *name, int create);

@@ -347,6 +347,11 @@ def main(stage="initial-mechanisms"):
                 assert "test result: ok. 1 passed; 0 failed;" in output, output
                 report["gates"]["private-staging"] = {"status": "pass",
                     "scope": "create-only staging; original identity; recursive cleanup; replacement preserved"}
+                for scope in ("profile::tests::", "state::tests::"):
+                    label = scope.split("::", 1)[0] + "-transaction-tests"
+                    output = run(label, [tests["cm_runtime"], scope, "--test-threads=1"])
+                    assert re.search(r"test result: ok[.] [1-9][0-9]* passed; 0 failed;", output), output
+                    report["gates"][label] = {"status": "pass", "scope": scope}
                 for name in ("serial-eligibility", "sdk-seams-a"):
                     manifest = root / "fixtures/mods" / name / "Cargo.toml"
                     run(name + "-fmt", ["cargo", "fmt", "--manifest-path", manifest, "--", "--check"])

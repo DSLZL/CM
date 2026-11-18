@@ -1,9 +1,14 @@
 //! Immutable package generations; only cm-profile.json changes at activation.
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(not(windows))]
 use std::ffi::CString;
-use std::fs::File;
+#[cfg(windows)]
+use std::ffi::OsStr;
+#[cfg(not(windows))]
 use std::os::fd::AsRawFd;
+#[cfg(not(windows))]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(not(windows))]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::LoadError;
 use crate::loader::{self, InputPin};
+use crate::loader::Handle as File;
 use crate::package::ManagedHost;
 
 mod directory;
@@ -155,7 +161,7 @@ pub(crate) struct Snapshot {
     pub host: ManagedHost,
     pub generation_id: String,
     home: PathBuf,
-    root_identity: (u64, u64),
+    root_identity: loader::Identity,
     pins: Vec<InputPin>,
 }
 
@@ -210,10 +216,8 @@ impl Snapshot {
     }
 }
 
-fn identity(file: &File) -> Result<(u64, u64), LoadError> {
-    file.metadata()
-        .map(|m| (m.dev(), m.ino()))
-        .map_err(|e| failure(&e.to_string()))
+fn identity(file: &File) -> Result<loader::Identity, LoadError> {
+    loader::identity(file).map_err(|error| failure(&error))
 }
 
 fn present(path: &Path) -> Result<bool, LoadError> {
@@ -364,6 +368,13 @@ pub(crate) fn temporary(kind: &str) -> String {
     )
 }
 
+#[cfg(windows)]
+fn temporary_identity(directory: &Directory, name: &str) -> Result<loader::Identity, LoadError> {
+    let file = loader::open_at(&directory.file, OsStr::new(name), false)
+        .map_err(|error| failure(&error))?;
+    identity(&file)
+}
+
 pub(crate) struct Transaction {
     pub root: Directory,
     pub objects: Directory,
@@ -414,7 +425,7 @@ impl Transaction {
 
     fn begin_mode(home: &Path, host: ManagedHost, fresh: bool) -> Result<Self, LoadError> {
         let result = (|| -> Result<Self, String> {
-            if !home.is_absolute() || home == Path::new("/") {
+            if !home.is_absolute() || home.parent().is_none() {
                 return Err("CM home must be an absolute independent directory".into());
             }
             let package = host
@@ -423,6 +434,7 @@ impl Transaction {
                 .and_then(Path::parent)
                 .ok_or("missing Host root")?;
             let official = std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
                 .map(PathBuf::from)
                 .map(|p| p.join(".codex"));
             if home.starts_with(package)
@@ -434,6 +446,8 @@ impl Transaction {
                 return Err("CM home overlaps Host package or official profile".into());
             }
             if !home.exists() {
+                #[cfg(not(windows))]
+                {
                 let parent = loader::open_directory(home.parent().ok_or("missing home parent")?)?;
                 let name = CString::new(home.file_name().ok_or("missing home name")?.as_bytes())
                     .map_err(|e| e.to_string())?;
@@ -441,30 +455,40 @@ impl Transaction {
                     return Err(std::io::Error::last_os_error().to_string());
                 }
                 parent.sync_all().map_err(|e| e.to_string())?;
+                }
+                #[cfg(windows)]
+                Directory::create_home(home)?;
             }
             let raw = loader::open_directory(home)?;
             if fresh && managed(home).map_err(|e| e.to_string())? {
                 return Err("upgrade destination is already managed".into());
             }
             if !managed(home).map_err(|e| e.to_string())? {
-                if std::fs::read_dir(format!("/proc/self/fd/{}", raw.as_raw_fd()))
+                #[cfg(not(windows))]
+                let enumeration = PathBuf::from(format!("/proc/self/fd/{}", raw.as_raw_fd()));
+                #[cfg(windows)]
+                let enumeration = raw.path();
+                if std::fs::read_dir(enumeration)
                     .map_err(|e| e.to_string())?
                     .next()
                     .is_some()
                 {
                     return Err("refusing to adopt a nonempty, unmarked profile".into());
                 }
+                #[cfg(not(windows))]
                 if raw.metadata().map_err(|e| e.to_string())?.uid() != unsafe { libc::geteuid() }
                     || unsafe { libc::fchmod(raw.as_raw_fd(), 0o700) } != 0
                 {
                     return Err("cannot own private CM home".into());
                 }
+                #[cfg(windows)]
+                raw.check_private()?;
                 let root = Directory {
                     file: raw,
                     path: home.into(),
                 };
                 root.create_file(".cm-owner", OWNER)?;
-                root.file.sync_all().map_err(|e| e.to_string())?;
+                root.sync()?;
             }
             let root = Directory::open(home)?;
             let lock = root.writer_file(true)?;
@@ -572,19 +596,33 @@ impl Transaction {
         self.generations
             .create_file(&name, &bytes)
             .map_err(|e| failure(&e))?;
+        #[cfg(windows)]
+        let generation_identity = temporary_identity(&self.generations, &name)?;
         let publication = self.generations.publish(&name, &generation);
         if publication.is_err() {
+            #[cfg(not(windows))]
+            {
             let temporary = CString::new(name.as_str()).expect("temporary name");
             unsafe {
                 libc::unlinkat(self.generations.file.as_raw_fd(), temporary.as_ptr(), 0);
             }
+            }
+            #[cfg(windows)]
+            let _ = self.generations.remove(OsStr::new(&name), generation_identity, false);
         }
         let published = publication.map_err(|e| failure(&e))?;
         if !published {
+            #[cfg(not(windows))]
+            {
             let c_name = CString::new(name).expect("temporary name");
             unsafe {
                 libc::unlinkat(self.generations.file.as_raw_fd(), c_name.as_ptr(), 0);
             }
+            }
+            #[cfg(windows)]
+            self.generations
+                .remove(OsStr::new(&name), generation_identity, false)
+                .map_err(|error| failure(&error))?;
             let (existing, _) = loader::read_input(&self.generations.path.join(&generation), LIMIT)
                 .map_err(|e| failure(&e))?;
             if existing != bytes {
@@ -599,10 +637,16 @@ impl Transaction {
             generation,
         };
         let name = temporary("profile");
+        #[cfg(windows)]
+        let mut profile_identity = None;
         let result = (|| -> Result<(), LoadError> {
             self.root
                 .create_file(&name, &canonical(&active))
                 .map_err(|e| failure(&e))?;
+            #[cfg(windows)]
+            {
+                profile_identity = Some(temporary_identity(&self.root, &name)?);
+            }
             prepared.revalidate()?;
             self.revalidate()?;
             fault(3)?;
@@ -610,6 +654,8 @@ impl Transaction {
                 guard.revalidate()?;
             }
             check(&prepared)?;
+            #[cfg(not(windows))]
+            {
             let source = CString::new(name.as_str()).expect("temporary name");
             if unsafe {
                 libc::renameat(
@@ -622,16 +668,28 @@ impl Transaction {
             {
                 return Err(failure("active descriptor rename failed"));
             }
+            }
+            #[cfg(windows)]
+            self.root
+                .replace_file(&name, "cm-profile.json", self.old.as_ref().map(InputPin::identity))
+                .map_err(|error| failure(&error))?;
             fault(4)?;
-            self.root.file.sync_all().map_err(|_| {
+            self.root.sync().map_err(|_| {
                 failure("committed: active descriptor renamed; directory durability is uncertain")
             })?;
             Ok(())
         })();
         if result.is_err() {
+            #[cfg(not(windows))]
+            {
             let source = CString::new(name).expect("temporary name");
             unsafe {
                 libc::unlinkat(self.root.file.as_raw_fd(), source.as_ptr(), 0);
+            }
+            }
+            #[cfg(windows)]
+            if let Some(expected) = profile_identity {
+                let _ = self.root.remove(OsStr::new(&name), expected, false);
             }
         }
         result?;

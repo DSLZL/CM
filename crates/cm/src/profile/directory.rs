@@ -21,6 +21,45 @@ pub(crate) struct Directory {
 }
 
 impl Directory {
+    pub(crate) fn sync(&self) -> Result<(), String> {
+        #[cfg(not(windows))]
+        return self.file.sync_all().map_err(|error| error.to_string());
+        #[cfg(windows)]
+        self.file.sync_private_directory()
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn create_home(path: &Path) -> Result<Self, String> {
+        let parent = loader::open_directory(path.parent().ok_or("missing home parent")?)?;
+        let file = parent.create_home(path.file_name().ok_or("missing home name")?)?;
+        let result = Self { file, path: path.into() };
+        result
+            .check()
+            .map_err(|error| format!("committed: private home created; {error}"))?;
+        Ok(result)
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn replace_file(
+        &self,
+        temporary: &str,
+        target: &str,
+        expected: Option<loader::Identity>,
+    ) -> Result<(), String> {
+        self.check()?;
+        if let Some(expected) = expected {
+            self.file.replace(OsStr::new(temporary), OsStr::new(target), expected)?;
+            self.file
+                .sync_private_directory()
+                .and_then(|()| self.check())
+                .map_err(|error| format!("committed: namespace replacement completed; {error}"))
+        } else if self.publish(temporary, target)? {
+            Ok(())
+        } else {
+            Err("active descriptor appeared before publication".into())
+        }
+    }
+
     #[cfg(not(windows))]
     pub(crate) fn publish(&self, temporary: &str, target: &str) -> Result<bool, String> {
         self.check()?;

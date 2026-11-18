@@ -69,10 +69,22 @@ unsafe extern "C" {
         create_only: i32,
     ) -> *mut std::ffi::c_void;
     fn cm_windows_private_sync(directory: *const std::ffi::c_void) -> i32;
+    fn cm_windows_home_create(
+        parent: *const std::ffi::c_void,
+        name: *const u16,
+        created: *mut i32,
+    ) -> *mut std::ffi::c_void;
     fn cm_windows_private_publish(
         parent: *const std::ffi::c_void,
         source: *const u16,
         target: *const u16,
+    ) -> i32;
+    fn cm_windows_private_replace(
+        parent: *const std::ffi::c_void,
+        source: *const u16,
+        target: *const u16,
+        volume: u64,
+        id: *const u8,
     ) -> i32;
     fn cm_windows_private_remove(
         parent: *const std::ffi::c_void,
@@ -182,6 +194,21 @@ impl Handle {
         })
     }
 
+    pub(crate) fn create_home(&self, name: &OsStr) -> Result<Self, String> {
+        let name = wide(name)?;
+        let mut created = 0;
+        let raw = unsafe {
+            cm_windows_home_create(self.pin.0.as_ptr(), name.as_ptr(), &mut created)
+        };
+        Self::take(raw).map_err(|error| {
+            if created != 0 {
+                format!("committed: private home created; {error}")
+            } else {
+                error
+            }
+        })
+    }
+
     pub(crate) fn sync_private_directory(&self) -> Result<(), String> {
         if unsafe { cm_windows_private_sync(self.pin.0.as_ptr()) } == 0 {
             let error = io::Error::last_os_error();
@@ -191,10 +218,42 @@ impl Handle {
     }
 
     pub(crate) fn publish(&self, source: &OsStr, target: &OsStr) -> Result<bool, String> {
+        self.rename(source, target, None)
+    }
+
+    pub(crate) fn replace(
+        &self,
+        source: &OsStr,
+        target: &OsStr,
+        expected: super::Identity,
+    ) -> Result<(), String> {
+        if self.rename(source, target, Some(expected))? {
+            Ok(())
+        } else {
+            Err("expected private replacement did not commit".into())
+        }
+    }
+
+    fn rename(
+        &self,
+        source: &OsStr,
+        target: &OsStr,
+        expected: Option<super::Identity>,
+    ) -> Result<bool, String> {
         let source = wide(source)?;
         let target = wide(target)?;
         match unsafe {
-            cm_windows_private_publish(self.pin.0.as_ptr(), source.as_ptr(), target.as_ptr())
+            if let Some((volume, id)) = expected {
+                cm_windows_private_replace(
+                    self.pin.0.as_ptr(),
+                    source.as_ptr(),
+                    target.as_ptr(),
+                    volume,
+                    id.as_ptr(),
+                )
+            } else {
+                cm_windows_private_publish(self.pin.0.as_ptr(), source.as_ptr(), target.as_ptr())
+            }
         } {
             1 => Ok(true),
             0 => Ok(false),

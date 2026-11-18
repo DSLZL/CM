@@ -127,6 +127,11 @@ pub(crate) struct InputPin {
 }
 
 impl InputPin {
+    #[cfg(windows)]
+    pub(crate) fn identity(&self) -> Identity {
+        self.identity
+    }
+
     pub(crate) fn revalidate(&self) -> Result<(), String> {
         let (_, current) = read_input(&self.path, self.limit).map_err(|error| {
             format!(
