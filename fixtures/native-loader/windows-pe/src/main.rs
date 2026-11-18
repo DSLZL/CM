@@ -146,21 +146,25 @@ fn input_controls(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     drop(file);
     passed("retained-file");
     let branch = root.join("parent");
-    fs::create_dir(&branch)?;
-    fs::write(branch.join("child"), b"child")?;
-    let directory = input::open_directory(&branch)?;
-    let child = input::open_at(&directory, OsStr::new("child"), false)?;
-    let mut cloned = child.try_clone()?;
+    fs::create_dir(&branch).expect("retained-ancestors create directory");
+    fs::write(branch.join("child"), b"child").expect("retained-ancestors write child");
+    let directory = input::open_directory(&branch).expect("retained-ancestors open directory");
+    let child = input::open_at(&directory, OsStr::new("child"), false)
+        .expect("retained-ancestors open child");
+    let mut cloned = child.try_clone().expect("retained-ancestors clone child");
     assert_eq!(child.path(), branch.join("child"));
     drop(directory);
     drop(child);
     assert!(fs::rename(&branch, root.join("renamed")).is_err());
     let mut bytes = Vec::new();
-    cloned.read_to_end(&mut bytes)?;
+    cloned
+        .read_to_end(&mut bytes)
+        .expect("retained-ancestors read clone");
     assert_eq!(bytes, b"child");
     drop(cloned);
-    fs::rename(&branch, root.join("renamed"))?;
-    fs::rename(root.join("renamed"), &branch)?;
+    fs::rename(&branch, root.join("renamed"))
+        .expect("retained-ancestors rename after final drop");
+    fs::rename(root.join("renamed"), &branch).expect("retained-ancestors restore directory");
     passed("retained-ancestors");
     fs::hard_link(&path, root.join("hardlink"))?;
     assert!(input::read_input(&path, 5).is_err());
