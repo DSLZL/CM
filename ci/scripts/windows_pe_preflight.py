@@ -151,7 +151,7 @@ def mutations(data):
         ("dependency-name-rva", imported["descriptor"] + 12, struct.pack("<I", 0xFFFFFF00)),
         ("missing-null-descriptor", directories + 12, struct.pack("<I", imported["size"] - 20)),
         ("iat-mismatch", imported["iat"], struct.pack("<Q", struct.unpack_from("<Q", data, imported["iat"])[0] ^ 1)),
-        ("missing-required-entry", entry["name_offset"], b"xm_mod_entry_v1"),
+        ("missing-required-entry", entry["name_offset"], b"cm_mod_entry_v0"),
         ("export-ordinal", entry["ordinal_offset"], struct.pack("<H", 65535)),
         ("export-forwarder", entry["function_offset"], data[directories:directories + 4]),
         ("export-entry-data", entry["function_offset"], data[sections + 40 + 12:sections + 40 + 16]),
@@ -227,6 +227,8 @@ def main():
         if not link.is_absolute() or link.parent != cl.parent:
             raise RuntimeError("PE fixture requires the matching installed native ARM64 linker")
         tools["link"] = {"path": str(link), **pe_fixture(link.read_bytes(), False, expected_machine=0xAA64)}
+        dumpbin = cl.with_name("dumpbin.exe")
+        tools["dumpbin"] = {"path": str(dumpbin), **pe_fixture(dumpbin.read_bytes(), False, expected_machine=0xAA64)}
         fixture = root / "fixtures/native-loader/windows-pe"
         lock = tomllib.loads((fixture / "Cargo.lock").read_text())
         if {row["name"]: (row["version"], row.get("checksum")) for row in lock["package"]} != {
@@ -281,6 +283,7 @@ def main():
             run("pe-build", [*cargo, "build", "--locked", "--target", TARGET, "--bins", "--lib", "-j", "2"], 300, cwd=fixture)
             validator = temp / "t" / TARGET / "debug/cm-pe.exe"
             rust_payload = temp / "t" / TARGET / "debug/cm_pe_rust_payload.dll"
+            run("pe-rust-dependencies", [tools["dumpbin"]["path"], "/nologo", "/dependents", rust_payload])
             probe = temp / "pe-probe.exe"
             source = root / INPUTS[1]
             common = [cl, "/nologo", "/Bv", "/std:c11", "/W4", "/WX", "/O2", "/MT", "/utf-8", "/TC", source]
@@ -358,9 +361,10 @@ def main():
             original = payloads["ordinary"].read_bytes()
             for abi in ("cm_mod_entry_v1", "cm_mod_entry_v2"):
                 observe("c-" + abi, original, abi=abi)
-                observe("rust-" + abi, rust_payload.read_bytes(), abi=abi, constructor=False)
             for label, changed in mutations(original):
-                observe(label, changed, expected_code=3, constructor=False)
+                row = observe(label, changed, expected_code=3, constructor=False)
+                if label == "missing-required-entry" and row["rejection"] != "cm_pe_rejected: PE missing required entry":
+                    raise RuntimeError("Missing-entry control rejected for an unrelated reason")
             for label in ("delayed", "forwarded"):
                 observe("compiled-" + label, payloads[label].read_bytes(), expected_code=3, constructor=False)
             system = ctypes.create_unicode_buffer(4096)
@@ -389,6 +393,8 @@ def main():
                 observe(location + "-guarded", original, location=location)
             observe("preloaded-unchecked", original, mode="unchecked-preloaded", expected_value=77, poison_marker=True)
             observe("preloaded-guarded", original, mode="guarded-preloaded", expected_code=2, constructor=False, poison_marker=True)
+            for abi in ("cm_mod_entry_v1", "cm_mod_entry_v2"):
+                observe("rust-" + abi, rust_payload.read_bytes(), abi=abi, constructor=False)
             if any(sha(root / name) != expected for name, expected in report["source_sha256"].items()) or any(
                     sha(Path(tool["path"])) != tool["sha256"] for tool in tools.values()):
                 raise RuntimeError("PE fixture source or native tool changed")
