@@ -299,7 +299,11 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     assert_eq!(fs::read(private.path.join(name))?, bytes);
     println!("cm_private passed=directory-flush");
 
-    let child = private.child("created-directory")?;
+    let child = private.child("created-directory").map_err(|error| {
+        let path = private.path.join("created-directory");
+        let present = fs::symlink_metadata(path).is_ok();
+        format!("new private directory failed: {error}; created={present}")
+    })?;
     let child_path = child.path.clone();
     let child_identity = child.file.identity()?;
     assert_eq!(child_path, private.path.join("created-directory"));

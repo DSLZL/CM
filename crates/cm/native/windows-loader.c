@@ -327,8 +327,9 @@ static CmWindowsPin *cm_windows_child(const CmWindowsPin *parent, const wchar_t 
         CreateDirectoryHandle create_directory = (CreateDirectoryHandle)(void *)GetProcAddress(kernel, "CreateDirectory2W");
         if (!create_directory) { SetLastError(ERROR_PROC_NOT_FOUND); goto failed; }
         SECURITY_ATTRIBUTES security = {sizeof(security), descriptor, FALSE};
-        /* Windows 11 24H2+: disallow path redirects; no DELETE access conflicts with retained readers. */
-        p->file = create_directory(p->path, GENERIC_READ | GENERIC_WRITE,
+        /* Use explicit directory rights, including SYNCHRONIZE; retain no DELETE access or sharing. */
+        p->file = create_directory(p->path,
+            FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
             FILE_SHARE_READ | FILE_SHARE_WRITE, 1, &security);
         if (!p->file || p->file == INVALID_HANDLE_VALUE) { p->file = INVALID_HANDLE_VALUE; goto failed; }
         return cm_windows_input_finish(p, 1, 0);
