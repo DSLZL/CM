@@ -574,9 +574,10 @@ done: {
 int cm_windows_private_publish(const CmWindowsPin *parent, const wchar_t *source, const wchar_t *target) {
     if (!cm_windows_private_parent(parent) || !cm_windows_component(parent, target)) return -1;
     CmWindowsPin *p = cm_windows_child(parent, source, -1, NULL, 0, 1);
-    if (!p) return -1;
-    int result = -1;
+    if (!p) return -3;
+    int result = -4;
     if (!cm_windows_private_check(p) || !cm_windows_private_check(parent)) goto done;
+    result = -5;
     int comparison = CompareStringOrdinal(source, -1, target, -1, TRUE);
     if (!comparison) goto done;
     if (comparison == CSTR_EQUAL) { result = 0; goto done; }
@@ -595,6 +596,7 @@ int cm_windows_private_publish(const CmWindowsPin *parent, const wchar_t *source
         parent->path[wcslen(parent->path) - 1] == L'\\' ? L"" : L"\\", target) < 0) {
         SetLastError(ERROR_BUFFER_OVERFLOW); goto done;
     }
+    result = -6;
     if (!SetFileInformationByHandle(p->file, FileRenameInfo, rename,
         (DWORD)(sizeof(FILE_RENAME_INFO) + length * sizeof(wchar_t)))) {
         DWORD error = GetLastError();

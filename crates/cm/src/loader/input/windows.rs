@@ -136,7 +136,17 @@ impl Handle {
                 "committed: namespace publication completed; {}",
                 io::Error::last_os_error()
             )),
-            _ => Err(io::Error::last_os_error().to_string()),
+            code => {
+                let error = io::Error::last_os_error();
+                let operation = match code {
+                    -3 => "source open",
+                    -4 => "permission validation",
+                    -5 => "target preparation",
+                    -6 => "rename",
+                    _ => "parent validation",
+                };
+                Err(format!("namespace publication {operation} failed: {error}"))
+            }
         }
     }
 
