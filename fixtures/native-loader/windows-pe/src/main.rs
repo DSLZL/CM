@@ -208,7 +208,11 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
                 OsStr::new(if exclusive { "exclusive" } else { "shared" }),
             ])
             .output()?;
-        assert_eq!(output.status.code(), Some(expected), "lock probe: {output:?}");
+        assert_eq!(
+            output.status.code(),
+            Some(expected),
+            "lock probe: {output:?}"
+        );
         assert!(output.stdout.is_empty() && output.stderr.is_empty());
         Ok(())
     };

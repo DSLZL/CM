@@ -329,7 +329,9 @@ def main(stage="initial-mechanisms"):
                     "host_build_id": "sha256:" + hashlib.sha256((policy["source_sha"] + TARGET).encode()).hexdigest(),
                     "production_host": False}), encoding="utf-8")
                 os.environ["CM_HOST_IDENTITY_JSON"] = str(identity)
-                run("loader-fmt", ["cargo", "fmt", "--manifest-path", workspace, "-p", "cm-abi", "-p", "cm-runtime", "--", "--check"])
+                # Rustfmt traverses inactive modules omitted from target-only compiler inputs.
+                run("loader-fmt", ["rustfmt", "--edition", "2024", "--check",
+                    root / "crates/cm-abi/src/lib.rs", root / "crates/cm/src/lib.rs"])
                 cargo = ["--manifest-path", workspace, "--locked", "--target", TARGET, "--profile", "dev-small", "-p", "cm-abi", "-p", "cm-runtime", "--lib"]
                 run("loader-clippy", ["cargo", "clippy", *cargo, "--", "-D", "warnings"], 900)
                 artifacts = run("loader-test-build", ["cargo", "test", *cargo, "--no-run", "--message-format=json-render-diagnostics"], 900)
