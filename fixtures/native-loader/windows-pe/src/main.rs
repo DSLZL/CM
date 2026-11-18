@@ -289,6 +289,115 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     assert_eq!(fs::read(&lock_path)?, lock_bytes);
     probe_lock(true, 0)?;
     println!("cm_private passed=lock-parent-drift");
+
+    assert_eq!(private.file.sync_all().unwrap_err().raw_os_error(), Some(5));
+    private.file.sync_private_directory()?;
+    private.check()?;
+    let regular = input::open_at(&private.file, OsStr::new(name), false)?;
+    assert!(regular.sync_private_directory().is_err());
+    drop(regular);
+    assert_eq!(fs::read(private.path.join(name))?, bytes);
+    println!("cm_private passed=directory-flush");
+
+    let child = private.child("created-directory")?;
+    let child_path = child.path.clone();
+    let child_identity = child.file.identity()?;
+    assert_eq!(child_path, private.path.join("created-directory"));
+    child.check()?;
+    assert!(fs::read_dir(&child_path)?.next().is_none());
+    child.create_file("unchanged", bytes)?;
+    child.file.sync_private_directory()?;
+    drop(child);
+    println!("cm_private passed=created-private-directory");
+
+    let child = private.child("created-directory")?;
+    assert_eq!(child.file.identity()?, child_identity);
+    assert_eq!(fs::read(child.path.join("unchanged"))?, bytes);
+    child.check()?;
+    drop(child);
+    println!("cm_private passed=existing-private-directory");
+
+    assert!(private.child(name).is_err());
+    assert_eq!(fs::read(private.path.join(name))?, bytes);
+    assert_eq!(
+        input::open_at(&private.file, OsStr::new(name), false)?.identity()?,
+        created_identity
+    );
+    let junction = private.path.join("directory-junction");
+    let output = Command::new("cmd.exe")
+        .args([
+            OsStr::new("/D"),
+            OsStr::new("/C"),
+            OsStr::new("mklink"),
+            OsStr::new("/J"),
+            junction.as_os_str(),
+            child_path.as_os_str(),
+        ])
+        .output()?;
+    assert!(output.status.success(), "directory junction setup: {output:?}");
+    assert!(private.child("directory-junction").is_err());
+    assert_eq!(fs::read(child_path.join("unchanged"))?, bytes);
+    fs::remove_dir(&junction)?;
+    let target = root.join("missing-directory-target");
+    fs::create_dir(&target)?;
+    let output = Command::new("cmd.exe")
+        .args([
+            OsStr::new("/D"),
+            OsStr::new("/C"),
+            OsStr::new("mklink"),
+            OsStr::new("/J"),
+            junction.as_os_str(),
+            target.as_os_str(),
+        ])
+        .output()?;
+    assert!(output.status.success(), "dangling junction setup: {output:?}");
+    fs::remove_dir(&target)?;
+    assert!(private.child("directory-junction").is_err());
+    assert!(!target.exists());
+    assert!(fs::symlink_metadata(&junction).is_ok());
+    fs::remove_dir(&junction)?;
+    println!("cm_private passed=directory-collisions");
+
+    let before = inventory()?;
+    for name in [
+        "",
+        ".",
+        "..",
+        "../escaped",
+        "..\\escaped",
+        "stream:ads",
+        "tail.",
+        "tail ",
+        "nul\0",
+    ] {
+        assert!(private.child(name).is_err(), "{name:?}");
+    }
+    assert_eq!(inventory()?, before);
+    assert!(!root.join("escaped").exists());
+    println!("cm_private passed=directory-invalid-paths");
+
+    control("private-change")?;
+    assert!(private.child("denied-directory").is_err());
+    assert!(private.file.sync_private_directory().is_err());
+    assert_eq!(inventory()?, before);
+    control("private-restore")?;
+    private.check()?;
+    private.file.sync_private_directory()?;
+    println!("cm_private passed=directory-parent-drift");
+
+    let child = private.child("created-directory")?;
+    let grandchild = child.child("retained-child")?;
+    drop(child);
+    let moved = private.path.join("moved-directory");
+    assert!(fs::rename(&child_path, &moved).is_err());
+    assert!(fs::remove_dir(&grandchild.path).is_err());
+    grandchild.check()?;
+    drop(grandchild);
+    fs::rename(&child_path, &moved)?;
+    fs::rename(&moved, &child_path)?;
+    assert_eq!(fs::read(child_path.join("unchanged"))?, bytes);
+    private.child("created-directory")?.check()?;
+    println!("cm_private passed=directory-ancestor-pin");
     Ok(0)
 }
 

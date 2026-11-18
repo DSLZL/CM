@@ -357,23 +357,6 @@ fn acquire_writer(file: &File) -> Result<(), String> {
 }
 
 impl Directory {
-    pub(crate) fn child(&self, name: &str) -> Result<Self, String> {
-        let name_c = CString::new(name).map_err(|e| e.to_string())?;
-        if unsafe { libc::mkdirat(self.file.as_raw_fd(), name_c.as_ptr(), 0o700) } != 0
-            && std::io::Error::last_os_error().kind() != std::io::ErrorKind::AlreadyExists
-        {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-        let file = loader::open_at(&self.file, OsStr::new(name), true)?;
-        let result = Self {
-            file,
-            path: self.path.join(name),
-        };
-        result.check()?;
-        self.file.sync_all().map_err(|e| e.to_string())?;
-        Ok(result)
-    }
-
     pub(crate) fn publish(&self, temporary: &str, target: &str) -> Result<bool, String> {
         self.check()?;
         let source = CString::new(temporary).map_err(|e| e.to_string())?;

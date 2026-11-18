@@ -48,6 +48,11 @@ unsafe extern "C" {
         bytes: *const u8,
         length: usize,
     ) -> i32;
+    fn cm_windows_private_directory(
+        parent: *const std::ffi::c_void,
+        name: *const u16,
+    ) -> *mut std::ffi::c_void;
+    fn cm_windows_private_sync(directory: *const std::ffi::c_void) -> i32;
     fn cm_windows_lock_open(
         parent: *const std::ffi::c_void,
         name: *const u16,
@@ -97,6 +102,19 @@ impl Handle {
         } == 0
         {
             return Err(io::Error::last_os_error().to_string());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn create_directory(&self, name: &OsStr) -> Result<Self, String> {
+        let name = wide(name)?;
+        Self::take(unsafe { cm_windows_private_directory(self.pin.0.as_ptr(), name.as_ptr()) })
+    }
+
+    pub(crate) fn sync_private_directory(&self) -> Result<(), String> {
+        if unsafe { cm_windows_private_sync(self.pin.0.as_ptr()) } == 0 {
+            let error = io::Error::last_os_error();
+            return Err(format!("private directory flush failed: {error}"));
         }
         Ok(())
     }

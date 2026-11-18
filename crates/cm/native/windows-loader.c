@@ -320,6 +320,19 @@ static CmWindowsPin *cm_windows_child(const CmWindowsPin *parent, const wchar_t 
             0, FALSE, DUPLICATE_SAME_ACCESS)) goto failed;
         ++p->count;
     }
+    if (directory && descriptor) {
+        typedef HANDLE (WINAPI *CreateDirectoryHandle)(LPCWSTR, DWORD, DWORD, DWORD, LPSECURITY_ATTRIBUTES);
+        HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+        if (!kernel || !cm_windows_system_module(kernel)) { SetLastError(ERROR_BAD_EXE_FORMAT); goto failed; }
+        CreateDirectoryHandle create_directory = (CreateDirectoryHandle)(void *)GetProcAddress(kernel, "CreateDirectory2W");
+        if (!create_directory) { SetLastError(ERROR_PROC_NOT_FOUND); goto failed; }
+        SECURITY_ATTRIBUTES security = {sizeof(security), descriptor, FALSE};
+        /* Windows 11 24H2+: disallow path redirects; no DELETE access conflicts with retained readers. */
+        p->file = create_directory(p->path, GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, 1, &security);
+        if (!p->file || p->file == INVALID_HANDLE_VALUE) { p->file = INVALID_HANDLE_VALUE; goto failed; }
+        return cm_windows_input_finish(p, 1, 0);
+    }
     typedef NTSTATUS (NTAPI *OpenFile)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
         PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
     typedef ULONG (NTAPI *DosError)(NTSTATUS);
@@ -433,12 +446,10 @@ done: {
     return ok;
 }}
 
-int cm_windows_private_write(const CmWindowsPin *parent, const wchar_t *name,
-    const unsigned char *bytes, size_t length) {
+static int cm_windows_private_parent(const CmWindowsPin *parent) {
     CmWindowsFileInformation info;
     wchar_t filesystem[16];
     DWORD flags = 0;
-    if (length && !bytes) { SetLastError(ERROR_INVALID_PARAMETER); return 0; }
     if (!cm_windows_private_check(parent) || !cm_windows_file_information(parent, &info)) return 0;
     if (!(info.attributes & FILE_ATTRIBUTE_DIRECTORY)) { SetLastError(ERROR_DIRECTORY); return 0; }
     if (!GetVolumeInformationByHandleW(parent->file, NULL, 0, NULL, NULL, &flags, filesystem, 16)) return 0;
@@ -446,6 +457,13 @@ int cm_windows_private_write(const CmWindowsPin *parent, const wchar_t *name,
     if (_wcsicmp(filesystem, L"NTFS") || !(flags & FILE_PERSISTENT_ACLS)) {
         SetLastError(ERROR_NOT_SUPPORTED); return 0;
     }
+    return 1;
+}
+
+int cm_windows_private_write(const CmWindowsPin *parent, const wchar_t *name,
+    const unsigned char *bytes, size_t length) {
+    if (length && !bytes) { SetLastError(ERROR_INVALID_PARAMETER); return 0; }
+    if (!cm_windows_private_parent(parent)) return 0;
     typedef NTSTATUS (NTAPI *QueryFile)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
     typedef ULONG (NTAPI *DosError)(NTSTATUS);
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
@@ -491,6 +509,60 @@ done: {
         cm_windows_pin_free(p);
     }
     free(user);
+    SetLastError(error);
+    return ok;
+}}
+
+CmWindowsPin *cm_windows_private_directory(const CmWindowsPin *parent, const wchar_t *name) {
+    if (!cm_windows_private_parent(parent)) return NULL;
+    TOKEN_USER *user = cm_windows_user();
+    if (!user) return NULL;
+    CmWindowsPin *p = NULL;
+    union { ACL alignment; BYTE bytes[sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) + SECURITY_MAX_SID_SIZE]; } acl;
+    SECURITY_DESCRIPTOR descriptor;
+    if (!InitializeAcl((PACL)&acl, sizeof(acl), ACL_REVISION)
+        || !AddAccessAllowedAceEx((PACL)&acl, ACL_REVISION, 0, FILE_ALL_ACCESS, user->User.Sid)
+        || !InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION)
+        || !SetSecurityDescriptorOwner(&descriptor, user->User.Sid, FALSE)
+        || !SetSecurityDescriptorDacl(&descriptor, TRUE, (PACL)&acl, FALSE)
+        || !SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED)
+        || !cm_windows_private_descriptor(&descriptor, user->User.Sid)) goto done;
+    p = cm_windows_child(parent, name, 1, &descriptor, 0);
+    if (!p && (GetLastError() == ERROR_ALREADY_EXISTS || GetLastError() == ERROR_FILE_EXISTS))
+        p = cm_windows_child(parent, name, 1, NULL, 0);
+    if (p && (!cm_windows_private_check(p) || !cm_windows_private_check(parent))) {
+        DWORD error = GetLastError();
+        cm_windows_pin_free(p);
+        p = NULL;
+        SetLastError(error);
+    }
+done: {
+    DWORD error = p ? ERROR_SUCCESS : GetLastError();
+    free(user);
+    SetLastError(error);
+    return p;
+}}
+
+int cm_windows_private_sync(const CmWindowsPin *directory) {
+    if (!cm_windows_private_parent(directory)) return 0;
+    HANDLE handle = CreateFileW(directory->path, GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (handle == INVALID_HANDLE_VALUE) return 0;
+    CmWindowsPin current = {0};
+    CmWindowsFileInformation before, now;
+    current.file = handle;
+    int ok = 0;
+    if (!cm_windows_file_information(directory, &before) || !cm_windows_file_information(&current, &now)) goto done;
+    if (before.volume != now.volume || memcmp(before.id, now.id, sizeof(before.id))) {
+        SetLastError(ERROR_INVALID_DATA); goto done;
+    }
+    if (!cm_windows_private_check(&current) || !FlushFileBuffers(handle)
+        || !cm_windows_private_check(directory) || !cm_windows_private_check(&current)) goto done;
+    ok = 1;
+done: {
+    DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(handle);
     SetLastError(error);
     return ok;
 }}
