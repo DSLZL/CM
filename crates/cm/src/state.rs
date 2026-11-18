@@ -73,7 +73,10 @@ fn file_metadata(file: &File) -> Result<Metadata> {
             .map_err(|e| failure("state_ownership", &e))?;
         let information = loader::information(file).map_err(|e| failure("state_ownership", &e))?;
         if before != information || attributes != information.attributes {
-            return Err(failure("input_drift", "state metadata changed while reading"));
+            return Err(failure(
+                "input_drift",
+                "state metadata changed while reading",
+            ));
         }
         Ok(Metadata {
             information,
@@ -429,18 +432,22 @@ impl Store {
             lease
         };
         #[cfg(windows)]
-        let lease = loader::open_lock(&root.file, OsStr::new(".lease"), initialize).map_err(|error| {
-            if error.raw_os_error() == Some(32) {
-                failure("state_busy", "state lease is in use")
-            } else {
-                failure("state_ownership", "unsafe state lease")
-            }
-        })?;
+        let lease =
+            loader::open_lock(&root.file, OsStr::new(".lease"), initialize).map_err(|error| {
+                if error.raw_os_error() == Some(32) {
+                    failure("state_busy", "state lease is in use")
+                } else {
+                    failure("state_ownership", "unsafe state lease")
+                }
+            })?;
         let metadata = file_metadata(&lease)?;
         if acquire_lease {
             loader::try_lock(&lease, exclusive).map_err(|error| {
                 if error.kind() == std::io::ErrorKind::WouldBlock {
-                    failure("state_busy", "state is in use; exit CM runtimes before this operation")
+                    failure(
+                        "state_busy",
+                        "state is in use; exit CM runtimes before this operation",
+                    )
                 } else {
                     io(error)
                 }
@@ -615,8 +622,7 @@ fn read_marker(parent: &Directory, name: &str, limit: u64) -> Result<(Vec<u8>, P
         .take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(io)?;
-    if bytes.len() as u64 != before.len() || stamp(&before) != stamp(&file_metadata(&file)?)
-    {
+    if bytes.len() as u64 != before.len() || stamp(&before) != stamp(&file_metadata(&file)?) {
         return Err(failure("input_drift", "state marker changed while reading"));
     }
     let pin = Pin {
@@ -787,12 +793,13 @@ fn unlink(parent: &Directory, name: &str, directory: bool) -> Result<()> {
     }
     #[cfg(not(windows))]
     {
-    let name = CString::new(name).map_err(|_| failure("state_ownership", "invalid unlink name"))?;
-    let flags = if directory { libc::AT_REMOVEDIR } else { 0 };
-    if unsafe { libc::unlinkat(parent.file.as_raw_fd(), name.as_ptr(), flags) } != 0 {
-        return Err(io(std::io::Error::last_os_error()));
-    }
-    parent.file.sync_all().map_err(io)
+        let name =
+            CString::new(name).map_err(|_| failure("state_ownership", "invalid unlink name"))?;
+        let flags = if directory { libc::AT_REMOVEDIR } else { 0 };
+        if unsafe { libc::unlinkat(parent.file.as_raw_fd(), name.as_ptr(), flags) } != 0 {
+            return Err(io(std::io::Error::last_os_error()));
+        }
+        parent.file.sync_all().map_err(io)
     }
 }
 
@@ -899,13 +906,15 @@ fn copy_file(
     if let Some(output) = &output {
         #[cfg(not(windows))]
         {
-        if unsafe { libc::fchmod(output.as_raw_fd(), before.mode() & 0o777) } != 0 {
-            return Err(io(std::io::Error::last_os_error()));
-        }
-        output.sync_all().map_err(io)?;
+            if unsafe { libc::fchmod(output.as_raw_fd(), before.mode() & 0o777) } != 0 {
+                return Err(io(std::io::Error::last_os_error()));
+            }
+            output.sync_all().map_err(io)?;
         }
         #[cfg(windows)]
-        output.copy_metadata(&input).map_err(|e| profile::failure(&e))?;
+        output
+            .copy_metadata(&input)
+            .map_err(|e| profile::failure(&e))?;
     }
     budget.bytes += bytes;
     record(
@@ -975,13 +984,16 @@ fn walk(
     if let Some(destination) = destination {
         #[cfg(not(windows))]
         {
-        if unsafe { libc::fchmod(destination.file.as_raw_fd(), before.mode() & 0o777) } != 0 {
-            return Err(io(std::io::Error::last_os_error()));
-        }
-        destination.file.sync_all().map_err(io)?;
+            if unsafe { libc::fchmod(destination.file.as_raw_fd(), before.mode() & 0o777) } != 0 {
+                return Err(io(std::io::Error::last_os_error()));
+            }
+            destination.file.sync_all().map_err(io)?;
         }
         #[cfg(windows)]
-        destination.file.copy_metadata(&source.file).map_err(|e| profile::failure(&e))?;
+        destination
+            .file
+            .copy_metadata(&source.file)
+            .map_err(|e| profile::failure(&e))?;
     }
     capture.pins.push(Pin {
         path: source.path.clone(),
@@ -1064,19 +1076,24 @@ fn capture_owner(
         capture,
     )?;
     if let Some(target) = &target {
-        for (relative, new) in [(format!("{id}/{}", owner.schema), &target[1]), (id.to_owned(), &target[0])] {
+        for (relative, new) in [
+            (format!("{id}/{}", owner.schema), &target[1]),
+            (id.to_owned(), &target[0]),
+        ] {
             let old = Directory::open(&root.path.join(&relative))
                 .map_err(|_| failure("state_ownership", "unsafe state header"))?;
             #[cfg(not(windows))]
             {
-            let mode = old.file.metadata().map_err(io)?.mode() & 0o777;
-            if unsafe { libc::fchmod(new.file.as_raw_fd(), mode) } != 0 {
-                return Err(io(std::io::Error::last_os_error()));
-            }
-            new.file.sync_all().map_err(io)?;
+                let mode = old.file.metadata().map_err(io)?.mode() & 0o777;
+                if unsafe { libc::fchmod(new.file.as_raw_fd(), mode) } != 0 {
+                    return Err(io(std::io::Error::last_os_error()));
+                }
+                new.file.sync_all().map_err(io)?;
             }
             #[cfg(windows)]
-            new.file.copy_metadata(&old.file).map_err(|e| profile::failure(&e))?;
+            new.file
+                .copy_metadata(&old.file)
+                .map_err(|e| profile::failure(&e))?;
         }
     }
     Ok(())
@@ -1763,7 +1780,9 @@ fn remove_tree(parent: &Directory, name: &str) -> Result<()> {
     {
         let expected = loader::identity(&directory.file).map_err(|e| profile::failure(&e))?;
         drop(directory);
-        parent.remove(OsStr::new(name), expected, true).map_err(|e| profile::failure(&e))
+        parent
+            .remove(OsStr::new(name), expected, true)
+            .map_err(|e| profile::failure(&e))
     }
     #[cfg(not(windows))]
     unlink(parent, name, true)
@@ -2030,7 +2049,14 @@ mod tests {
         #[cfg(windows)]
         {
             let output = Process::new("cmd.exe")
-                .args([OsStr::new("/D"), OsStr::new("/C"), OsStr::new("mklink"), OsStr::new("/J"), link.as_os_str(), target.as_os_str()])
+                .args([
+                    OsStr::new("/D"),
+                    OsStr::new("/C"),
+                    OsStr::new("mklink"),
+                    OsStr::new("/J"),
+                    link.as_os_str(),
+                    target.as_os_str(),
+                ])
                 .output()
                 .unwrap();
             assert!(output.status.success(), "junction setup: {output:?}");
@@ -2218,8 +2244,14 @@ mod tests {
             capture_owner(&source, Some(&destination), id, owner, &mut copied).unwrap();
         }
         assert_eq!(original.entries, copied.entries);
-        assert_eq!(capture_tree(&destination, &view.owners).unwrap().entries, original.entries);
-        let value = destination.path.join(owner(1).relative("example-tool")).join("value");
+        assert_eq!(
+            capture_tree(&destination, &view.owners).unwrap().entries,
+            original.entries
+        );
+        let value = destination
+            .path
+            .join(owner(1).relative("example-tool"))
+            .join("value");
         assert!(fs::metadata(&value).unwrap().permissions().readonly());
         assert_eq!(fs::read(&value).unwrap(), b"example-tool");
         assert!(cleanup(&source, "example-tool", &owner(1)).is_err());
@@ -2228,7 +2260,10 @@ mod tests {
         cleanup(&source, "example-tool", &owner(1)).unwrap();
         cleanup(&destination, "example-tool", &owner(1)).unwrap();
         assert!(!value.exists());
-        assert_eq!(fs::read(source.path.join(owner(1).relative("other")).join("value")).unwrap(), b"other");
+        assert_eq!(
+            fs::read(source.path.join(owner(1).relative("other")).join("value")).unwrap(),
+            b"other"
+        );
     }
 
     #[test]
@@ -2244,7 +2279,10 @@ mod tests {
             let root = held.store.tree(&view).unwrap();
             let own = owner_directory(&root, "example-tool", &owner(1)).unwrap();
             let external = home.0.join("external");
-            Directory::open(&home.0).unwrap().create_file("external", b"preserve").unwrap();
+            Directory::open(&home.0)
+                .unwrap()
+                .create_file("external", b"preserve")
+                .unwrap();
             match kind {
                 #[cfg(not(windows))]
                 "symlink" => symlink(&external, own.path.join("bad")).unwrap(),
@@ -2292,7 +2330,10 @@ mod tests {
             .set_len(MAX_BYTES + 1)
             .unwrap();
         #[cfg(windows)]
-        own.create_output("large").unwrap().set_len(MAX_BYTES + 1).unwrap();
+        own.create_output("large")
+            .unwrap()
+            .set_len(MAX_BYTES + 1)
+            .unwrap();
         assert!(capture_tree(&tree, &view.owners).is_err());
         fs::remove_file(large).unwrap();
         let capture = capture_tree(&tree, &view.owners).unwrap();
@@ -2300,7 +2341,9 @@ mod tests {
         #[cfg(windows)]
         {
             assert!(fs::rename(&path, home.0.join("old-value")).is_err());
-            for pin in &capture.pins { pin.revalidate().unwrap(); }
+            for pin in &capture.pins {
+                pin.revalidate().unwrap();
+            }
             drop(capture);
         }
         fs::rename(&path, home.0.join("old-value")).unwrap();
@@ -2339,10 +2382,10 @@ mod tests {
         let path = held.store.root.path.join(".lease");
         #[cfg(not(windows))]
         {
-        fs::rename(&path, held.store.root.path.join("old-lease")).unwrap();
-        held.store.root.create_file(".lease", b"").unwrap();
-        assert!(held.revalidate().is_err());
-        assert!(guard(&home.0, true).is_err());
+            fs::rename(&path, held.store.root.path.join("old-lease")).unwrap();
+            held.store.root.create_file(".lease", b"").unwrap();
+            assert!(held.revalidate().is_err());
+            assert!(guard(&home.0, true).is_err());
         }
         #[cfg(windows)]
         {

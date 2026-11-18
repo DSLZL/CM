@@ -12,7 +12,11 @@ use serde::{Deserialize, Serialize};
 use crate::LoadError;
 use crate::loader;
 
-const ENTRYPOINT: &str = if cfg!(windows) { "bin/codex.exe" } else { "bin/codex" };
+const ENTRYPOINT: &str = if cfg!(windows) {
+    "bin/codex.exe"
+} else {
+    "bin/codex"
+};
 const EXECUTABLE: &str = if cfg!(windows) { "codex.exe" } else { "codex" };
 
 #[derive(Deserialize)]
@@ -51,7 +55,9 @@ fn relative(value: &str) -> bool {
 fn same_build_inode(executable: &Path, original: &Path) -> bool {
     #[cfg(windows)]
     return match (file_identity(executable), file_identity(original)) {
-        (Ok(actual), Ok(built)) => actual.information.regular && actual.information.identity == built.information.identity,
+        (Ok(actual), Ok(built)) => {
+            actual.information.regular && actual.information.identity == built.information.identity
+        }
         _ => false,
     };
     #[cfg(not(windows))]
@@ -141,7 +147,8 @@ fn validate_at(executable: &Path, allow_development: bool) -> Result<(), LoadErr
         if let Some(target) = option_env!("CARGO_TARGET_DIR").filter(|_| allow_development) {
             let original = Path::new(target)
                 .join(loader::TARGET)
-                .join("dev-small").join(EXECUTABLE);
+                .join("dev-small")
+                .join(EXECUTABLE);
             if same_build_inode(executable, &original)
                 || same_development_copy(executable, root, &original)
             {
@@ -186,10 +193,10 @@ fn validate_at(executable: &Path, allow_development: bool) -> Result<(), LoadErr
             } else if ["100644", "100755"].contains(&entry.mode.as_str()) && metadata.is_file() {
                 #[cfg(not(windows))]
                 {
-                use std::os::unix::fs::PermissionsExt;
-                if (metadata.permissions().mode() & 0o111 != 0) != (entry.mode == "100755") {
-                    return Err(format!("package mode mismatch: {}", entry.path));
-                }
+                    use std::os::unix::fs::PermissionsExt;
+                    if (metadata.permissions().mode() & 0o111 != 0) != (entry.mode == "100755") {
+                        return Err(format!("package mode mismatch: {}", entry.path));
+                    }
                 }
                 loader::executable_hash(&path)?
             } else {
@@ -210,9 +217,13 @@ fn validate_at(executable: &Path, allow_development: bool) -> Result<(), LoadErr
         ];
         #[cfg(windows)]
         let required = [
-            "bin/codex.exe", "bin/codex-code-mode-host.exe", "codex-path/rg.exe",
-            "codex-resources/codex-command-runner.exe", "codex-resources/codex-windows-sandbox-setup.exe",
-            "cm-host.json", "dependency-inventory.json",
+            "bin/codex.exe",
+            "bin/codex-code-mode-host.exe",
+            "codex-path/rg.exe",
+            "codex-resources/codex-command-runner.exe",
+            "codex-resources/codex-windows-sandbox-setup.exe",
+            "cm-host.json",
+            "dependency-inventory.json",
         ];
         for required in required {
             if !paths.contains(required) {
@@ -253,15 +264,26 @@ struct FileIdentity {
 
 #[cfg(windows)]
 fn file_identity(path: &Path) -> Result<FileIdentity, LoadError> {
-    let invalid = || LoadError::input("upgrade_package", "", "missing or unsafe Host package member");
+    let invalid = || {
+        LoadError::input(
+            "upgrade_package",
+            "",
+            "missing or unsafe Host package member",
+        )
+    };
     let metadata = fs::symlink_metadata(path).map_err(|_| invalid())?;
     let handle = if metadata.is_dir() {
         loader::open_directory(path).map_err(|_| invalid())?
     } else {
-        let directory = loader::open_directory(path.parent().ok_or_else(invalid)?).map_err(|_| invalid())?;
-        loader::open_at(&directory, path.file_name().ok_or_else(invalid)?, false).map_err(|_| invalid())?
+        let directory =
+            loader::open_directory(path.parent().ok_or_else(invalid)?).map_err(|_| invalid())?;
+        loader::open_at(&directory, path.file_name().ok_or_else(invalid)?, false)
+            .map_err(|_| invalid())?
     };
-    Ok(FileIdentity { path: path.into(), information: loader::information(&handle).map_err(|_| invalid())? })
+    Ok(FileIdentity {
+        path: path.into(),
+        information: loader::information(&handle).map_err(|_| invalid())?,
+    })
 }
 
 #[cfg(not(windows))]

@@ -1,6 +1,6 @@
 //! Explicit, offline preparation of an independent profile for this Host.
-use std::collections::BTreeMap;
 use crate::loader::Handle as File;
+use std::collections::BTreeMap;
 #[cfg(not(windows))]
 use std::os::fd::AsRawFd;
 use std::path::{Component, Path, PathBuf};
@@ -29,22 +29,38 @@ fn overlaps(left: &Path, right: &Path) -> bool {
     use std::os::windows::ffi::OsStrExt;
     unsafe extern "system" {
         #[link_name = "CompareStringOrdinal"]
-        fn compare_ordinal(left: *const u16, left_length: i32, right: *const u16, right_length: i32, ignore_case: i32) -> i32;
+        fn compare_ordinal(
+            left: *const u16,
+            left_length: i32,
+            right: *const u16,
+            right_length: i32,
+            ignore_case: i32,
+        ) -> i32;
     }
     let starts = |left: &Path, right: &Path| {
         let mut left = left.components();
         for right in right.components() {
-            let Some(left) = left.next() else { return false; };
+            let Some(left) = left.next() else {
+                return false;
+            };
             let left: Vec<_> = left.as_os_str().encode_wide().collect();
             let right: Vec<_> = right.as_os_str().encode_wide().collect();
             if left.len() > i32::MAX as usize || right.len() > i32::MAX as usize {
                 return true;
             }
-            let comparison = unsafe { compare_ordinal(left.as_ptr(), left.len() as i32, right.as_ptr(), right.len() as i32, 1) };
+            let comparison = unsafe {
+                compare_ordinal(
+                    left.as_ptr(),
+                    left.len() as i32,
+                    right.as_ptr(),
+                    right.len() as i32,
+                    1,
+                )
+            };
             // A failed comparison must not permit an unverified destination.
             match comparison {
                 0 => return true,
-                2 => {},
+                2 => {}
                 _ => return false,
             }
         }
@@ -63,18 +79,20 @@ impl Destination {
     fn capture(path: &Path, source: &Path, hosts: &[&Path]) -> Result<Self, LoadError> {
         if !path.is_absolute()
             || path.parent().is_none()
-            || path
-                .components()
-                .any(|part| match part {
-                    Component::RootDir | Component::Normal(_) => false,
-                    #[cfg(windows)]
-                    Component::Prefix(prefix) => !matches!(prefix.kind(), std::path::Prefix::Disk(_)),
-                    _ => true,
-                })
+            || path.components().any(|part| match part {
+                Component::RootDir | Component::Normal(_) => false,
+                #[cfg(windows)]
+                Component::Prefix(prefix) => !matches!(prefix.kind(), std::path::Prefix::Disk(_)),
+                _ => true,
+            })
             || overlaps(path, source)
             || hosts.iter().any(|host| overlaps(path, host))
-            || ["HOME", if cfg!(windows) { "USERPROFILE" } else { "HOME" }].iter().any(|name| std::env::var_os(name)
-                .is_some_and(|home| overlaps(path, &PathBuf::from(home).join(".codex"))))
+            || ["HOME", if cfg!(windows) { "USERPROFILE" } else { "HOME" }]
+                .iter()
+                .any(|name| {
+                    std::env::var_os(name)
+                        .is_some_and(|home| overlaps(path, &PathBuf::from(home).join(".codex")))
+                })
         {
             return Err(failure(
                 "upgrade_destination",
@@ -93,7 +111,8 @@ impl Destination {
                 let directory =
                     Directory::open(path).map_err(|e| failure("upgrade_destination", &e))?;
                 #[cfg(not(windows))]
-                let enumeration = PathBuf::from(format!("/proc/self/fd/{}", directory.file.as_raw_fd()));
+                let enumeration =
+                    PathBuf::from(format!("/proc/self/fd/{}", directory.file.as_raw_fd()));
                 #[cfg(windows)]
                 let enumeration = directory.file.path();
                 if std::fs::read_dir(enumeration)
@@ -181,7 +200,8 @@ pub fn run(
     }
     let target_host = package::managed_identity()?;
     let target_package = package::PackagePin::capture(&target_host)?;
-    let executable = loader::current_executable().map_err(|e| failure("host_identity", &e.to_string()))?;
+    let executable =
+        loader::current_executable().map_err(|e| failure("host_identity", &e.to_string()))?;
     let current = runtime_plan::HostIdentity::read(&executable)?;
     if target_package.identity != current {
         return Err(failure(
@@ -398,11 +418,26 @@ mod tests {
         );
         #[cfg(windows)]
         {
-            for path in [r"C:\", r"c:\CM\source", r"C:\CM\source\child", r"C:\CM\source\..\candidate", r"\\?\C:\CM\candidate"] {
-                assert!(Destination::capture(Path::new(path), Path::new(r"C:\CM\SOURCE"), &[]).is_err(), "{path}");
+            for path in [
+                r"C:\",
+                r"c:\CM\source",
+                r"C:\CM\source\child",
+                r"C:\CM\source\..\candidate",
+                r"\\?\C:\CM\candidate",
+            ] {
+                assert!(
+                    Destination::capture(Path::new(path), Path::new(r"C:\CM\SOURCE"), &[]).is_err(),
+                    "{path}"
+                );
             }
-            assert!(overlaps(Path::new(r"C:\CM\HOST\profile"), Path::new(r"c:\cm\host")));
-            assert!(!overlaps(Path::new(r"C:\CM\candidate"), Path::new(r"c:\cm\source")));
+            assert!(overlaps(
+                Path::new(r"C:\CM\HOST\profile"),
+                Path::new(r"c:\cm\host")
+            ));
+            assert!(!overlaps(
+                Path::new(r"C:\CM\candidate"),
+                Path::new(r"c:\cm\source")
+            ));
         }
     }
 }

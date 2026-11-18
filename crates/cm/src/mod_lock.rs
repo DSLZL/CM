@@ -1,6 +1,4 @@
 //! A reproducibility record, never executable input or a substitute for prepare/commit.
-#[cfg(not(windows))]
-use std::{ffi::CString, fs::File};
 #[cfg(windows)]
 use std::ffi::OsStr;
 use std::io::Write;
@@ -11,6 +9,8 @@ use std::os::fd::FromRawFd;
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+#[cfg(not(windows))]
+use std::{ffi::CString, fs::File};
 
 use serde::Serialize;
 
@@ -66,9 +66,11 @@ pub fn write(home: &Path, prepared: &PreparedPlan) -> Result<(), LoadError> {
     let directory =
         loader::open_directory(home).map_err(|_| failure("mod.lock: unsafe profile directory"))?;
     #[cfg(windows)]
-    directory.check_private().map_err(|_| failure("mod.lock: unsafe profile directory"))?;
-    let before = loader::identity(&directory)
-        .map_err(|_| failure("mod.lock: cannot inspect profile"))?;
+    directory
+        .check_private()
+        .map_err(|_| failure("mod.lock: unsafe profile directory"))?;
+    let before =
+        loader::identity(&directory).map_err(|_| failure("mod.lock: cannot inspect profile"))?;
     let old = if present(home)? {
         Some(
             loader::read_input(&home.join("mod.lock"), LIMIT)
@@ -91,23 +93,26 @@ pub fn write(home: &Path, prepared: &PreparedPlan) -> Result<(), LoadError> {
     let native_name = CString::new(name.as_str()).expect("constant path parts");
     #[cfg(not(windows))]
     let mut temp = {
-    let fd = unsafe {
-        libc::openat(
-            directory.as_raw_fd(),
-            native_name.as_ptr(),
-            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            0o600,
-        )
-    };
-    if fd < 0 {
-        return Err(failure("mod.lock: cannot create exclusive temporary file"));
-    }
-    unsafe { File::from_raw_fd(fd) }
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                native_name.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err(failure("mod.lock: cannot create exclusive temporary file"));
+        }
+        unsafe { File::from_raw_fd(fd) }
     };
     #[cfg(windows)]
-    let mut temp = directory.create_output(OsStr::new(&name)).map_err(|_| failure("mod.lock: cannot create exclusive temporary file"))?;
+    let mut temp = directory
+        .create_output(OsStr::new(&name))
+        .map_err(|_| failure("mod.lock: cannot create exclusive temporary file"))?;
     #[cfg(windows)]
-    let temporary_identity = loader::identity(&temp).map_err(|_| failure("mod.lock: cannot identify temporary file"))?;
+    let temporary_identity =
+        loader::identity(&temp).map_err(|_| failure("mod.lock: cannot identify temporary file"))?;
     let result = (|| {
         temp.write_all(&bytes)
             .and_then(|()| temp.flush())
@@ -128,31 +133,37 @@ pub fn write(home: &Path, prepared: &PreparedPlan) -> Result<(), LoadError> {
         }
         #[cfg(not(windows))]
         {
-        if unsafe {
-            libc::renameat(
-                directory.as_raw_fd(),
-                native_name.as_ptr(),
-                directory.as_raw_fd(),
-                c"mod.lock".as_ptr(),
-            )
-        } != 0
-        {
-            return Err(failure("mod.lock: atomic rename failed"));
-        }
-        directory
-            .sync_all()
-            .map_err(|_| failure("mod.lock: directory sync failed after rename"))?;
+            if unsafe {
+                libc::renameat(
+                    directory.as_raw_fd(),
+                    native_name.as_ptr(),
+                    directory.as_raw_fd(),
+                    c"mod.lock".as_ptr(),
+                )
+            } != 0
+            {
+                return Err(failure("mod.lock: atomic rename failed"));
+            }
+            directory
+                .sync_all()
+                .map_err(|_| failure("mod.lock: directory sync failed after rename"))?;
         }
         #[cfg(windows)]
         {
             drop(temp);
             if let Some(old) = &old {
-                directory.replace(OsStr::new(&name), OsStr::new("mod.lock"), old.identity())
+                directory
+                    .replace(OsStr::new(&name), OsStr::new("mod.lock"), old.identity())
                     .map_err(|e| failure(&e))?;
-            } else if !directory.publish(OsStr::new(&name), OsStr::new("mod.lock")).map_err(|e| failure(&e))? {
+            } else if !directory
+                .publish(OsStr::new(&name), OsStr::new("mod.lock"))
+                .map_err(|e| failure(&e))?
+            {
                 return Err(failure("mod.lock: concurrent lock appeared"));
             }
-            directory.sync_private_directory().map_err(|e| failure(&format!("committed: {e}")))?;
+            directory
+                .sync_private_directory()
+                .map_err(|e| failure(&format!("committed: {e}")))?;
         }
         Ok(())
     })();

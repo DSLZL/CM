@@ -40,13 +40,20 @@ impl Binary {
             "aarch64-unknown-linux-gnu" | "aarch64-pc-windows-msvc" => "armv8-a",
             _ => return false,
         };
-        self.cpu == cpu && if self.target.ends_with("-pc-windows-msvc") {
-            self.path.ends_with(".dll") && self.glibc_min.is_empty()
-                && self.windows_min.as_deref().and_then(windows_version).is_some()
-        } else {
-            self.path.ends_with(".so") && self.windows_min.is_none()
-                && system_version(&self.glibc_min).is_some()
-        }
+        self.cpu == cpu
+            && if self.target.ends_with("-pc-windows-msvc") {
+                self.path.ends_with(".dll")
+                    && self.glibc_min.is_empty()
+                    && self
+                        .windows_min
+                        .as_deref()
+                        .and_then(windows_version)
+                        .is_some()
+            } else {
+                self.path.ends_with(".so")
+                    && self.windows_min.is_none()
+                    && system_version(&self.glibc_min).is_some()
+            }
     }
 }
 
@@ -203,7 +210,11 @@ impl BinaryManifest {
         if self.binary.entry != entry {
             return Err("binary.entry: unsupported ABI entry".into());
         }
-        if !self.binary.path.ends_with(if cfg!(windows) { ".dll" } else { ".so" }) {
+        if !self
+            .binary
+            .path
+            .ends_with(if cfg!(windows) { ".dll" } else { ".so" })
+        {
             return Err("binary.path: unsupported payload path".into());
         }
         if self.binary.target != loader::TARGET {
@@ -213,7 +224,12 @@ impl BinaryManifest {
             return Err("binary.cpu: unsupported CPU baseline".into());
         }
         if !self.binary.valid_platform() {
-            return Err(if cfg!(windows) { "binary.windows_min: invalid or mixed system declaration" } else { "binary.glibc_min: invalid system declaration" }.into());
+            return Err(if cfg!(windows) {
+                "binary.windows_min: invalid or mixed system declaration"
+            } else {
+                "binary.glibc_min: invalid system declaration"
+            }
+            .into());
         }
         loader::payload_path(std::path::Path::new("/package"), &self.binary.path)?;
         if self.contributions.is_empty()
@@ -357,18 +373,23 @@ impl BinaryManifest {
         }
         #[cfg(not(windows))]
         {
-        let actual = unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) }
-            .to_str()
-            .map_err(|_| "glibc identity")?;
-        if system_version(actual) < system_version(&self.binary.glibc_min) {
-            return Err("binary.glibc_min: current system is too old".into());
-        }
+            let actual = unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) }
+                .to_str()
+                .map_err(|_| "glibc identity")?;
+            if system_version(actual) < system_version(&self.binary.glibc_min) {
+                return Err("binary.glibc_min: current system is too old".into());
+            }
         }
         #[cfg(windows)]
         {
             let actual = loader::windows_system_version()?;
             let actual = windows_version(&actual).ok_or("native Windows identity")?;
-            let minimum = self.binary.windows_min.as_deref().and_then(windows_version).ok_or("binary.windows_min: invalid system declaration")?;
+            let minimum = self
+                .binary
+                .windows_min
+                .as_deref()
+                .and_then(windows_version)
+                .ok_or("binary.windows_min: invalid system declaration")?;
             if actual < minimum {
                 return Err("binary.windows_min: current system is too old".into());
             }
@@ -410,11 +431,20 @@ pub(crate) fn system_version(value: &str) -> Option<(u32, u32)> {
 }
 
 pub(crate) fn windows_version(value: &str) -> Option<(u32, u32, u32)> {
-    if value.is_empty() || value.len() > 32 || !value.bytes().all(|byte| byte.is_ascii_digit() || byte == b'.') {
+    if value.is_empty()
+        || value.len() > 32
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.')
+    {
         return None;
     }
     let mut parts = value.split('.');
-    let version = (parts.next()?.parse().ok()?, parts.next()?.parse().ok()?, parts.next()?.parse().ok()?);
+    let version = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
     parts.next().is_none().then_some(version)
 }
 
@@ -506,12 +536,20 @@ mod tests {
             "path": "payload.dll", "size": 1, "sha256": "a".repeat(64),
             "target": "aarch64-pc-windows-msvc", "entry": "cm_mod_entry_v2",
             "windows_min": "10.0.26100", "cpu": "armv8-a"
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(binary.valid_platform());
         binary.glibc_min = "2.17".into();
         assert!(!binary.valid_platform());
         binary.glibc_min.clear();
-        for value in ["", "10.0", "10.a.26100", "+10.0.26100", "10.0.26100.1", "10.0.4294967296"] {
+        for value in [
+            "",
+            "10.0",
+            "10.a.26100",
+            "+10.0.26100",
+            "10.0.26100.1",
+            "10.0.4294967296",
+        ] {
             assert!(windows_version(value).is_none(), "{value}");
             binary.windows_min = Some(value.into());
             assert!(!binary.valid_platform(), "{value}");

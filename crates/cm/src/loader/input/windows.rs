@@ -400,9 +400,8 @@ pub(crate) fn open_at(parent: &Handle, name: &OsStr, directory: bool) -> Result<
 
 pub(crate) fn open_lock(parent: &Handle, name: &OsStr, create: bool) -> io::Result<Handle> {
     let name = wide(name).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-    let raw = unsafe {
-        cm_windows_lock_open(parent.pin.0.as_ptr(), name.as_ptr(), i32::from(create))
-    };
+    let raw =
+        unsafe { cm_windows_lock_open(parent.pin.0.as_ptr(), name.as_ptr(), i32::from(create)) };
     if raw.is_null() {
         return Err(io::Error::last_os_error());
     }

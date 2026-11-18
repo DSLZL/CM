@@ -6,8 +6,13 @@ use std::process::{Command, ExitStatus};
 use std::ptr::NonNull;
 
 unsafe extern "C" {
-    fn cm_windows_verifier_spawn(program: *const u16, command: *mut u16, environment: *const u16,
-        output: *mut *mut c_void, diagnostics: *mut *mut c_void) -> *mut c_void;
+    fn cm_windows_verifier_spawn(
+        program: *const u16,
+        command: *mut u16,
+        environment: *const u16,
+        output: *mut *mut c_void,
+        diagnostics: *mut *mut c_void,
+    ) -> *mut c_void;
     fn cm_windows_verifier_poll(process: *const c_void, code: *mut u32) -> i32;
     fn cm_windows_verifier_stop(process: *mut c_void);
     fn cm_windows_verifier_free(process: *mut c_void);
@@ -16,7 +21,10 @@ unsafe extern "C" {
 fn wide(value: &OsStr) -> io::Result<Vec<u16>> {
     let value: Vec<_> = value.encode_wide().collect();
     if value.contains(&0) || value.len() > 32766 {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid verifier argument"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid verifier argument",
+        ));
     }
     Ok(value)
 }
@@ -25,8 +33,14 @@ fn quote(value: &[u16], result: &mut Vec<u16>) {
     result.push(34);
     let mut slashes = 0;
     for &unit in value {
-        if unit == 92 { slashes += 1; continue; }
-        result.extend(std::iter::repeat_n(92, if unit == 34 { 2 * slashes + 1 } else { slashes }));
+        if unit == 92 {
+            slashes += 1;
+            continue;
+        }
+        result.extend(std::iter::repeat_n(
+            92,
+            if unit == 34 { 2 * slashes + 1 } else { slashes },
+        ));
         result.push(unit);
         slashes = 0;
     }
@@ -41,8 +55,13 @@ pub(super) struct Child {
 }
 
 pub(super) fn spawn(command: &Command) -> io::Result<Child> {
-    if !std::path::Path::new(command.get_program()).is_absolute() || command.get_current_dir().is_some() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "verifier requires an absolute program"));
+    if !std::path::Path::new(command.get_program()).is_absolute()
+        || command.get_current_dir().is_some()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "verifier requires an absolute program",
+        ));
     }
     let mut program = wide(command.get_program())?;
     program.push(0);
@@ -53,7 +72,10 @@ pub(super) fn spawn(command: &Command) -> io::Result<Child> {
         quote(&wide(argument)?, &mut arguments);
     }
     if arguments.len() > 32766 {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "verifier command exceeds bounds"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "verifier command exceeds bounds",
+        ));
     }
     arguments.push(0);
     unsafe extern "system" {
@@ -61,16 +83,29 @@ pub(super) fn spawn(command: &Command) -> io::Result<Child> {
     }
     let mut root = [0; 4096];
     let length = unsafe { GetWindowsDirectoryW(root.as_mut_ptr(), root.len() as u32) } as usize;
-    if length == 0 || length >= root.len() { return Err(io::Error::last_os_error()); }
+    if length == 0 || length >= root.len() {
+        return Err(io::Error::last_os_error());
+    }
     let mut entries = std::collections::BTreeMap::new();
     entries.insert("SYSTEMROOT".to_owned(), root[..length].to_vec());
     for (key, value) in command.get_envs() {
         let Some(value) = value else { continue };
-        let key = key.to_str().filter(|key| !key.is_empty()
-            && key.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'))
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid verifier environment"))?;
+        let key = key
+            .to_str()
+            .filter(|key| {
+                !key.is_empty()
+                    && key
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            })
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "invalid verifier environment")
+            })?;
         if key.eq_ignore_ascii_case("SYSTEMROOT") {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "verifier SystemRoot is fixed"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "verifier SystemRoot is fixed",
+            ));
         }
         entries.insert(key.to_ascii_uppercase(), wide(value)?);
     }
@@ -83,14 +118,23 @@ pub(super) fn spawn(command: &Command) -> io::Result<Child> {
     }
     environment.push(0);
     if environment.len() > 32767 {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "verifier environment exceeds bounds"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "verifier environment exceeds bounds",
+        ));
     }
     let mut stdout = std::ptr::null_mut();
     let mut stderr = std::ptr::null_mut();
     let process = NonNull::new(unsafe {
-        cm_windows_verifier_spawn(program.as_ptr(), arguments.as_mut_ptr(), environment.as_ptr(),
-            &mut stdout, &mut stderr)
-    }).ok_or_else(io::Error::last_os_error)?;
+        cm_windows_verifier_spawn(
+            program.as_ptr(),
+            arguments.as_mut_ptr(),
+            environment.as_ptr(),
+            &mut stdout,
+            &mut stderr,
+        )
+    })
+    .ok_or_else(io::Error::last_os_error)?;
     Ok(Child {
         process,
         stdout: Some(unsafe { File::from_raw_handle(stdout) }),
@@ -130,8 +174,18 @@ mod tests {
 
     fn command(mode: &str) -> Command {
         let mut command = Command::new(crate::loader::current_executable().unwrap());
-        command.args(["--ignored", "--exact", CHILD, "--nocapture", "--skip", QUOTED])
-            .env_clear().env("CM_VERIFIER_TEST_MODE", mode).env("CM_VERIFIER_QUOTED", QUOTED);
+        command
+            .args([
+                "--ignored",
+                "--exact",
+                CHILD,
+                "--nocapture",
+                "--skip",
+                QUOTED,
+            ])
+            .env_clear()
+            .env("CM_VERIFIER_TEST_MODE", mode)
+            .env("CM_VERIFIER_QUOTED", QUOTED);
         command
     }
 
@@ -144,14 +198,24 @@ mod tests {
         match mode.as_str() {
             "ok" => std::io::stdout().write_all(b"verified bytes").unwrap(),
             "fail" => std::process::exit(3),
-            "large" => { let _ = std::io::stdout().write_all(&vec![0; super::super::LIMIT as usize + 1]); }
+            "large" => {
+                let _ = std::io::stdout().write_all(&vec![0; super::super::LIMIT as usize + 1]);
+            }
             "sleep" => std::thread::sleep(Duration::from_secs(60)),
             "descendant" => {
                 let mut descendant = Command::new(std::env::current_exe().unwrap());
-                descendant.args(["--ignored", "--exact", CHILD, "--nocapture", "--skip", QUOTED])
+                descendant
+                    .args([
+                        "--ignored",
+                        "--exact",
+                        CHILD,
+                        "--nocapture",
+                        "--skip",
+                        QUOTED,
+                    ])
                     .env("CM_VERIFIER_TEST_MODE", "sleep");
                 let child = descendant.spawn().unwrap();
-                writeln!(std::io::stdout(), "descendant={}", child.id()).unwrap();
+                writeln!(std::io::stdout(), "\ndescendant={}", child.id()).unwrap();
                 std::process::exit(0);
             }
             _ => panic!("unknown controlled mode"),
@@ -160,16 +224,33 @@ mod tests {
 
     #[test]
     fn verifier_native_job_preserves_arguments_and_bounds_process_tree() {
-        let output = super::super::collect_verifier(spawn(&command("ok")).unwrap(), Duration::from_secs(10)).unwrap();
+        let output =
+            super::super::collect_verifier(spawn(&command("ok")).unwrap(), Duration::from_secs(10))
+                .unwrap();
         assert!(output.windows(14).any(|part| part == b"verified bytes"));
         for mode in ["fail", "sleep", "large"] {
             let start = Instant::now();
-            assert!(super::super::collect_verifier(spawn(&command(mode)).unwrap(), Duration::from_secs(2)).is_err());
+            assert!(
+                super::super::collect_verifier(
+                    spawn(&command(mode)).unwrap(),
+                    Duration::from_secs(2)
+                )
+                .is_err()
+            );
             assert!(start.elapsed() < Duration::from_secs(10));
         }
-        let output = super::super::collect_verifier(spawn(&command("descendant")).unwrap(), Duration::from_secs(10)).unwrap();
+        let output = super::super::collect_verifier(
+            spawn(&command("descendant")).unwrap(),
+            Duration::from_secs(10),
+        )
+        .unwrap();
         let output = String::from_utf8(output).unwrap();
-        let id: u32 = output.lines().find_map(|line| line.strip_prefix("descendant=")).unwrap().parse().unwrap();
+        let id: u32 = output
+            .lines()
+            .find_map(|line| line.strip_prefix("descendant="))
+            .unwrap()
+            .parse()
+            .unwrap();
         unsafe extern "system" {
             fn OpenProcess(access: u32, inherit: i32, id: u32) -> *mut c_void;
             fn WaitForSingleObject(handle: *mut c_void, milliseconds: u32) -> u32;
@@ -192,7 +273,8 @@ mod tests {
     #[test]
     fn bundle_snapshot_keeps_jsonl_suffix_and_cleans_up() {
         let bytes = b"sealed bundle bytes";
-        let bundle = crate::loader::sealed_named_snapshot(bytes, c"cm-distribution-bundle").unwrap();
+        let bundle =
+            crate::loader::sealed_named_snapshot(bytes, c"cm-distribution-bundle").unwrap();
         let path = crate::loader::snapshot_path(&bundle);
         assert_eq!(path.extension().unwrap(), "jsonl");
         assert_eq!(std::fs::read(&path).unwrap(), bytes);

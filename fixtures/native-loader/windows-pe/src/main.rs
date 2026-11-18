@@ -4,8 +4,21 @@ mod directory;
 mod input;
 #[path = "../../../../crates/cm/src/loader/pe.rs"]
 mod pe;
-#[path = "../../../../crates/cm/src/loader/windows.rs"]
-mod windows;
+mod windows {
+    include!("../../../../crates/cm/src/loader/windows.rs");
+
+    unsafe extern "C" {
+        fn cm_windows_pin_open(path: *const u16, expected: *const u16) -> *mut c_void;
+    }
+
+    impl Snapshot {
+        pub(crate) fn open(path: &Path, expected: &str) -> Result<Self, String> {
+            let path = wide(path.as_os_str())?;
+            let expected = wide(OsStr::new(expected))?;
+            Self::take(unsafe { cm_windows_pin_open(path.as_ptr(), expected.as_ptr()) })
+        }
+    }
+}
 
 use input as loader;
 use std::io::Read;
@@ -1592,7 +1605,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let snapshot = if args[5] == "guarded" {
         let snapshot = windows::Snapshot::open(path, args[4].to_str().ok_or("invalid hash")?)?;
         assert!(
-            snapshot.read()? == bytes,
+            std::fs::read(snapshot.path())? == bytes,
             "retained snapshot differs from parsed bytes"
         );
         Some(snapshot)
@@ -1606,7 +1619,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             let private = windows::Snapshot::create(&bytes, name)?;
             let private_path = private.path().to_path_buf();
             assert_eq!(private_path.extension().unwrap(), extension);
-            assert_eq!(private.read()?, bytes);
+            assert_eq!(std::fs::read(&private_path)?, bytes);
             assert!(
                 std::fs::OpenOptions::new()
                     .write(true)

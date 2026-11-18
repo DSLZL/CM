@@ -1,6 +1,9 @@
 //! Host-owned immutable native runtime. Libraries and sealed payloads stay pinned.
 #[cfg(not(all(
-    any(all(target_os = "linux", target_env = "gnu"), all(windows, target_env = "msvc")),
+    any(
+        all(target_os = "linux", target_env = "gnu"),
+        all(windows, target_env = "msvc")
+    ),
     any(target_arch = "x86_64", target_arch = "aarch64")
 )))]
 compile_error!("CM native runtime requires x86_64 or AArch64 GNU Linux or MSVC Windows");

@@ -15,9 +15,9 @@ use std::process::Child;
 use std::process::{Command, Stdio};
 #[cfg(windows)]
 mod windows;
+use std::time::{Duration, Instant};
 #[cfg(windows)]
 use windows::Child;
-use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -232,15 +232,17 @@ fn collect_verifier(mut child: Child, timeout: Duration) -> Result<Vec<u8>, Load
                 // Descendants must not retain the pipes beyond the verifier deadline.
                 #[cfg(not(windows))]
                 {
-                unsafe { libc::kill(-process_group, libc::SIGKILL) };
-                let _ = child.wait();
+                    unsafe { libc::kill(-process_group, libc::SIGKILL) };
+                    let _ = child.wait();
                 }
                 break None;
             }
         }
     };
     #[cfg(not(windows))]
-    unsafe { libc::kill(-process_group, libc::SIGKILL) };
+    unsafe {
+        libc::kill(-process_group, libc::SIGKILL)
+    };
     #[cfg(windows)]
     child.stop();
     let stdout = out
@@ -301,13 +303,16 @@ fn verify_signature(bytes: &[u8], bundle: &[u8], signer: &Signer) -> Result<Inpu
     if bundle.is_empty() || bundle.len() as u64 > LIMIT {
         return Err(failure("missing or oversized proof bundle"));
     }
-    let executable =
-        loader::current_executable().map_err(|_| failure("missing Host identity"))?;
+    let executable = loader::current_executable().map_err(|_| failure("missing Host identity"))?;
     let root = executable
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| failure("missing Host package"))?;
-    let verifier_name = if cfg!(windows) { "codex-resources/gh.exe" } else { "codex-resources/gh" };
+    let verifier_name = if cfg!(windows) {
+        "codex-resources/gh.exe"
+    } else {
+        "codex-resources/gh"
+    };
     let (helper, pin) = loader::read_input(&root.join(verifier_name), 128 * 1024 * 1024)
         .map_err(|_| failure("missing trusted verifier"))?;
     if option_env!("CM_DISTRIBUTION_GH_SHA256") != Some(pin.sha256.as_str()) {
@@ -371,8 +376,7 @@ fn verify_signature(bytes: &[u8], bundle: &[u8], signer: &Signer) -> Result<Inpu
     let child = command.process_group(0).spawn();
     #[cfg(windows)]
     let child = windows::spawn(&command);
-    let child = child
-        .map_err(|_| failure("cannot start trusted verifier"))?;
+    let child = child.map_err(|_| failure("cannot start trusted verifier"))?;
     let stdout = collect_verifier(child, Duration::from_secs(20))?;
     verify_output(&stdout, bytes, signer)?;
     pin.revalidate()

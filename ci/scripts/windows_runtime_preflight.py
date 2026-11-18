@@ -151,7 +151,7 @@ def main():
                 (logs / "library-format.patch.log").write_text(formatting_patch(root, formatted), encoding="utf-8")
             cargo = [tools["cargo"]["path"]]
             common = ["--locked", "--target", TARGET, "--profile", "dev-small", "-p", "cm-abi", "-p", "cm-runtime", "--lib", "-j", "2"]
-            run("library-clippy", [*cargo, "clippy", *common, "--", "-D", "warnings"], 600, cwd=tree / "codex-rs")
+            run("library-clippy", [*cargo, "clippy", *common, "--tests", "--", "-D", "warnings"], 600, cwd=tree / "codex-rs")
             report["gates"]["actual_library_clippy"] = "pass"
             text = run("library-test-build", [*cargo, "test", *common, "--no-run", "--message-format=json"], 600, cwd=tree / "codex-rs")
             executables = test_executables(text, temp / "t")

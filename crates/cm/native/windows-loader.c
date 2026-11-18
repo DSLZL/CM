@@ -10,7 +10,7 @@
 
 #pragma comment(lib, "advapi32.lib")
 
-int cm_windows_pin(CmWindowsPin *p, const wchar_t *name) {
+static int cm_windows_pin_limit(CmWindowsPin *p, const wchar_t *name, size_t limit) {
     ZeroMemory(p, sizeof(*p));
     p->file = INVALID_HANDLE_VALUE;
     DWORD length = GetFullPathNameW(name, 4096, p->path, NULL);
@@ -43,7 +43,7 @@ int cm_windows_pin(CmWindowsPin *p, const wchar_t *name) {
         || !GetFileSizeEx(p->file, &p->size)) return 0;
     if (GetFileType(p->file) != FILE_TYPE_DISK || info.nNumberOfLinks != 1
         || (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
-        || p->size.QuadPart < 1 || p->size.QuadPart > 32 * 1024 * 1024) {
+        || p->size.QuadPart < 1 || p->size.QuadPart > (LONGLONG)limit) {
         SetLastError(ERROR_INVALID_DATA); return 0;
     }
     wchar_t final[4096];
@@ -51,6 +51,10 @@ int cm_windows_pin(CmWindowsPin *p, const wchar_t *name) {
     if (!length || length >= 4096 || wcsncmp(final, L"\\\\?\\", 4)
         || _wcsicmp(final + 4, p->path)) { SetLastError(ERROR_INVALID_NAME); return 0; }
     return 1;
+}
+
+int cm_windows_pin(CmWindowsPin *p, const wchar_t *name) {
+    return cm_windows_pin_limit(p, name, 32 * 1024 * 1024);
 }
 
 void cm_windows_unpin(CmWindowsPin *p) {
@@ -155,7 +159,7 @@ CmWindowsPin *cm_windows_pin_copy(const unsigned char *bytes, size_t length, uns
     int ok = p && writer != INVALID_HANDLE_VALUE
         && WriteFile(writer, bytes, (DWORD)length, &received, NULL) && received == length && FlushFileBuffers(writer);
     if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
-    if (ok) ok = cm_windows_pin(p, path) && p->size.QuadPart == (LONGLONG)length;
+    if (ok) ok = cm_windows_pin_limit(p, path, limits[kind]) && p->size.QuadPart == (LONGLONG)length;
     BYTE buffer[16384];
     size_t offset = 0;
     while (ok && offset < length) {

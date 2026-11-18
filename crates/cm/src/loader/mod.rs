@@ -235,22 +235,40 @@ pub(crate) fn windows_system_version() -> Result<String, String> {
     }
     let mut version = Version {
         size: std::mem::size_of::<Version>() as u32,
-        major: 0, minor: 0, build: 0, platform: 0, _service_pack: [0; 128],
+        major: 0,
+        minor: 0,
+        build: 0,
+        platform: 0,
+        _service_pack: [0; 128],
     };
-    if unsafe { native_version(&mut version) } != 0 || version.platform != 2 || version.major == 0 || version.build == 0 {
+    if unsafe { native_version(&mut version) } != 0
+        || version.platform != 2
+        || version.major == 0
+        || version.build == 0
+    {
         return Err("cannot identify native Windows version".into());
     }
-    Ok(format!("{}.{}.{}", version.major, version.minor, version.build))
+    Ok(format!(
+        "{}.{}.{}",
+        version.major, version.minor, version.build
+    ))
 }
 
 pub(crate) fn random_bytes(bytes: &mut [u8]) -> std::io::Result<()> {
     #[cfg(not(windows))]
-    { File::open("/dev/urandom")?.read_exact(bytes) }
+    {
+        File::open("/dev/urandom")?.read_exact(bytes)
+    }
     #[cfg(windows)]
     {
         unsafe extern "system" {
             #[link_name = "BCryptGenRandom"]
-            fn random(algorithm: *mut std::ffi::c_void, bytes: *mut u8, length: u32, flags: u32) -> i32;
+            fn random(
+                algorithm: *mut std::ffi::c_void,
+                bytes: *mut u8,
+                length: u32,
+                flags: u32,
+            ) -> i32;
         }
         let length = u32::try_from(bytes.len()).map_err(std::io::Error::other)?;
         if unsafe { random(std::ptr::null_mut(), bytes.as_mut_ptr(), length, 2) } < 0 {
@@ -279,9 +297,13 @@ pub(crate) fn current_executable() -> std::io::Result<PathBuf> {
                     }
                     Ok(normal)
                 }
-                _ => Err(std::io::Error::other("Host executable must be on a local drive")),
+                _ => Err(std::io::Error::other(
+                    "Host executable must be on a local drive",
+                )),
             },
-            _ => Err(std::io::Error::other("Host executable path is not absolute")),
+            _ => Err(std::io::Error::other(
+                "Host executable path is not absolute",
+            )),
         }
     }
 }
@@ -289,7 +311,11 @@ pub(crate) fn current_executable() -> std::io::Result<PathBuf> {
 #[cfg(windows)]
 pub(crate) fn executable_hash(path: &Path) -> Result<String, String> {
     let parent = open_directory(path.parent().ok_or("missing executable parent")?)?;
-    let mut file = open_at(&parent, path.file_name().ok_or("missing executable name")?, false)?;
+    let mut file = open_at(
+        &parent,
+        path.file_name().ok_or("missing executable name")?,
+        false,
+    )?;
     let before: Information = information(&file)?;
     if !before.regular {
         return Err("Host executable must be a regular file".into());
@@ -978,9 +1004,9 @@ fn zip_files(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, String> {
                 zip::CompressionMethod::Deflated,
             ]
             .contains(&file.compression())
-            || file.unix_mode().is_some_and(|mode| {
-                ![0, 0o100000, 0o040000].contains(&(mode & 0o170000))
-            })
+            || file
+                .unix_mode()
+                .is_some_and(|mode| ![0, 0o100000, 0o040000].contains(&(mode & 0o170000)))
             || file.unix_mode().is_some_and(|mode| {
                 (mode & 0o170000 == 0o040000) != file.is_dir() && mode & 0o170000 != 0
             })
@@ -1172,7 +1198,10 @@ mod tests {
     fn current_executable_has_a_stable_native_identity() {
         let path = current_executable().unwrap();
         assert!(path.is_absolute());
-        assert_eq!(executable_hash(&path).unwrap(), executable_hash(&path).unwrap());
+        assert_eq!(
+            executable_hash(&path).unwrap(),
+            executable_hash(&path).unwrap()
+        );
     }
 
     #[test]

@@ -36,14 +36,16 @@ pub fn launch(home: &Path, args: &[OsString], options: &Options) -> Result<(), L
         .env("CM_MANAGED_GENERATION", generation);
     #[cfg(not(windows))]
     {
-    let error = command.exec();
-    Err(profile::failure(&format!(
-        "verified Host exec failed: {error}"
-    )))
+        let error = command.exec();
+        Err(profile::failure(&format!(
+            "verified Host exec failed: {error}"
+        )))
     }
     #[cfg(windows)]
     {
-        let status = command.status().map_err(|error| profile::failure(&format!("verified Host launch failed: {error}")))?;
+        let status = command
+            .status()
+            .map_err(|error| profile::failure(&format!("verified Host launch failed: {error}")))?;
         drop(command);
         drop(snapshot);
         crate::exit_after_shutdown(status.code().unwrap_or(1))
