@@ -6,8 +6,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-env-changed=CM_NATIVE_PROTOC");
 
     let mut config = tonic_prost_build::Config::new();
-    let protoc = std::env::var_os("CM_NATIVE_PROTOC")
-        .ok_or("Verified native ARM64 protoc is required")?;
+    let protoc =
+        std::env::var_os("CM_NATIVE_PROTOC").ok_or("Verified native ARM64 protoc is required")?;
     config.protoc_executable(PathBuf::from(protoc));
     let proto_files = glob::glob("src/grpc/*.proto")?.collect::<Result<Vec<_>, _>>()?;
 
