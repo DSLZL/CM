@@ -20,8 +20,11 @@ from windows_x64_preflight import authority, pe_fixture
 KEY, TARGET = native.KEY, native.TARGET
 BINS = ("codex.exe", "codex-code-mode-host.exe", "codex-command-runner.exe", "codex-windows-sandbox-setup.exe")
 PACKAGES = ("codex-cli", "codex-code-mode-host", "cm-abi", "cm-runtime", "cm-sdk", "cm-host-adapter")
+SCHEMA_CHECKS = ("g03-host-early-fmt", "g06-fixture-early-fmt", "g03-protocol-schema-0",
+    "g03-protocol-schema-1", "g03-config-schema", "g03-protocol-contract-tests")
 NATIVE_FILES = ("protoc.exe", "sccache.exe", "ninja.exe", "v8.gz", "v8.rs", "gh.exe")
 MAXIMUM = 2 * 1024 ** 3
+PE_MAXIMUM = 256 * 1024 ** 2
 SCCACHE_SHA = "205d613fa74a9a0525e41a5ace77b1c71907d5bd4a5e668bad79111776829290"
 
 
@@ -59,7 +62,11 @@ def archive_path(name):
             or any(not part or part in (".", "..") or part != part.rstrip(" .")
                 or any(char in part for char in '\\:*?"<>|') or any(ord(char) < 32 for char in part)
                 or part.split(".")[0].upper() in reserved for part in path.parts)
-            or (name != "build.json" and path.parts[0] not in ("bin", "native", "quality", "materials"))):
+            or (name != "build.json" and path.parts[0] not in ("bin", "native", "quality", "materials", "generated"))
+            or (path.parts[0] == "generated" and name != "generated/codex-rs/core/config.schema.json"
+                and name not in ("generated", "generated/codex-rs", "generated/codex-rs/core",
+                    "generated/codex-rs/app-server-protocol", "generated/codex-rs/app-server-protocol/schema")
+                and not name.startswith("generated/codex-rs/app-server-protocol/schema/"))):
         raise RuntimeError("Invalid Windows Host archive path: " + repr(name))
     return path
 
@@ -139,9 +146,10 @@ def restore(origin, temp):
             or receipt.get("origin") != expected or receipt.get("files") != [row for row in files(destination) if row["path"] != "build.json"]):
         raise RuntimeError("Host producer receipt or complete file inventory differs")
     required = ({"bin/" + name for name in BINS} | {"native/" + name for name in NATIVE_FILES}
-        | {"native/inputs.json", "native/verifier.json"} | {"quality/" + name + ".log" for name in recipes()})
+        | {"native/inputs.json", "native/verifier.json"}
+        | {"quality/" + name + ".log" for name in (*recipes(), *SCHEMA_CHECKS)})
     actual = {row["path"] for row in receipt["files"]}
-    if not required <= actual or any(name not in required and not name.startswith("materials/") for name in actual):
+    if not required <= actual or any(name not in required and not name.startswith(("materials/", "generated/")) for name in actual):
         raise RuntimeError("Host origin has missing or unexpected build inputs")
     checked_quality(receipt, destination)
     return destination, receipt, job
@@ -201,6 +209,12 @@ def sccache_tool(temp, run):
     return identity
 
 
+def schema_recipe():
+    from linux_ci import cargo_args
+    return host.digest("".join(inspect.getsource(function) for function in
+        (host.generate_schemas, host.record_schema_sources, host.build_commands, cargo_args)))
+
+
 def checked_quality(receipt, directory):
     commands = recipes()
     quality = receipt.get("quality")
@@ -211,6 +225,17 @@ def checked_quality(receipt, directory):
         if (row.get("command") != command or row.get("return_code") != 0
                 or row.get("log_sha256") != host.sha(directory / "quality" / (name + ".log"))):
             raise RuntimeError("Original Host recipe, result or log differs: " + name)
+    schema = receipt.get("schema", {})
+    if (schema.get("recipe") != schema_recipe() or not isinstance(schema.get("checks"), list)
+            or [row.get("phase") for row in schema["checks"]] != list(SCHEMA_CHECKS)
+            or not schema.get("files") or schema["files"] != sorted(set(schema["files"]))
+            or {"generated/" + name for name in schema["files"]} !=
+                {row["path"] for row in receipt.get("files", []) if row["path"].startswith("generated/")}):
+        raise RuntimeError("Original schema generator, checks or output inventory differs")
+    for row in schema["checks"]:
+        if (row.get("return_code") != 0 or row.get("log") != row["phase"] + ".log"
+                or row.get("log_sha256") != host.sha(directory / "quality" / row["log"])):
+            raise RuntimeError("Original schema generation check or log differs")
 
 
 def main():
@@ -260,6 +285,11 @@ def main():
         pin = host.read(root / host.ADAPTER / "source.json")
         if cfg["rust_toolchain"] != "1.95.0" or cfg["upstream"]["commit"] != native.REVISION or host.TARGET != TARGET:
             raise RuntimeError("Host toolchain, target or upstream pins differ")
+        if (cfg["task_id"] != "CM-S03" or len(cfg["units"]) != 1 or cfg["units"][0]["id"] != "host"
+                or cfg["units"][0]["packages"] != list(PACKAGES) or cfg["units"][0].get("features") != []
+                or cfg["units"][0].get("no_default_features") is not False
+                or any(cfg[name] != "dev-small" for name in ("build_profile", "test_profile", "clippy_profile"))):
+            raise RuntimeError("Host candidate requires its exact original quality and schema configuration")
         report["source_sha256"] = {row["path"]: row["sha256"] for row in host.cm_manifest(root)}
         report["environment"] = {name: os.environ[name] for name in (
             "ImageOS", "ImageVersion", "VCToolsVersion", "WindowsSDKVersion", "VCToolsInstallDir", "WindowsSdkDir")}
@@ -268,7 +298,8 @@ def main():
             raise RuntimeError("Host requires installed native ARM64 MSVC")
         for name, path in (("cl", cl), ("link", cl.with_name("link.exe")), ("lib", cl.with_name("lib.exe")),
                 ("go", Path(shutil.which("go.exe") or ""))):
-            tools[name] = {"path": str(path), **pe_fixture(path.read_bytes(), False, expected_machine=0xAA64)}
+            tools[name] = {"path": str(path), **pe_fixture(path.read_bytes(), False, expected_machine=0xAA64,
+                maximum_bytes=PE_MAXIMUM)}
 
         with tempfile.TemporaryDirectory(prefix="cm-host-", dir=os.environ["RUNNER_TEMP"]) as directory:
             temp = Path(directory).resolve()
@@ -278,14 +309,16 @@ def main():
                 run("host-native-components", ["rustup", "component", "add", "rustfmt", "clippy", "--toolchain", toolchain], 180)
                 for name in ("rustc", "cargo", "rustfmt", "cargo-clippy", "clippy-driver"):
                     path = Path(run("host-" + name + "-path", ["rustup", "which", "--toolchain", toolchain, name]))
-                    tools[name] = {"path": str(path), **pe_fixture(path.read_bytes(), False, expected_machine=0xAA64)}
+                    tools[name] = {"path": str(path), **pe_fixture(path.read_bytes(), False, expected_machine=0xAA64,
+                        maximum_bytes=PE_MAXIMUM)}
                 rust_tools = {name: {"sha256": tools[name]["sha256"],
                     "version": run("host-" + name + "-version", [tools[name]["path"], "-Vv"])} for name in ("rustc", "cargo")}
                 if any("host: " + TARGET not in row["version"].splitlines() for row in rust_tools.values()):
                     raise RuntimeError("Host requires native ARM64 Rust compiler and Cargo")
                 tools["sccache"] = sccache_tool(temp, run)
                 os.environ.update({"TEMP": str(temp), "TMP": str(temp), "CARGO_HOME": str(temp / "cargo"),
-                    "CARGO_TARGET_DIR": str(temp / "target"), "CM_HOST_PRISTINE": str(temp / "pristine"),
+                    "CARGO_TARGET_DIR": str(temp / "target"),
+                    "CM_HOST_PRISTINE": str(Path(os.environ["RUNNER_TEMP"]) / "cm-upstream-pristine"),
                     "RUSTUP_TOOLCHAIN": toolchain, "PATH": str(Path(tools["cargo"]["path"]).parent) + os.pathsep + os.environ["PATH"]})
                 with ci_progress.stage("host-fixed-source-prepare"):
                     host.prepare(root, logs)
@@ -323,10 +356,12 @@ def main():
                         or verifier["root_sha256"] != host.sha(root / "crates/cm/src/distribution-root.jsonl")):
                     raise RuntimeError("Host verifier policy or trust root differs")
                 verifier_path = Path(os.environ["RUNNER_TEMP"]) / "cm-distribution-verifier/gh.exe"
-                if pe_fixture(verifier_path.read_bytes(), False, expected_machine=0xAA64, maximum_bytes=128 * 1024 ** 2)["sha256"] != verifier["sha256"]:
+                if pe_fixture(verifier_path.read_bytes(), False, expected_machine=0xAA64,
+                        maximum_bytes=PE_MAXIMUM)["sha256"] != verifier["sha256"]:
                     raise RuntimeError("Native verifier executable differs")
                 proto = report["protoc_replacement"]
                 native_identity = {"rust_tools": rust_tools, "distribution_verifier": verifier,
+                    "schema_recipe": schema_recipe(),
                     "v8": {name: {"name": "v8.gz" if name == "RUSTY_V8_ARCHIVE" else "v8.rs", "sha256": host.sha(Path(path))}
                         for name, path in v8.items()},
                     "sdk_sha256": host.digest([{key: row[key] for key in ("input", "sha256")} for row in sdk]),
@@ -340,6 +375,26 @@ def main():
                     "SCCACHE_DIR": str(temp / "sccache"), "SCCACHE_GHA_ENABLED": "false", "SCCACHE_CACHE_SIZE": "2G",
                     "SCCACHE_IDLE_TIMEOUT": "0", "SCCACHE_BASEDIRS": str(root), "CODEX_HOME": str(temp / "codex-home")})
                 host.write(root / host.ADAPTER / "inputs/native.json", native_identity)
+                if origin:
+                    before = {row["path"]: row for row in host.manifest(tree)}
+                    for name in receipt["schema"]["files"]:
+                        shutil.copyfile(restored / "generated" / name, tree / name)
+                    changed = host.record_schema_sources(root, logs, before)
+                    if changed != receipt["schema"]["files"]:
+                        raise RuntimeError("Restored generated schema changes differ")
+                    schema = receipt["schema"]
+                    report["schema_generation"] = "reused_original"
+                else:
+                    started = True
+                    run("host-sccache-zero", [tools["sccache"]["path"], "--zero-stats"])
+                    changed = host.generate_schemas(root, logs, {**cfg, "target": TARGET}, Path(os.environ["CARGO_TARGET_DIR"]))
+                    checks = [row for row in map(json.loads, (logs / "phase-results.jsonl").read_text().splitlines())
+                        if row["phase"] in SCHEMA_CHECKS]
+                    for row in checks:
+                        row["log_sha256"] = host.sha(logs / row["log"])
+                    schema = {"recipe": schema_recipe(), "checks": checks, "files": changed}
+                    report["schema_generation"] = "executed_current"
+                provenance = host.verify_sources(root, logs)
                 profiles = {name: "dev-small" for name in ("build_profile", "test_profile", "clippy_profile")}
                 compile_tools = {name: {key: value for key, value in tools[name].items() if key != "path"}
                     for name in ("cl", "link", "lib", "rc", "mt", "rustc", "cargo", "sccache")}
@@ -370,17 +425,17 @@ def main():
                     report["quality"] = receipt["quality"]
                     report["host_compilation"] = "reused_original"
                 else:
-                    started = True
-                    run("host-sccache-zero", [tools["sccache"]["path"], "--zero-stats"])
                     for name in ("host-fmt", "helper-clippy", "helper-build", "host-clippy", "host-test", "host-build"):
                         command = recipes()[name]
+                        if name == "host-test":
+                            report["cli_builds"] = 1
                         run(name, command, 5400, cwd=tree / "codex-rs")
                         report["quality"][name] = {"command": command, "return_code": 0, "log_sha256": host.sha(logs / (name + ".log"))}
                     report["cli_builds"] = 1
                     report["host_compilation"] = "executed_current"
                     run("host-sccache-stats", [tools["sccache"]["path"], "--show-stats", "--stats-format=json"])
                 report["binaries"] = {name: pe_fixture((binaries / name).read_bytes(), False,
-                    expected_machine=0xAA64, maximum_bytes=512 * 1024 ** 2) for name in BINS}
+                    expected_machine=0xAA64, maximum_bytes=PE_MAXIMUM) for name in BINS}
                 host.verify_binary(binaries / "codex.exe", identity)
                 run("host-cli-version", [binaries / "codex.exe", "--version"])
                 host.verify_sources(root, logs)
@@ -401,10 +456,14 @@ def main():
                     host.write(output / "native/inputs.json", {"protoc": proto})
                     host.write(output / "native/verifier.json", verifier)
                     shutil.copytree(verifier_path.parent / "licenses", output / "materials")
-                    for name in recipes():
+                    for name in (*recipes(), *SCHEMA_CHECKS):
                         shutil.copyfile(logs / (name + ".log"), output / "quality" / (name + ".log"))
+                    for name in schema["files"]:
+                        destination = output / "generated" / name
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(tree / name, destination)
                     receipt = {"schema_version": 1, "domain": "cm.windows-host-build.v1", "identity": identity,
-                        "quality": report["quality"], "files": files(output),
+                        "quality": report["quality"], "schema": schema, "files": files(output),
                         "origin": {"source_sha": report["source_sha"], "workflow_sha": report["workflow_sha"],
                             "run_id": report["run_id"], "run_attempt": report["run_attempt"], "job": "native-preflight",
                             "repository": "DSLZL/CM-build-" + KEY, "source_repository": "DSLZL/CM", "target": TARGET}}
@@ -433,6 +492,17 @@ def self_check():
     import zipfile
     from unittest.mock import patch
 
+    cfg = {"task_id": "CM-S03"}
+    with patch.object(host, "load_config", return_value=cfg), patch.object(host, "generate_schemas") as generate, \
+            patch.dict(os.environ, {"CARGO_TARGET_DIR": str(Path(os.environ["RUNNER_TEMP"]) / "schema-check-target")}):
+        host.schemas(Path.cwd(), Path("logs"))
+        generate.assert_called_once_with(Path.cwd(), Path("logs"), cfg, Path(os.environ["CARGO_TARGET_DIR"]) / "g03-schema")
+    try:
+        pe_fixture(b"", False, expected_machine=0xAA64, maximum_bytes=PE_MAXIMUM)
+    except RuntimeError as error:
+        assert str(error) == "Expected bounded native PE fixture"
+    else:
+        raise AssertionError("Empty Host PE accepted")
     assert read_origin("") is None
     valid = {"run_id": 1, "run_attempt": 1, "source_sha": "a" * 40, "workflow_sha": "b" * 40,
         "artifact_id": 2, "artifact_sha256": "c" * 64}
@@ -445,10 +515,11 @@ def self_check():
             pass
         else:
             raise AssertionError("Invalid Host build origin accepted")
-    for name in ("bin/codex.exe", "native/gh.exe", "quality/host-build.log", "materials/gh/LICENSE", "build.json"):
+    for name in ("bin/codex.exe", "native/gh.exe", "quality/host-build.log", "materials/gh/LICENSE", "build.json",
+            "generated/codex-rs/core/config.schema.json"):
         assert archive_path(name).as_posix() == name
     for name in ("../outside", "/bin/codex.exe", "bin/../codex.exe", "bin\\codex.exe", "bin/CON.exe",
-            "bin/name:stream", "bin/name.", "bin/name ", "bin//name", "unknown/file", "bin/\x00"):
+            "bin/name:stream", "bin/name.", "bin/name ", "bin//name", "unknown/file", "bin/\x00", "generated/evil.py"):
         try:
             archive_path(name)
         except RuntimeError:
@@ -471,19 +542,37 @@ def self_check():
             log = fixture / "quality" / (name + ".log")
             log.write_text("original successful check\n", encoding="utf-8")
             quality[name] = {"command": command, "return_code": 0, "log_sha256": host.sha(log)}
-        checked_quality({"quality": quality}, fixture)
+        generated = "codex-rs/core/config.schema.json"
+        (fixture / "generated" / generated).parent.mkdir(parents=True)
+        (fixture / "generated" / generated).write_text('{"fixture": true}\n', encoding="utf-8")
+        checks = []
+        for name in SCHEMA_CHECKS:
+            log = fixture / "quality" / (name + ".log")
+            log.write_text("original generated contract check\n", encoding="utf-8")
+            checks.append({"phase": name, "return_code": 0, "log": log.name, "log_sha256": host.sha(log)})
+        proof = {"quality": quality, "schema": {"recipe": schema_recipe(), "checks": checks, "files": [generated]},
+            "files": files(fixture)}
+        checked_quality(proof, fixture)
+        bad_schema = json.loads(json.dumps(proof))
+        bad_schema["schema"]["checks"][-1]["return_code"] = 1
+        try:
+            checked_quality(bad_schema, fixture)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Failed original schema contract reused")
         for changed in ("command", "return_code", "log_sha256"):
             bad = json.loads(json.dumps(quality))
             bad["host-build"][changed] = [] if changed == "command" else 1
             try:
-                checked_quality({"quality": bad}, fixture)
+                checked_quality({**proof, "quality": bad}, fixture)
             except RuntimeError:
                 pass
             else:
                 raise AssertionError("Changed original Host quality was reused")
         repo = "DSLZL/CM-build-" + KEY
-        receipt = {"schema_version": 1, "domain": "cm.windows-host-build.v1", "quality": quality,
-            "identity": {"host_build_id": "fixture"}, "files": files(fixture),
+        receipt = {"schema_version": 1, "domain": "cm.windows-host-build.v1", **proof,
+            "identity": {"host_build_id": "fixture"},
             "origin": {"source_sha": valid["source_sha"], "workflow_sha": valid["workflow_sha"],
                 "run_id": 1, "run_attempt": 1, "job": "native-preflight", "repository": repo,
                 "source_repository": "DSLZL/CM", "target": TARGET}}

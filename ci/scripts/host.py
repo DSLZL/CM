@@ -175,10 +175,14 @@ def prepare(root, logs):
 
 def schemas(root, logs):
     """Regenerate pinned schema assets on the hosted worker before sealing Host inputs."""
-    if load_config(root)["task_id"] not in ("CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01", "CM-S02", "CM-S03"):
-        return
-    verify_sources(root, logs)
     cfg = load_config(root)
+    if cfg["task_id"] not in ("CM-G03", "CM-G04", "CM-G01", "CM-G05", "CM-G06", "CM-S01", "CM-S02", "CM-S03"):
+        return
+    generate_schemas(root, logs, cfg, Path(os.environ["CARGO_TARGET_DIR"]) / "g03-schema")
+
+
+def generate_schemas(root, logs, cfg, target_dir):
+    verify_sources(root, logs)
     for unit in cfg["units"]:
         execute(root, logs, "g03-" + unit["id"] + "-early-fmt", build_commands(unit, cfg)["fmt"])
     if cfg["task_id"] in ("CM-G06", "CM-S01", "CM-S02", "CM-S03"):
@@ -188,7 +192,7 @@ def schemas(root, logs):
             *(str(root / "fixtures/mods" / ("sdk-seams-" + owner) / "src/lib.rs") for owner in ("a", "b"))])
     tree = root / HOST
     before = {row["path"]: row for row in manifest(tree)}
-    env = {**os.environ, "CARGO_TARGET_DIR": str(Path(os.environ["CARGO_TARGET_DIR"]) / "g03-schema"),
+    env = {**os.environ, "CARGO_TARGET_DIR": str(target_dir),
         "CODEX_APP_SERVER_SCHEMA_ROOT": str(tree / "codex-rs/app-server-protocol/schema")}
     common = ["--locked", "--manifest-path", HOST + "/codex-rs/Cargo.toml", "--target", TARGET,
         "--profile", cfg["test_profile"]]
@@ -208,6 +212,11 @@ def schemas(root, logs):
     for name in ("TurnStartParams", "TurnSteerParams"):
         assert "cmToolConcurrency?" in (ts / "v2" / (name + ".ts")).read_text()
     assert "cmToolConcurrency?" in (ts / "InitializeResponse.ts").read_text()
+    return record_schema_sources(root, logs, before)
+
+
+def record_schema_sources(root, logs, before):
+    tree = root / HOST
     after = {row["path"]: row for row in manifest(tree)}
     changed = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
     assert changed and all(name == "codex-rs/core/config.schema.json" or
@@ -223,6 +232,7 @@ def schemas(root, logs):
     write(logs / "host-source-manifest.json", list(after.values()))
     write(logs / "host-source-provenance.json", provenance)
     verify_sources(root, logs)
+    return changed
 
 
 def reject_native_overrides(env=None):
