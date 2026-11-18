@@ -1576,7 +1576,10 @@ fn snapshot_cleanup(
     println!("cm_snapshot passed=loaded-child-exit-cleanup");
 
     let mut missing = Command::new(root.join("missing-program.exe"));
-    assert!(home.run_snapshot_child("spawn-error", &mut missing).is_err());
+    assert!(
+        home.run_snapshot_child("spawn-error", &mut missing)
+            .is_err()
+    );
     assert!(!root.join("spawn-error").exists());
     println!("cm_snapshot passed=spawn-error-cleanup");
 

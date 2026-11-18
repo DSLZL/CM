@@ -14,8 +14,8 @@ pub fn supervise_windows() -> Result<(), LoadError> {
         return Ok(());
     }
     let root = profile::Directory::snapshots().map_err(|error| profile::failure(&error))?;
-    let executable =
-        crate::loader::current_executable().map_err(|error| profile::failure(&error.to_string()))?;
+    let executable = crate::loader::current_executable()
+        .map_err(|error| profile::failure(&error.to_string()))?;
     let mut command = std::process::Command::new(executable);
     command.args(std::env::args_os().skip(1));
     // shortcut: forced supervisor termination preserves its stage until owned crash recovery is qualified.

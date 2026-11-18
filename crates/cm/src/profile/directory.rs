@@ -45,7 +45,10 @@ impl Directory {
         let status = command.env("CM_WINDOWS_SNAPSHOT_ROOT", &path).status();
         drop(stage);
         discard(self, name, expected).map_err(|error| {
-            format!("snapshot cleanup failed; retained {}: {error}", path.display())
+            format!(
+                "snapshot cleanup failed; retained {}: {error}",
+                path.display()
+            )
         })?;
         status.map_err(|error| format!("snapshot child launch failed: {error}"))
     }
