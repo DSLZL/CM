@@ -320,20 +320,6 @@ static CmWindowsPin *cm_windows_child(const CmWindowsPin *parent, const wchar_t 
             0, FALSE, DUPLICATE_SAME_ACCESS)) goto failed;
         ++p->count;
     }
-    if (directory && descriptor) {
-        typedef HANDLE (WINAPI *CreateDirectoryHandle)(LPCWSTR, DWORD, DWORD, DWORD, LPSECURITY_ATTRIBUTES);
-        HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
-        if (!kernel || !cm_windows_system_module(kernel)) { SetLastError(ERROR_BAD_EXE_FORMAT); goto failed; }
-        CreateDirectoryHandle create_directory = (CreateDirectoryHandle)(void *)GetProcAddress(kernel, "CreateDirectory2W");
-        if (!create_directory) { SetLastError(ERROR_PROC_NOT_FOUND); goto failed; }
-        SECURITY_ATTRIBUTES security = {sizeof(security), descriptor, FALSE};
-        /* Use explicit directory rights, including SYNCHRONIZE; retain no DELETE access or sharing. */
-        p->file = create_directory(p->path,
-            FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE, 1, &security);
-        if (!p->file || p->file == INVALID_HANDLE_VALUE) { p->file = INVALID_HANDLE_VALUE; goto failed; }
-        return cm_windows_input_finish(p, 1, 0);
-    }
     typedef NTSTATUS (NTAPI *OpenFile)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
         PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
     typedef ULONG (NTAPI *DosError)(NTSTATUS);
@@ -348,13 +334,19 @@ static CmWindowsPin *cm_windows_child(const CmWindowsPin *parent, const wchar_t 
     ACCESS_MASK access = directory
         ? FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE
         : FILE_GENERIC_READ;
-    if (descriptor) access |= FILE_GENERIC_WRITE | DELETE;
+    if (descriptor && !directory) access |= FILE_GENERIC_WRITE | DELETE;
     if (writable) access |= FILE_GENERIC_WRITE;
+    ULONG options = 0x00200000 | 0x20 | (directory ? 0 : 0x40) | (descriptor ? 2 : 0);
+    if (directory && descriptor) {
+        /* OBJ_DONT_REPARSE rejects redirects; use only documented FILE_DIRECTORY_FILE options. */
+        attributes.Attributes |= 0x1000;
+        options = 1 | 2 | 0x20;
+    }
     NTSTATUS result = open_file(&p->file, access, &attributes, &status, NULL, 0,
         FILE_SHARE_READ | ((directory || writable) ? FILE_SHARE_WRITE : 0), descriptor ? 2 : 1,
-        0x00200000 | 0x20 | (directory ? 0 : 0x40) | (descriptor ? 2 : 0), NULL, 0);
+        options, NULL, 0);
     if (result < 0) { SetLastError(dos_error(result)); goto failed; }
-    return cm_windows_input_finish(p, directory, descriptor != NULL);
+    return cm_windows_input_finish(p, directory, descriptor != NULL && !directory);
 failed: {
     DWORD error = GetLastError();
     cm_windows_pin_free(p);
