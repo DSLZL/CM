@@ -325,8 +325,11 @@ def main(stage="initial-mechanisms"):
                     helper_gate["status"] = report["status"] = "pass"
                     return
                 identity = temp / "private-probe-identity.json"
+                pin = host.read(root / host.ADAPTER / "source.json")
                 identity.write_text(json.dumps({"domain": "cm.native-mechanism-probe.v1", "target": TARGET,
                     "host_build_id": "sha256:" + hashlib.sha256((policy["source_sha"] + TARGET).encode()).hexdigest(),
+                    "host_api_version": pin["host_api_version"], "capabilities": pin["capabilities"],
+                    "abis": pin["abis"],
                     "production_host": False}), encoding="utf-8")
                 os.environ["CM_HOST_IDENTITY_JSON"] = str(identity)
                 # Rustfmt traverses inactive modules omitted from target-only compiler inputs.
