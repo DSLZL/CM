@@ -120,7 +120,11 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     let collision = private.path.join("collision-dir");
     fs::create_dir(&collision)?;
     fs::write(collision.join("unchanged"), b"unchanged")?;
-    assert!(private.create_file("collision-dir", b"replacement").is_err());
+    assert!(
+        private
+            .create_file("collision-dir", b"replacement")
+            .is_err()
+    );
     let junction = private.path.join("collision-junction");
     let output = Command::new("cmd.exe")
         .args([
