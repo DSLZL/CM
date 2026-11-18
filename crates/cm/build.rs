@@ -6,7 +6,10 @@ fn main() {
             .with_file_name("native")
             .join("windows-loader.c");
         println!("cargo:rerun-if-changed={}", source.display());
-        println!("cargo:rerun-if-changed={}", source.with_extension("h").display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            source.with_extension("h").display()
+        );
         cc::Build::new()
             .file(source)
             .flag("/std:c11")

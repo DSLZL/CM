@@ -102,9 +102,9 @@ int cm_windows_system_dependencies(const wchar_t *csv) {
     unsigned count = 0;
     for (wchar_t *name = wcstok_s(names, L",", &context); name; name = wcstok_s(NULL, L",", &context)) {
         if (++count > 32 || !wcslen(name) || wcspbrk(name, L"\\/:")) return -1;
-        HMODULE module = GetModuleHandleW(name);
-        if (module && !cm_windows_system_module(module)) return -1;
-        if (!module) module = LoadLibraryExW(name, NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        HMODULE module = NULL;
+        if (!GetModuleHandleExW(0, name, &module))
+            module = LoadLibraryExW(name, NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (!module || !cm_windows_system_module(module)) return -1;
         /* Trusted system modules remain live through payload loading. */
     }

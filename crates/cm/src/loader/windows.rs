@@ -51,10 +51,9 @@ impl Snapshot {
             return Err(error);
         }
         let path = unsafe { cm_windows_pin_path(pin.as_ptr()) };
-        let length = (0..4096)
-            .find(|&at| unsafe { *path.add(at) == 0 })
-            .unwrap();
-        let path = std::ffi::OsString::from_wide(unsafe { std::slice::from_raw_parts(path, length) });
+        let length = (0..4096).find(|&at| unsafe { *path.add(at) == 0 }).unwrap();
+        let path =
+            std::ffi::OsString::from_wide(unsafe { std::slice::from_raw_parts(path, length) });
         Ok(Self {
             file: Some(unsafe { File::from_raw_handle(file) }),
             pin,

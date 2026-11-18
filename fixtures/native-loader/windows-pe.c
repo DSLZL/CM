@@ -61,7 +61,8 @@ int wmain(int argc, wchar_t **argv) {
     if (argc != 7) return rejected("arguments", ERROR_INVALID_PARAMETER);
     BOOL unsafe_search = !wcscmp(argv[1], L"unsafe");
     BOOL preloaded = !wcscmp(argv[1], L"unchecked-preloaded") || !wcscmp(argv[1], L"guarded-preloaded");
-    BOOL guarded = !wcscmp(argv[1], L"guarded") || !wcscmp(argv[1], L"guarded-preloaded");
+    BOOL trusted_release = !wcscmp(argv[1], L"trusted-release");
+    BOOL guarded = !wcscmp(argv[1], L"guarded") || !wcscmp(argv[1], L"guarded-preloaded") || trusted_release;
     if (!unsafe_search && !preloaded && !guarded && wcscmp(argv[1], L"system32"))
         return rejected("mode", ERROR_INVALID_PARAMETER);
     const char *entry = !wcscmp(argv[4], L"cm_mod_entry_v1") ? "cm_mod_entry_v1"
@@ -70,6 +71,12 @@ int wmain(int argc, wchar_t **argv) {
     Pin p;
     if (!pin(&p, argv[2])) return rejected(p.file_attempted ? "pin-file" : "pin-ancestors", GetLastError());
     if (!sha256(p.file, argv[3])) return rejected("payload-hash", ERROR_INVALID_DATA);
+    HMODULE trusted = NULL;
+    if (trusted_release) {
+        if (GetModuleHandleW(L"version.dll")) return rejected("trusted-control-already-loaded", ERROR_INVALID_DATA);
+        trusted = LoadLibraryExW(L"version.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (!trusted || !system_module(trusted)) return rejected("trusted-control", GetLastError());
+    }
     if (preloaded) {
         if (GetModuleHandleW(L"version.dll")) return rejected("preload-control-already-loaded", ERROR_INVALID_DATA);
         HMODULE poison = LoadLibraryExW(argv[6], NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -85,6 +92,12 @@ int wmain(int argc, wchar_t **argv) {
                 preloaded ? "true" : "false");
             return 2;
         }
+    }
+    if (trusted_release) {
+        if (!FreeLibrary(trusted)) return rejected("trusted-control-release", GetLastError());
+        HMODULE retained = GetModuleHandleW(L"version.dll");
+        if (!retained || !system_module(retained)) return rejected("system-dependency-retained-reference", ERROR_INVALID_DATA);
+        puts("{\"status\":\"retained\",\"caller_reference_released\":true,\"payload_executed\":false}");
     }
     HANDLE current = CreateFileW(p.path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
         FILE_FLAG_OPEN_REPARSE_POINT, NULL);

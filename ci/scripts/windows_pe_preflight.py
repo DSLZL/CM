@@ -371,6 +371,9 @@ def main():
                     if code == 0:
                         if not records or records[-1].get("status") != "loaded" or records[-1].get("entry_value") != expected_value:
                             raise RuntimeError("PE native entry control differs")
+                        if mode == "trusted-release" and records[:-1] != [{"status": "retained",
+                                "caller_reference_released": True, "payload_executed": False}]:
+                            raise RuntimeError("System dependency lost its owned reference after caller release")
                     elif not records or records[-1] != {"status": "rejected", "gate": "system-dependency-identity",
                             "preload_executed": True, "payload_executed": False}:
                         raise RuntimeError("PE preloaded foreign dependency rejection differs")
@@ -413,6 +416,7 @@ def main():
                 observe(location + "-guarded", original, location=location)
             observe("preloaded-unchecked", original, mode="unchecked-preloaded", expected_value=77, poison_marker=True)
             observe("preloaded-guarded", original, mode="guarded-preloaded", expected_code=2, constructor=False, poison_marker=True)
+            observe("trusted-system-reference", original, mode="trusted-release")
             for abi in ("cm_mod_entry_v1", "cm_mod_entry_v2"):
                 observe("rust-" + abi, rust_payload.read_bytes(), abi=abi, constructor=False)
                 observe("snapshot-" + abi, original, abi=abi, mode="snapshot")
