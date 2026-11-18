@@ -189,15 +189,16 @@ def native_protoc(temp, tools, report, run):
             raise RuntimeError("Native protoc source checkout differs: " + name)
         result["sources"][name] = {"repository": repository, "commit": revision}
     build = temp / "protoc-build"
+    cl = Path(tools["cl"]["path"]).as_posix()
     run("native-protoc-configure", [paths["cmake"], "-S", temp / "protobuf", "-B", build, "-G", "Ninja",
-        "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_COMPILER=" + tools["cl"]["path"],
-        "-DCMAKE_CXX_COMPILER=" + tools["cl"]["path"], "-DCMAKE_LINKER=" + str(paths["link"]),
-        "-DCMAKE_AR=" + str(paths["lib"]), "-DCMAKE_MAKE_PROGRAM=" + str(paths["ninja"]),
-        "-DCMAKE_RC_COMPILER=" + str(paths["rc"]), "-DCMAKE_MT=" + str(paths["mt"]),
+        "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_COMPILER=" + cl,
+        "-DCMAKE_CXX_COMPILER=" + cl, "-DCMAKE_LINKER=" + paths["link"].as_posix(),
+        "-DCMAKE_AR=" + paths["lib"].as_posix(), "-DCMAKE_MAKE_PROGRAM=" + paths["ninja"].as_posix(),
+        "-DCMAKE_RC_COMPILER=" + paths["rc"].as_posix(), "-DCMAKE_MT=" + paths["mt"].as_posix(),
         "-Dprotobuf_BUILD_TESTS=OFF", "-Dprotobuf_BUILD_CONFORMANCE=OFF", "-Dprotobuf_BUILD_EXAMPLES=OFF",
         "-Dprotobuf_BUILD_LIBUPB=OFF", "-Dprotobuf_BUILD_SHARED_LIBS=OFF", "-Dprotobuf_MSVC_STATIC_RUNTIME=ON",
         "-Dprotobuf_WITH_ZLIB=OFF", "-Dprotobuf_INSTALL=OFF", "-Dprotobuf_FORCE_FETCH_DEPENDENCIES=ON",
-        "-DFETCHCONTENT_SOURCE_DIR_ABSL=" + str(temp / "absl"), "-DFETCHCONTENT_FULLY_DISCONNECTED=ON"], 180)
+        "-DFETCHCONTENT_SOURCE_DIR_ABSL=" + (temp / "absl").as_posix(), "-DFETCHCONTENT_FULLY_DISCONNECTED=ON"], 180)
     run("native-protoc-build", [paths["cmake"], "--build", build, "--target", "protoc", "--parallel", "2"], 600)
     protoc = build / "protoc.exe"
     result["binary"] = pe_fixture(protoc.read_bytes(), False, expected_machine=0xAA64)
