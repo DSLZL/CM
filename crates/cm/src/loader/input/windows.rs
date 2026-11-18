@@ -43,6 +43,16 @@ unsafe extern "C" {
     fn cm_windows_pin_path(pin: *const std::ffi::c_void) -> *const u16;
     fn cm_windows_pin_free(pin: *mut std::ffi::c_void);
     fn cm_windows_private_check(pin: *const std::ffi::c_void) -> i32;
+    fn cm_windows_private_metadata(
+        pin: *const std::ffi::c_void,
+        attributes: *mut u32,
+        text: *mut u16,
+        capacity: usize,
+    ) -> i32;
+    fn cm_windows_private_copy_metadata(
+        target: *const std::ffi::c_void,
+        source: *const std::ffi::c_void,
+    ) -> i32;
     fn cm_windows_private_create(
         parent: *const std::ffi::c_void,
         name: *const u16,
@@ -97,6 +107,39 @@ pub(crate) struct Handle {
 }
 
 impl Handle {
+    pub(crate) fn private_metadata(&self) -> Result<(u32, String), String> {
+        let mut text = vec![0; 4096];
+        let mut attributes = 0;
+        if unsafe {
+            cm_windows_private_metadata(
+                self.pin.0.as_ptr(),
+                &mut attributes,
+                text.as_mut_ptr(),
+                text.len(),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error().to_string());
+        }
+        let length = text
+            .iter()
+            .position(|value| *value == 0)
+            .ok_or("unterminated private metadata")?;
+        Ok((
+            attributes,
+            String::from_utf16(&text[..length]).map_err(|e| e.to_string())?,
+        ))
+    }
+
+    // Only use on unpublished output; failure can leave partially copied metadata.
+    pub(crate) fn copy_metadata(&self, source: &Self) -> Result<(), String> {
+        if unsafe { cm_windows_private_copy_metadata(self.pin.0.as_ptr(), source.pin.0.as_ptr()) } == 0
+        {
+            return Err(io::Error::last_os_error().to_string());
+        }
+        Ok(())
+    }
+
     pub(crate) fn check_private(&self) -> Result<(), String> {
         if unsafe { cm_windows_private_check(self.pin.0.as_ptr()) } == 0 {
             return Err(io::Error::last_os_error().to_string());

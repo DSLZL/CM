@@ -47,6 +47,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
 
 #include <aclapi.h>
 #include <sddl.h>
+#include <winioctl.h>
 
 static PSECURITY_DESCRIPTOR private_descriptor(const wchar_t *user, const wchar_t *permissions) {
     wchar_t dacl[1536], text[2048];
@@ -111,6 +112,9 @@ static int private_fixture(const wchar_t *root, int change) {
         {L"unprotected-file", L"D:(A;;FA;;;%ls)", 0, 0},
         {L"denied-ace", L"D:P(D;;0x2;;;WD)(A;;FA;;;%ls)", 0, 0},
         {L"inherited-ace", L"D:P(A;ID;FA;;;%ls)", 0, 0},
+        {L"metadata-file", L"D:P(A;;FA;;;%ls)", 0, 1},
+        {L"metadata-dir", L"D:P(A;OICI;FRFX;;;%ls)", 1, 1},
+        {L"metadata-sparse", L"D:P(A;;FA;;;%ls)", 0, 1},
     };
     for (size_t index = 0; index < sizeof(cases) / sizeof(cases[0]); ++index) {
         target = cases[index].name;
@@ -123,10 +127,18 @@ static int private_fixture(const wchar_t *root, int change) {
         if (cases[index].directory) {
             if (!CreateDirectoryW(path, &security)) goto done;
         } else {
-            HANDLE file = CreateFileW(path, READ_CONTROL, 0, &security, CREATE_NEW,
+            BOOL sparse = !wcscmp(target, L"metadata-sparse");
+            HANDLE file = CreateFileW(path, READ_CONTROL | (sparse ? GENERIC_WRITE : 0), 0, &security, CREATE_NEW,
                 FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
             if (file == INVALID_HANDLE_VALUE) goto done;
+            DWORD received = 0;
+            BOOL configured = !sparse || DeviceIoControl(file, FSCTL_SET_SPARSE, NULL, 0, NULL, 0, &received, NULL);
+            DWORD error = GetLastError();
             CloseHandle(file);
+            if (!configured) { SetLastError(error); goto done; }
+            if (!wcscmp(target, L"metadata-file") && !SetFileAttributesW(path,
+                FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM
+                | FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED)) goto done;
         }
         LocalFree(descriptor); descriptor = NULL;
     }

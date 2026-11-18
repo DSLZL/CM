@@ -268,6 +268,117 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     assert_eq!(fs::read(private.path.join("streamed-文件"))?, streamed);
     println!("cm_private passed=streamed-invalid-inputs");
 
+    let read_only = input::open_at(&parent, OsStr::new("read-only-file"), false)?;
+    let source_metadata = read_only.private_metadata()?;
+    let output = private.create_output("metadata-read-only-文件")?;
+    let output_identity = output.identity()?;
+    assert_ne!(read_only.identity()?, output_identity);
+    output.copy_metadata(&read_only)?;
+    assert_eq!(output.private_metadata()?, source_metadata);
+    output.sync_all()?;
+    drop(output);
+    let output = input::open_at(&private.file, OsStr::new("metadata-read-only-文件"), false)?;
+    assert_eq!(output.identity()?, output_identity);
+    assert_eq!(output.private_metadata()?, source_metadata);
+    drop(output);
+    drop(read_only);
+    println!("cm_private passed=metadata-read-only-dacl");
+
+    let source = input::open_at(&parent, OsStr::new("metadata-file"), false)?;
+    let source_metadata = source.private_metadata()?;
+    assert_eq!(source_metadata.0, 1 | 2 | 4 | 32 | 8192);
+    let mut output = private.create_output("metadata-attributes-文件")?;
+    output.write_all(b"metadata leaves streamed bytes intact")?;
+    output.sync_all()?;
+    output.copy_metadata(&source)?;
+    assert_eq!(output.private_metadata()?, source_metadata);
+    output.sync_all()?;
+    let attributes_identity = output.identity()?;
+    drop(output);
+    assert_eq!(
+        fs::read(private.path.join("metadata-attributes-文件"))?,
+        b"metadata leaves streamed bytes intact"
+    );
+    assert_eq!(source.private_metadata()?, source_metadata);
+    drop(source);
+    println!("cm_private passed=metadata-file-attributes");
+
+    let source = directory::Directory::open(&root.join("metadata-dir"))?;
+    let source_metadata = source.file.private_metadata()?;
+    assert!(source_metadata.1.contains("OICI"));
+    let target = private.staging("metadata-directory-目录")?;
+    let target_identity = target.file.identity()?;
+    target.create_file("protected-child", b"protected child")?;
+    let child = input::open_at(&target.file, OsStr::new("protected-child"), false)?;
+    let child_metadata = child.private_metadata()?;
+    let child_identity = child.identity()?;
+    drop(child);
+    target.file.copy_metadata(&source.file)?;
+    assert_eq!(target.file.private_metadata()?, source_metadata);
+    target.sync()?;
+    let child = input::open_at(&target.file, OsStr::new("protected-child"), false)?;
+    assert_eq!(child.private_metadata()?, child_metadata);
+    assert_eq!(child.identity()?, child_identity);
+    assert_eq!(fs::read(child.path())?, b"protected child");
+    drop(child);
+    drop(target);
+    drop(source);
+    directory::discard(&private, "metadata-directory-目录", target_identity)?;
+    println!("cm_private passed=metadata-protected-children");
+
+    let output = private.create_output("metadata-rejections")?;
+    let unchanged = output.private_metadata()?;
+    assert!(output.copy_metadata(&output).is_err());
+    assert!(output.copy_metadata(&private.file).is_err());
+    let foreign = input::open_at(&parent, OsStr::new("everyone-file"), false)?;
+    assert!(foreign.private_metadata().is_err());
+    assert!(output.copy_metadata(&foreign).is_err());
+    drop(foreign);
+    let sparse = input::open_at(&parent, OsStr::new("metadata-sparse"), false)?;
+    sparse.check_private()?;
+    assert!(sparse.private_metadata().is_err());
+    assert!(output.copy_metadata(&sparse).is_err());
+    drop(sparse);
+    assert_eq!(output.private_metadata()?, unchanged);
+    drop(output);
+    let output = input::open_at(&private.file, OsStr::new("metadata-rejections"), false)?;
+    let source = input::open_at(&parent, OsStr::new("read-only-file"), false)?;
+    assert!(output.copy_metadata(&source).is_err());
+    assert_eq!(output.private_metadata()?, unchanged);
+    drop(output);
+    drop(source);
+    println!("cm_private passed=metadata-invalid-source-target");
+
+    let name = OsStr::new("metadata-attributes-文件");
+    let file = input::open_at(&private.file, name, false)?;
+    let clone = file.try_clone()?;
+    assert!(private.remove(name, attributes_identity, false).is_err());
+    drop(file);
+    assert!(private.remove(name, attributes_identity, false).is_err());
+    drop(clone);
+    let mut wrong_identity = attributes_identity;
+    wrong_identity.1[15] ^= 1;
+    assert!(private.remove(name, wrong_identity, false).is_err());
+    let file = input::open_at(&private.file, name, false)?;
+    assert_eq!(file.private_metadata()?.0, 1 | 2 | 4 | 32 | 8192);
+    drop(file);
+    private.remove(name, attributes_identity, false)?;
+    assert!(!private.path.join(name).exists());
+    private.create_file("readonly-mapping", b"hello")?;
+    let name = OsStr::new("readonly-mapping");
+    let file = input::open_at(&private.file, name, false)?;
+    let identity = file.identity()?;
+    drop(file);
+    with_writable_mapping(&private.path.join(name), || {
+        let mut permissions = fs::metadata(private.path.join(name)).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(private.path.join(name), permissions).unwrap();
+        assert!(private.remove(name, identity, false).is_err());
+    })?;
+    private.remove(name, identity, false)?;
+    assert!(!private.path.join(name).exists());
+    println!("cm_private passed=readonly-identity-cleanup");
+
     let lock_path = private.path.join(".cm-write.lock");
     assert!(private.writer_file(false).is_err());
     assert!(!lock_path.exists());

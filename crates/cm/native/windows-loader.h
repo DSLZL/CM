@@ -38,6 +38,8 @@ CmWindowsPin *cm_windows_directory_open(const wchar_t *path);
 CmWindowsPin *cm_windows_child_open(const CmWindowsPin *parent, const wchar_t *name, int directory);
 int cm_windows_file_information(const CmWindowsPin *pin, CmWindowsFileInformation *information);
 int cm_windows_private_check(const CmWindowsPin *pin);
+int cm_windows_private_metadata(const CmWindowsPin *pin, DWORD *attributes, wchar_t *text, size_t capacity);
+int cm_windows_private_copy_metadata(const CmWindowsPin *target, const CmWindowsPin *source);
 CmWindowsPin *cm_windows_private_create(const CmWindowsPin *parent, const wchar_t *name);
 int cm_windows_private_write(const CmWindowsPin *parent, const wchar_t *name,
     const unsigned char *bytes, size_t length);

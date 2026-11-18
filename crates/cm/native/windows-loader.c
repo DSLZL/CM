@@ -5,6 +5,8 @@
 #include <string.h>
 #include <wchar.h>
 #include <winternl.h>
+#include <aclapi.h>
+#include <sddl.h>
 
 #pragma comment(lib, "advapi32.lib")
 
@@ -341,7 +343,7 @@ static CmWindowsPin *cm_windows_child(const CmWindowsPin *parent, const wchar_t 
     ACCESS_MASK access = directory
         ? FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE
         : FILE_GENERIC_READ;
-    if (descriptor && !directory) access |= FILE_GENERIC_WRITE | DELETE;
+    if (descriptor) access |= FILE_GENERIC_WRITE | WRITE_DAC | (directory ? 0 : DELETE);
     if (writable) access |= FILE_GENERIC_WRITE;
     ULONG options = 0x00200000 | 0x20 | (directory ? 0 : 0x40) | (descriptor ? 2 : 0);
     if (directory && descriptor) {
@@ -423,14 +425,9 @@ rejected:
     return 0;
 }
 
-int cm_windows_private_check(const CmWindowsPin *p) {
-    CmWindowsFileInformation info;
-    if (!cm_windows_file_information(p, &info)) return 0;
-    if (!(info.attributes & FILE_ATTRIBUTE_DIRECTORY) && info.links != 1) {
-        SetLastError(ERROR_INVALID_DATA); return 0;
-    }
+static PSECURITY_DESCRIPTOR cm_windows_private_security(const CmWindowsPin *p) {
     TOKEN_USER *user = cm_windows_user();
-    if (!user) return 0;
+    if (!user) return NULL;
     DWORD length = 0;
     PSECURITY_DESCRIPTOR descriptor = NULL;
     int ok = 0;
@@ -445,8 +442,98 @@ int cm_windows_private_check(const CmWindowsPin *p) {
     ok = cm_windows_private_descriptor(descriptor, user->User.Sid);
 done: {
     DWORD error = ok ? ERROR_SUCCESS : GetLastError();
-    free(descriptor);
+    if (!ok) { free(descriptor); descriptor = NULL; }
     free(user);
+    SetLastError(error);
+    return descriptor;
+}}
+
+int cm_windows_private_check(const CmWindowsPin *p) {
+    CmWindowsFileInformation info;
+    if (!cm_windows_file_information(p, &info)) return 0;
+    if (!(info.attributes & FILE_ATTRIBUTE_DIRECTORY) && info.links != 1) {
+        SetLastError(ERROR_INVALID_DATA); return 0;
+    }
+    PSECURITY_DESCRIPTOR descriptor = cm_windows_private_security(p);
+    if (!descriptor) return 0;
+    free(descriptor);
+    return 1;
+}
+
+static int cm_windows_same_information(const CmWindowsFileInformation *a, const CmWindowsFileInformation *b) {
+    return a->volume == b->volume && !memcmp(a->id, b->id, sizeof(a->id)) && a->size == b->size
+        && a->modified == b->modified && a->changed == b->changed && a->links == b->links
+        && a->attributes == b->attributes;
+}
+
+int cm_windows_private_metadata(const CmWindowsPin *p, DWORD *attributes, wchar_t *text, size_t capacity) {
+    CmWindowsFileInformation before, after;
+    const DWORD supported = FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM
+        | FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_NORMAL
+        | FILE_ATTRIBUTE_TEMPORARY | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
+    if (!capacity || capacity > 4096 || !text || !attributes) { SetLastError(ERROR_INVALID_PARAMETER); return 0; }
+    if (!cm_windows_private_check(p) || !cm_windows_file_information(p, &before)) return 0;
+    if (before.attributes & ~supported) { SetLastError(ERROR_NOT_SUPPORTED); return 0; }
+    PSECURITY_DESCRIPTOR descriptor = cm_windows_private_security(p);
+    if (!descriptor) return 0;
+    wchar_t *serialized = NULL;
+    ULONG length = 0;
+    int ok = 0;
+    if (!ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, SDDL_REVISION_1,
+        OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &serialized, &length)) goto done;
+    if (!length || length > capacity || length != wcslen(serialized) + 1) {
+        SetLastError(ERROR_BUFFER_OVERFLOW); goto done;
+    }
+    if (!cm_windows_file_information(p, &after) || !cm_windows_private_check(p)) goto done;
+    if (!cm_windows_same_information(&before, &after)) { SetLastError(ERROR_INVALID_DATA); goto done; }
+    memcpy(text, serialized, length * sizeof(wchar_t));
+    *attributes = before.attributes;
+    ok = 1;
+done: {
+    DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+    if (serialized) LocalFree(serialized);
+    free(descriptor);
+    SetLastError(error);
+    return ok;
+}}
+
+int cm_windows_private_copy_metadata(const CmWindowsPin *target, const CmWindowsPin *source) {
+    wchar_t expected[4096], current[4096];
+    DWORD attributes, actual;
+    CmWindowsFileInformation before, after, destination;
+    if (!cm_windows_file_information(source, &before)
+        || !cm_windows_private_metadata(source, &attributes, expected, 4096)
+        || !cm_windows_private_check(target) || !cm_windows_file_information(target, &destination)) return 0;
+    if (!!(before.attributes & FILE_ATTRIBUTE_DIRECTORY) != !!(destination.attributes & FILE_ATTRIBUTE_DIRECTORY)
+        || (before.volume == destination.volume && !memcmp(before.id, destination.id, sizeof(before.id)))) {
+        SetLastError(ERROR_INVALID_DATA); return 0;
+    }
+    PSECURITY_DESCRIPTOR descriptor = cm_windows_private_security(source);
+    if (!descriptor) return 0;
+    PACL dacl = NULL;
+    BOOL present, defaulted;
+    int ok = 0;
+    if (!GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted) || !present || !dacl) {
+        SetLastError(ERROR_INVALID_ACL); goto done;
+    }
+    DWORD result = SetSecurityInfo(target->file, SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, NULL, NULL, dacl, NULL);
+    if (result != ERROR_SUCCESS) { SetLastError(result); goto done; }
+    FILE_BASIC_INFO basic = {0};
+    basic.FileAttributes = attributes;
+    if (!SetFileInformationByHandle(target->file, FileBasicInfo, &basic, sizeof(basic))
+        || !FlushFileBuffers(target->file)
+        || !cm_windows_private_metadata(source, &actual, current, 4096)) goto done;
+    if (attributes != actual || wcscmp(expected, current)
+        || !cm_windows_file_information(source, &after) || !cm_windows_same_information(&before, &after)) {
+        SetLastError(ERROR_INVALID_DATA); goto done;
+    }
+    if (!cm_windows_private_metadata(target, &actual, current, 4096)) goto done;
+    if (attributes != actual || wcscmp(expected, current)) { SetLastError(ERROR_INVALID_DATA); goto done; }
+    ok = 1;
+done: {
+    DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+    free(descriptor);
     SetLastError(error);
     return ok;
 }}
@@ -568,6 +655,8 @@ done: {
 
 int cm_windows_private_sync(const CmWindowsPin *directory) {
     if (!cm_windows_private_parent(directory)) return 0;
+    if (FlushFileBuffers(directory->file)) return cm_windows_private_check(directory);
+    if (GetLastError() != ERROR_ACCESS_DENIED) return 0;
     HANDLE handle = CreateFileW(directory->path, GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
@@ -659,8 +748,23 @@ int cm_windows_private_remove(const CmWindowsPin *parent, const wchar_t *name,
         SetLastError(ERROR_INVALID_DATA); goto done;
     }
     result = -6;
-    FILE_DISPOSITION_INFO disposition = {TRUE};
-    if (!SetFileInformationByHandle(p->file, FileDispositionInfo, &disposition, sizeof(disposition))) goto done;
+    if (info.attributes & FILE_ATTRIBUTE_READONLY) {
+        typedef NTSTATUS (NTAPI *SetInformation)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
+        typedef ULONG (NTAPI *DosError)(NTSTATUS);
+        HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        if (!ntdll || !cm_windows_system_module(ntdll)) { SetLastError(ERROR_BAD_EXE_FORMAT); goto done; }
+        SetInformation set_information = (SetInformation)(void *)GetProcAddress(ntdll, "NtSetInformationFile");
+        DosError dos_error = (DosError)(void *)GetProcAddress(ntdll, "RtlNtStatusToDosError");
+        if (!set_information || !dos_error) { SetLastError(ERROR_PROC_NOT_FOUND); goto done; }
+        /* Ignore readonly only; retain image-section checks and normal, non-POSIX deletion. */
+        ULONG flags = 0x15;
+        IO_STATUS_BLOCK status;
+        NTSTATUS disposition_status = set_information(p->file, &status, &flags, sizeof(flags), (FILE_INFORMATION_CLASS)64);
+        if (disposition_status < 0) { SetLastError(dos_error(disposition_status)); goto done; }
+    } else {
+        FILE_DISPOSITION_INFO disposition = {TRUE};
+        if (!SetFileInformationByHandle(p->file, FileDispositionInfo, &disposition, sizeof(disposition))) goto done;
+    }
     /* Close only our deletion handle; unrelated retained pins must have prevented this open. */
     cm_windows_pin_free(p);
     p = NULL;
