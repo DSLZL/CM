@@ -597,9 +597,19 @@ int cm_windows_private_publish(const CmWindowsPin *parent, const wchar_t *source
         SetLastError(ERROR_BUFFER_OVERFLOW); goto done;
     }
     result = -6;
-    if (!SetFileInformationByHandle(p->file, FileRenameInfo, rename,
-        (DWORD)(sizeof(FILE_RENAME_INFO) + length * sizeof(wchar_t)))) {
-        DWORD error = GetLastError();
+    typedef NTSTATUS (NTAPI *RenameFile)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
+    typedef ULONG (NTAPI *DosError)(NTSTATUS);
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll || !cm_windows_system_module(ntdll)) { SetLastError(ERROR_BAD_EXE_FORMAT); goto done; }
+    RenameFile rename_file = (RenameFile)(void *)GetProcAddress(ntdll, "NtSetInformationFile");
+    DosError dos_error = (DosError)(void *)GetProcAddress(ntdll, "RtlNtStatusToDosError");
+    if (!rename_file || !dos_error) { SetLastError(ERROR_PROC_NOT_FOUND); goto done; }
+    IO_STATUS_BLOCK status;
+    /* FileRenameInformation resolves the target against the retained parent handle. */
+    NTSTATUS renamed = rename_file(p->file, &status, rename,
+        (ULONG)(sizeof(FILE_RENAME_INFO) + length * sizeof(wchar_t)), (FILE_INFORMATION_CLASS)10);
+    if (renamed < 0) {
+        DWORD error = dos_error(renamed);
         if (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS) result = 0;
         SetLastError(error);
         goto done;
