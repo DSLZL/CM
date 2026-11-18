@@ -17,7 +17,34 @@ pub(crate) type Identity = (u64, [u8; 16]);
 #[path = "input/windows.rs"]
 mod windows;
 #[cfg(windows)]
-pub(crate) use windows::{Handle, open_at, open_directory};
+pub(crate) use windows::{Handle, open_at, open_directory, open_lock};
+
+pub(crate) fn try_lock(file: &Handle, exclusive: bool) -> std::io::Result<()> {
+    #[cfg(not(windows))]
+    {
+        use std::os::fd::AsRawFd;
+
+        let kind = if exclusive {
+            libc::LOCK_EX
+        } else {
+            libc::LOCK_SH
+        };
+        if unsafe { libc::flock(file.as_raw_fd(), kind | libc::LOCK_NB) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        file.check_private().map_err(std::io::Error::other)?;
+        if exclusive {
+            file.try_lock()
+        } else {
+            file.try_lock_shared()
+        }
+        .map_err(Into::into)
+    }
+}
 
 pub(crate) fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))

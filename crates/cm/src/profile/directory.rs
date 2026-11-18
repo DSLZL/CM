@@ -92,4 +92,39 @@ impl Directory {
         self.check()?;
         self.file.create_file(OsStr::new(name), bytes)
     }
+
+    #[cfg(not(windows))]
+    pub(crate) fn writer_file(&self, create: bool) -> Result<loader::Handle, String> {
+        let fd = unsafe {
+            libc::openat(
+                self.file.as_raw_fd(),
+                c".cm-write.lock".as_ptr(),
+                libc::O_RDWR
+                    | libc::O_NONBLOCK
+                    | libc::O_NOFOLLOW
+                    | libc::O_CLOEXEC
+                    | if create { libc::O_CREAT } else { 0 },
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err("profile write lock is absent or unsafe".into());
+        }
+        let file = unsafe { File::from_raw_fd(fd) };
+        let metadata = file.metadata().map_err(|e| e.to_string())?;
+        if !metadata.is_file()
+            || metadata.nlink() != 1
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o077 != 0
+        {
+            return Err("profile write lock is busy or unsafe".into());
+        }
+        Ok(file)
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn writer_file(&self, create: bool) -> Result<loader::Handle, String> {
+        self.check()?;
+        loader::open_lock(&self.file, OsStr::new(".cm-write.lock"), create)
+    }
 }

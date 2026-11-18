@@ -48,6 +48,11 @@ unsafe extern "C" {
         bytes: *const u8,
         length: usize,
     ) -> i32;
+    fn cm_windows_lock_open(
+        parent: *const std::ffi::c_void,
+        name: *const u16,
+        create: i32,
+    ) -> *mut std::ffi::c_void;
 }
 
 struct Pin(NonNull<std::ffi::c_void>);
@@ -172,6 +177,13 @@ pub(crate) fn open_at(parent: &Handle, name: &OsStr, directory: bool) -> Result<
     let name = wide(name)?;
     Handle::take(unsafe {
         cm_windows_child_open(parent.pin.0.as_ptr(), name.as_ptr(), i32::from(directory))
+    })
+}
+
+pub(crate) fn open_lock(parent: &Handle, name: &OsStr, create: bool) -> Result<Handle, String> {
+    let name = wide(name)?;
+    Handle::take(unsafe {
+        cm_windows_lock_open(parent.pin.0.as_ptr(), name.as_ptr(), i32::from(create))
     })
 }
 

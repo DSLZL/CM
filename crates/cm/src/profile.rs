@@ -2,7 +2,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CString, OsStr};
 use std::fs::File;
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -328,7 +328,7 @@ impl UpgradeSource {
             ));
         }
         let root = Directory::open(home).map_err(|e| failure(&e))?;
-        let writer = writer_file(&root, false).map_err(|e| failure(&e))?;
+        let writer = root.writer_file(false).map_err(|e| failure(&e))?;
         acquire_writer(&writer).map_err(|e| failure(&e))?;
         let (active, pin) = read_active(home)?;
         let package = crate::package::PackagePin::capture(&active.host)?;
@@ -343,7 +343,7 @@ impl UpgradeSource {
 
     pub(crate) fn revalidate(&self) -> Result<(), LoadError> {
         self.root.check().map_err(|e| failure(&e))?;
-        let current = writer_file(&self.root, false).map_err(|e| failure(&e))?;
+        let current = self.root.writer_file(false).map_err(|e| failure(&e))?;
         if identity(&self.writer)? != identity(&current)? {
             return Err(failure("source write lock identity changed"));
         }
@@ -352,39 +352,8 @@ impl UpgradeSource {
     }
 }
 
-fn writer_file(root: &Directory, create: bool) -> Result<File, String> {
-    let fd = unsafe {
-        libc::openat(
-            root.file.as_raw_fd(),
-            c".cm-write.lock".as_ptr(),
-            libc::O_RDWR
-                | libc::O_NONBLOCK
-                | libc::O_NOFOLLOW
-                | libc::O_CLOEXEC
-                | if create { libc::O_CREAT } else { 0 },
-            0o600,
-        )
-    };
-    if fd < 0 {
-        return Err("profile write lock is absent or unsafe".into());
-    }
-    let file = unsafe { File::from_raw_fd(fd) };
-    let metadata = file.metadata().map_err(|e| e.to_string())?;
-    if !metadata.is_file()
-        || metadata.nlink() != 1
-        || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.mode() & 0o077 != 0
-    {
-        return Err("profile write lock is busy or unsafe".into());
-    }
-    Ok(file)
-}
-
 fn acquire_writer(file: &File) -> Result<(), String> {
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err("profile write lock is busy or unsafe".into());
-    }
-    Ok(())
+    loader::try_lock(file, true).map_err(|_| "profile write lock is busy or unsafe".into())
 }
 
 impl Directory {
@@ -492,7 +461,7 @@ impl Transaction {
         {
             directory.check().map_err(|e| failure(&e))?;
         }
-        let current_lock = writer_file(&self.root, false).map_err(|e| failure(&e))?;
+        let current_lock = self.root.writer_file(false).map_err(|e| failure(&e))?;
         if identity(&self.lock)? != identity(&current_lock)? {
             return Err(failure("write lock identity changed"));
         }
@@ -570,7 +539,7 @@ impl Transaction {
                 root.file.sync_all().map_err(|e| e.to_string())?;
             }
             let root = Directory::open(home)?;
-            let lock = writer_file(&root, true)?;
+            let lock = root.writer_file(true)?;
             acquire_writer(&lock)?;
             let store = root.child("store")?;
             let objects = store.child("objects")?;

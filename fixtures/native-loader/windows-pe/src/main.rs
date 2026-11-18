@@ -186,6 +186,105 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     file.check_private()?;
     drop(file);
     println!("cm_private passed=created-ancestor-pin");
+
+    let lock_path = private.path.join(".cm-write.lock");
+    assert!(private.writer_file(false).is_err());
+    assert!(!lock_path.exists());
+    let file = private.writer_file(true)?;
+    file.check_private()?;
+    let lock_identity = file.identity()?;
+    drop(file);
+    let file = private.writer_file(false)?;
+    assert_eq!(file.identity()?, lock_identity);
+    drop(file);
+    assert!(fs::read(&lock_path)?.is_empty());
+    println!("cm_private passed=lock-open-create");
+
+    let probe_lock = |exclusive: bool, expected: i32| -> Result<(), Box<dyn std::error::Error>> {
+        let output = Command::new(std::env::current_exe()?)
+            .args([
+                OsStr::new("lock-probe"),
+                private.path.as_os_str(),
+                OsStr::new(if exclusive { "exclusive" } else { "shared" }),
+            ])
+            .output()?;
+        assert_eq!(output.status.code(), Some(expected), "lock probe: {output:?}");
+        assert!(output.stdout.is_empty() && output.stderr.is_empty());
+        Ok(())
+    };
+    let file = private.writer_file(false)?;
+    input::try_lock(&file, true)?;
+    probe_lock(false, 32)?;
+    probe_lock(true, 32)?;
+    drop(private.writer_file(false)?);
+    probe_lock(true, 32)?;
+    println!("cm_private passed=lock-exclusive");
+
+    let clone = file.try_clone()?;
+    drop(file);
+    probe_lock(true, 32)?;
+    drop(clone);
+    probe_lock(true, 0)?;
+    println!("cm_private passed=lock-clone-lifetime");
+
+    let first = private.writer_file(false)?;
+    let second = private.writer_file(false)?;
+    input::try_lock(&first, false)?;
+    input::try_lock(&second, false)?;
+    probe_lock(false, 0)?;
+    probe_lock(true, 32)?;
+    drop(first);
+    probe_lock(true, 32)?;
+    drop(second);
+    probe_lock(true, 0)?;
+    println!("cm_private passed=lock-shared");
+
+    fs::remove_file(&lock_path)?;
+    let lock_bytes = b"existing lock payload";
+    private.create_file(".cm-write.lock", lock_bytes)?;
+    let file = private.writer_file(false)?;
+    let lock_identity = file.identity()?;
+    drop(file);
+    let file = private.writer_file(true)?;
+    assert_eq!(file.identity()?, lock_identity);
+    input::try_lock(&file, true)?;
+    assert_eq!(file.metadata()?.len(), lock_bytes.len() as u64);
+    drop(file);
+    assert_eq!(fs::read(&lock_path)?, lock_bytes);
+    println!("cm_private passed=lock-content-preserved");
+
+    fs::remove_file(&lock_path)?;
+    fs::hard_link(private.path.join(name), &lock_path)?;
+    assert!(private.writer_file(false).is_err());
+    assert!(private.writer_file(true).is_err());
+    assert_eq!(fs::read(private.path.join(name))?, bytes);
+    fs::remove_file(&lock_path)?;
+    let output = Command::new("cmd.exe")
+        .args([
+            OsStr::new("/D"),
+            OsStr::new("/C"),
+            OsStr::new("mklink"),
+            OsStr::new("/J"),
+            lock_path.as_os_str(),
+            collision.as_os_str(),
+        ])
+        .output()?;
+    assert!(output.status.success(), "lock junction setup: {output:?}");
+    assert!(private.writer_file(false).is_err());
+    assert!(private.writer_file(true).is_err());
+    assert_eq!(fs::read(collision.join("unchanged"))?, b"unchanged");
+    fs::remove_dir(&lock_path)?;
+    private.create_file(".cm-write.lock", lock_bytes)?;
+    println!("cm_private passed=lock-unsafe-file");
+
+    control("private-change")?;
+    assert!(private.writer_file(false).is_err());
+    assert!(private.writer_file(true).is_err());
+    control("private-restore")?;
+    private.check()?;
+    assert_eq!(fs::read(&lock_path)?, lock_bytes);
+    probe_lock(true, 0)?;
+    println!("cm_private passed=lock-parent-drift");
     Ok(0)
 }
 
@@ -368,6 +467,20 @@ fn input_controls(root: &Path) -> Result<i32, Box<dyn std::error::Error>> {
 
 fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.len() == 3 && args[0] == "lock-probe" {
+        let exclusive = match args[2].to_str() {
+            Some("exclusive") => true,
+            Some("shared") => false,
+            _ => return Err("invalid lock probe mode".into()),
+        };
+        let directory = directory::Directory::open(Path::new(&args[1]))?;
+        let file = directory.writer_file(false)?;
+        return match input::try_lock(&file, exclusive) {
+            Ok(()) => Ok(0),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(32),
+            Err(error) => Err(error.into()),
+        };
+    }
     if args.len() == 2 && args[0] == "input" {
         return input_controls(Path::new(&args[1]));
     }

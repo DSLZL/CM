@@ -40,4 +40,5 @@ int cm_windows_file_information(const CmWindowsPin *pin, CmWindowsFileInformatio
 int cm_windows_private_check(const CmWindowsPin *pin);
 int cm_windows_private_write(const CmWindowsPin *parent, const wchar_t *name,
     const unsigned char *bytes, size_t length);
+CmWindowsPin *cm_windows_lock_open(const CmWindowsPin *parent, const wchar_t *name, int create);
 #endif

@@ -299,7 +299,7 @@ failed: {
 }}
 
 static CmWindowsPin *cm_windows_child(const CmWindowsPin *parent, const wchar_t *name, int directory,
-    PSECURITY_DESCRIPTOR descriptor) {
+    PSECURITY_DESCRIPTOR descriptor, int writable) {
     size_t length = wcslen(name);
     if (!length || length > 255 || wcspbrk(name, L"\\/:\"<>?*|") || !wcscmp(name, L".")
         || !wcscmp(name, L"..") || name[length - 1] == L'.' || name[length - 1] == L' '
@@ -335,8 +335,9 @@ static CmWindowsPin *cm_windows_child(const CmWindowsPin *parent, const wchar_t 
         ? FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE
         : FILE_GENERIC_READ;
     if (descriptor) access |= FILE_GENERIC_WRITE | DELETE;
+    if (writable) access |= FILE_GENERIC_WRITE;
     NTSTATUS result = open_file(&p->file, access, &attributes, &status, NULL, 0,
-        FILE_SHARE_READ | (directory ? FILE_SHARE_WRITE : 0), descriptor ? 2 : 1,
+        FILE_SHARE_READ | ((directory || writable) ? FILE_SHARE_WRITE : 0), descriptor ? 2 : 1,
         0x00200000 | 0x20 | (directory ? 0 : 0x40) | (descriptor ? 2 : 0), NULL, 0);
     if (result < 0) { SetLastError(dos_error(result)); goto failed; }
     return cm_windows_input_finish(p, directory, descriptor != NULL);
@@ -348,7 +349,7 @@ failed: {
 }}
 
 CmWindowsPin *cm_windows_child_open(const CmWindowsPin *parent, const wchar_t *name, int directory) {
-    return cm_windows_child(parent, name, directory, NULL);
+    return cm_windows_child(parent, name, directory, NULL, 0);
 }
 
 static TOKEN_USER *cm_windows_user(void) {
@@ -465,7 +466,7 @@ int cm_windows_private_write(const CmWindowsPin *parent, const wchar_t *name,
         || !SetSecurityDescriptorDacl(&descriptor, TRUE, (PACL)&acl, FALSE)
         || !SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED)
         || !cm_windows_private_descriptor(&descriptor, user->User.Sid)) goto done;
-    p = cm_windows_child(parent, name, 0, &descriptor);
+    p = cm_windows_child(parent, name, 0, &descriptor, 0);
     if (!p || !cm_windows_private_check(p)) goto done;
     ULONG mode = 0;
     IO_STATUS_BLOCK status;
@@ -493,3 +494,23 @@ done: {
     SetLastError(error);
     return ok;
 }}
+
+CmWindowsPin *cm_windows_lock_open(const CmWindowsPin *parent, const wchar_t *name, int create) {
+    if (!cm_windows_private_check(parent)) return NULL;
+    CmWindowsPin *p = cm_windows_child(parent, name, 0, NULL, 1);
+    if (!p && create && GetLastError() == ERROR_FILE_NOT_FOUND) {
+        if (!cm_windows_private_write(parent, name, NULL, 0)) {
+            DWORD error = GetLastError();
+            if (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS) return NULL;
+        }
+        p = cm_windows_child(parent, name, 0, NULL, 1);
+    }
+    if (!p) return NULL;
+    if (!cm_windows_private_check(p) || !cm_windows_private_check(parent)) {
+        DWORD error = GetLastError();
+        cm_windows_pin_free(p);
+        SetLastError(error);
+        return NULL;
+    }
+    return p;
+}

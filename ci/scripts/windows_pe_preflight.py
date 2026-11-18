@@ -54,7 +54,9 @@ PRIVATE_CHECKS = ["descriptor-owner-mismatch", "owner-directory", "owner-file", 
     "foreign-file-ace", "foreign-directory-ace", "null-dacl", "empty-dacl", "unprotected-dacl",
     "unsupported-ace", "inherited-ace", "held-dacl-drift", "restored-dacl",
     "created-private-file", "created-empty-file", "created-chunked-file", "existing-file-preserved",
-    "file-directory-collision", "create-invalid-paths", "unsafe-parent-no-write", "created-ancestor-pin"]
+    "file-directory-collision", "create-invalid-paths", "unsafe-parent-no-write", "created-ancestor-pin",
+    "lock-open-create", "lock-exclusive", "lock-clone-lifetime", "lock-shared",
+    "lock-content-preserved", "lock-unsafe-file", "lock-parent-drift"]
 
 
 def private_record(text):

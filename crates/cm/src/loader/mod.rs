@@ -27,7 +27,9 @@ use sha2::Sha256;
 #[cfg(not(windows))]
 mod elf;
 mod input;
-pub(crate) use input::{Handle, Identity, InputPin, hash, open_at, open_directory, read_input};
+#[cfg(windows)]
+pub(crate) use input::open_lock;
+pub(crate) use input::{Handle, Identity, InputPin, hash, open_at, open_directory, read_input, try_lock};
 #[cfg(windows)]
 mod pe;
 pub(crate) mod native;

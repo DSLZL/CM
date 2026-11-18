@@ -344,12 +344,7 @@ impl Store {
         {
             return Err(failure("state_ownership", "unsafe state lease"));
         }
-        let kind = if exclusive {
-            libc::LOCK_EX
-        } else {
-            libc::LOCK_SH
-        };
-        if acquire_lease && unsafe { libc::flock(lease.as_raw_fd(), kind | libc::LOCK_NB) } != 0 {
+        if acquire_lease && loader::try_lock(&lease, exclusive).is_err() {
             return Err(failure(
                 "state_busy",
                 "state is in use; exit CM runtimes before this operation",
