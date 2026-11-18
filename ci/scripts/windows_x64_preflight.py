@@ -44,10 +44,12 @@ def authority(policy, entry, env, *, key=KEY):
         raise RuntimeError("Windows probe differs from its exact cache-none native preflight authority")
 
 
-def pe_fixture(data, dll, *, expected_machine=0x8664):
+def pe_fixture(data, dll, *, expected_machine=0x8664, maximum_bytes=32 * 1024 * 1024):
     if type(expected_machine) is not int or expected_machine not in (0x8664, 0xAA64):
         raise RuntimeError("Unreviewed native PE machine")
-    if not 128 <= len(data) <= 32 * 1024 * 1024 or data[:2] != b"MZ":
+    if type(maximum_bytes) is not int or maximum_bytes not in (32 * 1024 * 1024, 256 * 1024 * 1024):
+        raise RuntimeError("Unreviewed native PE size limit")
+    if not 128 <= len(data) <= maximum_bytes or data[:2] != b"MZ":
         raise RuntimeError("Expected bounded native PE fixture")
     header = struct.unpack_from("<I", data, 60)[0]
     if not 64 <= header <= len(data) - 264 or data[header:header + 4] != b"PE\0\0":
@@ -996,16 +998,32 @@ def self_check():
         pass
     else:
         raise AssertionError("x64 PE accepted for native ARM64")
-    for offset, format_string, value in ((60, "<I", 0xFFFFFFF0), (132, "<H", 0xAA64),
-            (134, "<H", 99), (148, "<H", 239), (150, "<H", 2), (152, "<H", 0x10B),
-            (408, "<I", 0xFFFFFF00), (412, "<I", 100), (428, "<I", 0xE0000020)):
-        changed = bytearray(data); struct.pack_into(format_string, changed, offset, value)
+    large = bytes(data) + bytes(32 * 1024 * 1024 + 1 - len(data))
+    try:
+        pe_fixture(large, True)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("Default PE size limit was widened")
+    assert pe_fixture(large, True, maximum_bytes=256 * 1024 * 1024)["size"] == len(large)
+    for maximum_bytes in (True, 0, -1, 33 * 1024 * 1024, float(256 * 1024 * 1024)):
         try:
-            pe_fixture(bytes(changed), True)
+            pe_fixture(bytes(data), True, maximum_bytes=maximum_bytes)
         except RuntimeError:
             pass
         else:
-            raise AssertionError("Malformed PE fixture accepted")
+            raise AssertionError("Unreviewed PE size limit accepted")
+    for maximum_bytes in (32 * 1024 * 1024, 256 * 1024 * 1024):
+        for offset, format_string, value in ((60, "<I", 0xFFFFFFF0), (132, "<H", 0xAA64),
+                (134, "<H", 99), (148, "<H", 239), (150, "<H", 2), (152, "<H", 0x10B),
+                (408, "<I", 0xFFFFFF00), (412, "<I", 100), (428, "<I", 0xE0000020)):
+            changed = bytearray(data); struct.pack_into(format_string, changed, offset, value)
+            try:
+                pe_fixture(bytes(changed), True, maximum_bytes=maximum_bytes)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Malformed PE fixture accepted")
     expected = {"status": "ready", "gate": "verified-pin", "native_executed": False}
     assert exact_record(json.dumps(expected), expected) == expected
     for changed in ({**expected, "native_executed": 0}, {**expected, "status": "pass"}, {**expected, "extra": True}):

@@ -300,7 +300,11 @@ def v8_link(temp, tools, values, report, run):
             "-p", "codex-v8-poc", "--features", "sandbox", "--lib", "--no-run",
             "--message-format=json-render-diagnostics", "-j", "2"], 1080)
         binary = v8_executable(output, target, checkout / "codex-rs/v8-poc/src/lib.rs")
-        result["binary"] = pe_fixture(binary.read_bytes(), False, expected_machine=0xAA64)
+        result["binary_bytes"] = binary.stat().st_size
+        if result["binary_bytes"] > 256 * 1024 * 1024:
+            raise RuntimeError("Oversized native V8 test executable")
+        result["binary"] = pe_fixture(binary.read_bytes(), False, expected_machine=0xAA64,
+            maximum_bytes=256 * 1024 * 1024)
         if any(sha(checkout / path) != digest for path, digest in expected.items()) or any(
                 sha(Path(values[name])) != report["v8"][digest] for name, digest in (
                     ("RUSTY_V8_ARCHIVE", "archive_sha256"), ("RUSTY_V8_SRC_BINDING_PATH", "binding_sha256"))):
