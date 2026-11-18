@@ -27,90 +27,14 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
     return TRUE;
 }
 #else
-typedef struct {
-    HANDLE parents[96], file;
-    size_t count;
-    BOOL file_attempted;
-    FILE_ID_INFO id;
-    LARGE_INTEGER size;
-    wchar_t path[4096];
-} Pin;
+#include "../../crates/cm/native/windows-loader.c"
+typedef CmWindowsPin Pin;
+#define pin cm_windows_pin
+#define sha256 cm_windows_sha256
 
 static int rejected(const char *gate, DWORD error) {
     printf("{\"status\":\"rejected\",\"gate\":\"%s\",\"error\":%lu,\"native_executed\":false}\n", gate, error);
     return 2;
-}
-
-static int pin(Pin *p, const wchar_t *name) {
-    ZeroMemory(p, sizeof(*p));
-    p->file = INVALID_HANDLE_VALUE;
-    DWORD length = GetFullPathNameW(name, 4096, p->path, NULL);
-    if (!length || length >= 4096 || length < 4 || p->path[1] != L':' || p->path[2] != L'\\'
-        || _wcsicmp(name, p->path) != 0) { SetLastError(ERROR_INVALID_NAME); return 0; }
-    for (DWORD i = 2; i < length; ++i) {
-        if (p->path[i] != L'\\') continue;
-        wchar_t directory[4096];
-        memcpy(directory, p->path, (i + 1) * sizeof(wchar_t));
-        directory[i + 1] = 0;
-        if (p->count == 96) { SetLastError(ERROR_BUFFER_OVERFLOW); return 0; }
-        HANDLE handle = CreateFileW(directory, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
-        if (handle == INVALID_HANDLE_VALUE) return 0;
-        p->parents[p->count++] = handle;
-        BY_HANDLE_FILE_INFORMATION info;
-        if (!GetFileInformationByHandle(handle, &info)) return 0;
-        if (!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-            || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
-            SetLastError(ERROR_REPARSE_TAG_INVALID); return 0;
-        }
-    }
-    p->file_attempted = TRUE;
-    p->file = CreateFileW(p->path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
-        FILE_FLAG_OPEN_REPARSE_POINT, NULL);
-    if (p->file == INVALID_HANDLE_VALUE) return 0;
-    BY_HANDLE_FILE_INFORMATION info;
-    if (!GetFileInformationByHandle(p->file, &info)
-        || !GetFileInformationByHandleEx(p->file, FileIdInfo, &p->id, sizeof(p->id))
-        || !GetFileSizeEx(p->file, &p->size)) return 0;
-    if (GetFileType(p->file) != FILE_TYPE_DISK || info.nNumberOfLinks != 1
-        || (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
-        || p->size.QuadPart < 1 || p->size.QuadPart > 32 * 1024 * 1024) {
-        SetLastError(ERROR_INVALID_DATA); return 0;
-    }
-    wchar_t final[4096];
-    length = GetFinalPathNameByHandleW(p->file, final, 4096, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-    if (!length || length >= 4096 || wcsncmp(final, L"\\\\?\\", 4)
-        || _wcsicmp(final + 4, p->path)) { SetLastError(ERROR_INVALID_NAME); return 0; }
-    return 1;
-}
-
-static int sha256(HANDLE file, const wchar_t *expected) {
-    BCRYPT_ALG_HANDLE algorithm = NULL;
-    BCRYPT_HASH_HANDLE hash = NULL;
-    DWORD length = 0, received = 0;
-    PUCHAR object = NULL;
-    BYTE buffer[16384], digest[32];
-    int ok = 0;
-    if (wcslen(expected) != 64 || BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, NULL, 0)) goto done;
-    if (BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, (PUCHAR)&length, sizeof(length), &received, 0)) goto done;
-    object = (PUCHAR)malloc(length);
-    if (!object || BCryptCreateHash(algorithm, &hash, object, length, NULL, 0, 0)) goto done;
-    for (;;) {
-        if (!ReadFile(file, buffer, sizeof(buffer), &received, NULL)) goto done;
-        if (!received) break;
-        if (BCryptHashData(hash, buffer, received, 0)) goto done;
-    }
-    if (BCryptFinishHash(hash, digest, sizeof(digest), 0)) goto done;
-    ok = 1;
-    for (size_t i = 0; i < 32; ++i) {
-        const wchar_t hex[] = L"0123456789abcdef";
-        if (expected[2 * i] != hex[digest[i] >> 4] || expected[2 * i + 1] != hex[digest[i] & 15]) ok = 0;
-    }
-done:
-    if (hash) BCryptDestroyHash(hash);
-    if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
-    free(object);
-    return ok;
 }
 
 static int load(const wchar_t *path, const wchar_t *expected) {

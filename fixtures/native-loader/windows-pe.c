@@ -42,30 +42,8 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
 #include "windows-preflight.c"
 #undef wmain
 
-static int system_module(HMODULE module) {
-    wchar_t system[4096], path[4096];
-    UINT length = GetSystemDirectoryW(system, 4096);
-    DWORD actual = GetModuleFileNameW(module, path, 4096);
-    if (!length || length >= 4096 || !actual || actual >= 4096 || actual <= length + 1
-        || _wcsnicmp(path, system, length) || path[length] != L'\\') return 0;
-    return wcschr(path + length + 1, L'\\') == NULL && wcschr(path + length + 1, L'/') == NULL;
-}
-
-static int system_dependencies(const wchar_t *csv) {
-    wchar_t names[4096];
-    if (wcscpy_s(names, 4096, csv)) return 0;
-    wchar_t *context = NULL;
-    unsigned count = 0;
-    for (wchar_t *name = wcstok_s(names, L",", &context); name; name = wcstok_s(NULL, L",", &context)) {
-        if (++count > 32 || !wcslen(name) || wcspbrk(name, L"\\/:")) return 0;
-        HMODULE module = GetModuleHandleW(name);
-        if (module && !system_module(module)) return 0;
-        if (!module) module = LoadLibraryExW(name, NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
-        if (!module || !system_module(module)) return 0;
-        /* Trusted system modules and their handles remain live through payload loading. */
-    }
-    return (int)count;
-}
+#define system_module cm_windows_system_module
+#define system_dependencies cm_windows_system_dependencies
 
 int wmain(int argc, wchar_t **argv) {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
@@ -102,7 +80,7 @@ int wmain(int argc, wchar_t **argv) {
     int dependency_count = 0;
     if (guarded) {
         dependency_count = system_dependencies(argv[5]);
-        if (!dependency_count) {
+        if (dependency_count < 0) {
             printf("{\"status\":\"rejected\",\"gate\":\"system-dependency-identity\",\"preload_executed\":%s,\"payload_executed\":false}\n",
                 preloaded ? "true" : "false");
             return 2;
@@ -129,7 +107,7 @@ int wmain(int argc, wchar_t **argv) {
     memcpy(&function, &address, sizeof(function));
     if (!function) return 2;
     int value = function();
-    if (guarded && !system_dependencies(argv[5])) return 2;
+    if (guarded && system_dependencies(argv[5]) < 0) return 2;
     printf("{\"status\":\"loaded\",\"entry_value\":%d,\"dependencies\":%d,\"guarded\":%s,\"payload_executed\":true}\n",
         value, dependency_count, guarded ? "true" : "false");
     return value == 41 || value == 77 ? 0 : 2;

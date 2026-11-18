@@ -1,7 +1,7 @@
 diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
 --- a/codex-rs/Cargo.lock
 +++ b/codex-rs/Cargo.lock
-@@ -1898,8 +1898,27 @@
+@@ -1898,8 +1898,29 @@
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
  
@@ -15,9 +15,11 @@ diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
 +name = "cm-runtime"
 +version = "0.1.0"
 +dependencies = [
++ "cc",
 + "cm-abi",
 + "libc",
 + "libloading",
++ "object",
 + "semver",
 + "serde",
 + "serde_json",

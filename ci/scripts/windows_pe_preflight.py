@@ -23,16 +23,24 @@ INPUTS = (
     "fixtures/native-loader/windows-pe/Cargo.toml", "fixtures/native-loader/windows-pe/Cargo.lock",
     "fixtures/native-loader/windows-pe/src/main.rs", "fixtures/native-loader/windows-pe/src/payload.rs",
     "ci/scripts/windows_pe_preflight.py",
+    "crates/cm/src/loader/windows.rs", "crates/cm/native/windows-loader.c", "crates/cm/native/windows-loader.h",
+    "crates/cm/build.rs", "crates/cm/Cargo.toml",
 )
 LOCKED = {
+    "cc": ("1.2.55", "47b26a0954ae34af09b50f0de26458fa95369a0d478d8236d3f93082b219bd29"),
+    "cfg-if": ("1.0.4", "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"),
+    "find-msvc-tools": ("0.1.9", "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"),
+    "libloading": ("0.8.9", "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"),
     "object": ("0.37.3", "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"),
     "memchr": ("2.8.1", "6b947ae49db0d222b1dbc6b113ce7248a3fc3a6ca21b696717bfc000ba4484d8"),
+    "shlex": ("1.3.0", "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"),
+    "windows-link": ("0.2.1", "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"),
 }
 
 
 def inventory(metadata):
     packages = metadata.get("packages", [])
-    if sorted(row["name"] for row in packages) != ["cm-windows-pe-fixture", "memchr", "object"]:
+    if sorted(row["name"] for row in packages) != sorted(["cm-windows-pe-fixture", *LOCKED]):
         raise RuntimeError("PE fixture dependency closure changed")
     for row in packages:
         if row["name"] in LOCKED:
@@ -211,7 +219,9 @@ def main():
 
     try:
         if any(os.environ.get(name) for name in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC_WRAPPER",
-                "RUSTC_WORKSPACE_WRAPPER", "CFLAGS", "CXXFLAGS")):
+                "RUSTC_WORKSPACE_WRAPPER", "CFLAGS", "CXXFLAGS", "CL", "_CL_", "CC", "AR",
+                "CC_aarch64_pc_windows_msvc", "AR_aarch64_pc_windows_msvc",
+                "CFLAGS_aarch64_pc_windows_msvc", "CRATE_CC_NO_DEFAULTS", "CC_FORCE_DISABLE")):
             raise RuntimeError("PE fixture requires native baseline compilers without overrides")
         cfg = json.loads((root / ".github/cm-ci.json").read_text())
         if cfg["upstream"]["commit"] != REVISION or cfg["rust_toolchain"] != "1.95.0":
@@ -229,6 +239,8 @@ def main():
         tools["link"] = {"path": str(link), **pe_fixture(link.read_bytes(), False, expected_machine=0xAA64)}
         dumpbin = cl.with_name("dumpbin.exe")
         tools["dumpbin"] = {"path": str(dumpbin), **pe_fixture(dumpbin.read_bytes(), False, expected_machine=0xAA64)}
+        librarian = cl.with_name("lib.exe")
+        tools["lib"] = {"path": str(librarian), **pe_fixture(librarian.read_bytes(), False, expected_machine=0xAA64)}
         fixture = root / "fixtures/native-loader/windows-pe"
         lock = tomllib.loads((fixture / "Cargo.lock").read_text())
         if {row["name"]: (row["version"], row.get("checksum")) for row in lock["package"]} != {
@@ -246,13 +258,16 @@ def main():
             _, version = run("pe-rustc-version", [tools["rustc"]["path"], "-Vv"])
             if "host: " + TARGET not in version.splitlines():
                 raise RuntimeError("PE fixture Rust compiler is not native ARM64")
-            for name, relative in (("parser", INPUTS[0]), ("main", INPUTS[5]), ("payload", INPUTS[6])):
+            formatted = {"parser": INPUTS[0], "main": INPUTS[5], "payload": INPUTS[6],
+                "snapshot": INPUTS[8], "product-build": INPUTS[11]}
+            for name, relative in formatted.items():
                 run("pe-format-" + name, [tools["rustfmt"]["path"], "--edition", "2024", "--emit", "stdout", root / relative])
             run("pe-format-check", [tools["rustfmt"]["path"], "--edition", "2024", "--check",
-                root / INPUTS[0], root / INPUTS[5], root / INPUTS[6]])
+                *(root / relative for relative in formatted.values())])
             report["rustflags"] = "-Ctarget-feature=+crt-static"
             os.environ.update({"CARGO_HOME": str(temp / "c"), "CARGO_TARGET_DIR": str(temp / "t"), "CARGO_INCREMENTAL": "0",
                 "RUSTUP_TOOLCHAIN": toolchain, "RUSTC": tools["rustc"]["path"], "RUSTFLAGS": report["rustflags"],
+                "CC": str(cl), "AR": str(librarian),
                 "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER": tools["link"]["path"]})
             cargo = [tools["cargo"]["path"]]
             _, text = run("pe-cargo-metadata", [*cargo, "metadata", "--format-version", "1", "--locked"], 180, cwd=fixture)
@@ -261,6 +276,10 @@ def main():
                 raise RuntimeError("Missing unique Cargo metadata JSON record")
             metadata = records[0]
             inventory(metadata)
+            fixture_package = next(row for row in metadata["packages"] if row["name"] == "cm-windows-pe-fixture")
+            build_scripts = [row for row in fixture_package["targets"] if row["kind"] == ["custom-build"]]
+            if len(build_scripts) != 1 or Path(build_scripts[0]["src_path"]).resolve() != root / "crates/cm/build.rs":
+                raise RuntimeError("PE fixture must compile the actual product build script")
             report["dependencies"] = [{"name": row["name"], "version": row["version"], "license": row["license"]}
                 for row in metadata["packages"] if row["name"] in LOCKED]
             report["licenses"] = {}
@@ -396,6 +415,7 @@ def main():
             observe("preloaded-guarded", original, mode="guarded-preloaded", expected_code=2, constructor=False, poison_marker=True)
             for abi in ("cm_mod_entry_v1", "cm_mod_entry_v2"):
                 observe("rust-" + abi, rust_payload.read_bytes(), abi=abi, constructor=False)
+                observe("snapshot-" + abi, original, abi=abi, mode="snapshot")
             if any(sha(root / name) != expected for name, expected in report["source_sha256"].items()) or any(
                     sha(Path(tool["path"])) != tool["sha256"] for tool in tools.values()):
                 raise RuntimeError("PE fixture source or native tool changed")
@@ -413,7 +433,24 @@ def self_check():
     root = Path(__file__).resolve().parents[2]
     import host
     production = {row["path"] for row in host.product_manifest(root)}
-    assert not (set(INPUTS) & production), "Windows-only fixture/parser must not invalidate the existing Linux H"
+    shared = {"crates/cm/Cargo.toml"}
+    assert not ((set(INPUTS) - shared) & production), "Windows-only loader/fixture must stay outside Linux H"
+    assert shared <= production, "Shared crate build inputs must change the Linux H identity"
+    import retry
+    pin_name = "adapters/codex-e4568a3/source.json"
+    pin = json.loads((root / pin_name).read_text())
+    rows = b"100644 blob aaaa\t" + pin_name.encode() + b"\x00"
+    additions = b"".join(b"100644 blob bbbb\t" + name.encode() + b"\x00" for name in set(INPUTS) - shared)
+    recipe = "    env:\n      CM_TARGET: x86_64-unknown-linux-gnu\n    steps:\n"
+    with patch.object(retry, "source", side_effect=lambda root, revision, path:
+            json.dumps(pin) if path == pin_name else recipe):
+        for target in ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"):
+            with patch.dict(os.environ, {"CM_TARGET": target}), patch.object(retry, "git", return_value=rows):
+                baseline = retry.product_inputs(root, "HEAD")
+                with patch.object(retry, "git", return_value=rows + additions):
+                    assert retry.product_inputs(root, "HEAD") == baseline
+                with patch.object(retry, "git", return_value=rows + additions + b"100644 blob cccc\tcrates/cm/Cargo.toml\x00"):
+                    assert retry.product_inputs(root, "HEAD") != baseline
     record = "cm_pe dependencies=kernel32.dll,version.dll imports=2 ordinals=1 entry=4096"
     assert audit_record(record)["ordinal_imports"] == 1
     for text in (record + "\n" + record, record.replace("ordinals=1", "ordinals=3"),

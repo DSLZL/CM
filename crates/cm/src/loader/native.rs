@@ -4,9 +4,10 @@ use std::mem::size_of;
 use std::ptr;
 
 use cm_abi::*;
-use libloading::os::unix::Library;
-use libloading::os::unix::RTLD_LOCAL;
-use libloading::os::unix::RTLD_NOW;
+#[cfg(not(windows))]
+use libloading::os::unix::{Library, RTLD_LOCAL, RTLD_NOW};
+#[cfg(windows)]
+use libloading::os::windows::Library;
 
 use super::Preflighted;
 use super::snapshot_path;
@@ -109,7 +110,7 @@ unsafe impl Send for NativeMod {}
 
 pub(crate) fn open(
     manifest: &super::Manifest,
-    snapshot: std::fs::File,
+    snapshot: super::Snapshot,
     needed: &[String],
 ) -> Result<&'static Library, LoadError> {
     let path = snapshot_path(&snapshot);
@@ -121,15 +122,20 @@ pub(crate) fn open(
             "needed": needed, "load_path": path, "sealed": true,
         }),
     );
-    // Constructors can publish pointers even when negotiation subsequently fails.
-    let _snapshot = Box::leak(Box::new(snapshot));
     event(
         "dlopen-start",
         serde_json::json!({"id": manifest.id, "already_native_executed": true}),
     );
-    let library = unsafe { Library::open(Some(&path), RTLD_NOW | RTLD_LOCAL) }
-        .map_err(|e| LoadError::native("dlopen", &e.to_string()))?;
-    Ok(Box::leak(Box::new(library)))
+    #[cfg(windows)]
+    return snapshot.load(needed).map_err(|e| LoadError::native("dlopen", &e));
+    #[cfg(not(windows))]
+    {
+        // Constructors can publish pointers even when negotiation subsequently fails.
+        let _snapshot = Box::leak(Box::new(snapshot));
+        let library = unsafe { Library::open(Some(&path), RTLD_NOW | RTLD_LOCAL) }
+            .map_err(|e| LoadError::native("dlopen", &e.to_string()))?;
+        Ok(Box::leak(Box::new(library)))
+    }
 }
 
 impl NativeMod {

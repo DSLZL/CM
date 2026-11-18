@@ -346,10 +346,10 @@ def native_protocol(root, temp, tools, report, run):
     build_name = "codex-rs/code-mode-protocol/build.rs"
     pin = json.loads((root / "adapters/codex-e4568a3/source.json").read_text(encoding="utf-8"))
     overlay = root / overlay_name
-    if (pin["commit"] != REVISION or pin.get("target_overlay", {}).get(TARGET) != {overlay_name: build_name}
+    if (pin["commit"] != REVISION or pin.get("target_overlay", {}).get(TARGET, {}).get(overlay_name) != build_name
             or overlay_name not in (root / "ci/source-files.txt").read_text().splitlines()
             or overlay.is_symlink() or not overlay.is_file() or not 0 < overlay.stat().st_size <= 4096):
-        raise RuntimeError("Protocol requires its single reviewed target overlay")
+        raise RuntimeError("Protocol requires its reviewed target overlay")
     overlay_hash = sha(overlay)
     checkout = temp / "protocol-upstream"
     git = ["git", "-c", "core.hooksPath=NUL", "-c", "core.autocrlf=false", "-c", "core.longpaths=true", "-C", checkout]
@@ -713,7 +713,7 @@ def self_check():
                 try:
                     native_protocol(root, temp, {}, {}, command)
                 except RuntimeError as error:
-                    assert str(error) == {"overlay": "Protocol requires its single reviewed target overlay",
+                    assert str(error) == {"overlay": "Protocol requires its reviewed target overlay",
                         "commit": "Protocol source checkout differs",
                         "hash": "Protocol source inputs differ before compilation"}[case]
                 else:

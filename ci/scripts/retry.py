@@ -301,6 +301,7 @@ def native_recipe(text):
 def product_inputs(root, revision):
     tree = git(root, "ls-tree", "-rz", revision).split(b"\0")
     files = {}
+    inactive_overlay = set()
     runtime_modules = {"ci/scripts/" + name + ".py": {"matrix", "driver", "self_check"} for name in
                        ("mod_author", "mod_manifest", "runtime_sdk", "managed_package", "runtime_state")}
     runtime_modules["ci/scripts/mod_manifest.py"].update({"rejection_cases", "zip_rejections",
@@ -320,6 +321,8 @@ def product_inputs(root, revision):
                       "ci/worker-files-macos-arm64.json", "ci/scripts/macos_arm64_preflight.py",
                       "fixtures/native-loader/macos-preflight.c",
                       "ci/worker-files-windows-x64.json", "ci/scripts/windows_x64_preflight.py",
+                      "ci/scripts/windows_arm64_preflight.py", "ci/scripts/windows_native_inputs.py",
+                      "ci/scripts/windows_pe_preflight.py",
                       "fixtures/native-loader/windows-preflight.c",
                       "fixtures/native-loader/windows-lpac-network.c",
                       "ci/scripts/windows_isolation_preflight.py", "fixtures/native-loader/windows-isolation-probe.rs",
@@ -345,11 +348,14 @@ def product_inputs(root, revision):
                 or path in RUNTIME_DATA and not path.startswith("crates/cm/src/distribution-")
                 or path.endswith(".md") or path.startswith(("docs/", ".github/workflows/", "ci/worker/"))
                 or path.startswith("fixtures/") and path.endswith(".py")
+                or path.startswith("fixtures/native-loader/windows-")
                 or "/.vscode/" in path or "/.github/" in path):
             continue
         if path == "adapters/codex-e4568a3/source.json":
             pin = json.loads(source(root, revision, path))
-            overlay = pin.pop("target_overlay", {}).get(linux_native()["target"], {})
+            targets = pin.pop("target_overlay", {})
+            overlay = targets.get(linux_native()["target"], {})
+            inactive_overlay = {name for target in targets.values() for name in target} - set(pin["overlay"]) - set(overlay)
             official = pin.pop("official_assets", {}).get(linux_native()["target"], pin.pop("official_asset", None))
             if official is not None:
                 pin["official_asset"] = official
@@ -383,6 +389,8 @@ def product_inputs(root, revision):
             files[path] = projection(source(root, revision, path), exclude=runtime_modules[path], production=True)
         else:
             files[path] = metadata.decode()
+    for path in inactive_overlay:
+        files.pop(path, None)
     # Gate and upload changes do not change a compiler recipe. Commands still do.
     recipe = source(root, revision, "ci/worker/linux-recipe.yml")
     blocks = re.split(r"(?m)^      - name: ", recipe)[1:]

@@ -599,6 +599,9 @@ def main(*, key=KEY):
             report["environment"] = {"os": platform.platform(), "python": platform.python_version(),
                 "cl": str(cl), **sdk, "image_os": os.environ["ImageOS"], "image_version": os.environ["ImageVersion"]}
             source = root / "fixtures/native-loader" / ("windows-lpac-network.c" if lpac else "windows-preflight.c")
+            report["source_sha256"] = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in (
+                source.relative_to(root).as_posix(),
+                *(("crates/cm/native/windows-loader.c", "crates/cm/native/windows-loader.h") if not lpac else ()))}
             probe, payload = temp / "native-probe.exe", temp / "sentinel.dll"
             flags = ["/nologo", "/Bv", "/std:c11", "/W4", "/WX", "/O2", "/MT", "/utf-8", "/TC"]
             libraries = ["bcrypt.lib", *(["userenv.lib", "advapi32.lib", "ws2_32.lib", "onecoreuap.lib"] if lpac else [])]

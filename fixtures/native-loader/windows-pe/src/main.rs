@@ -1,5 +1,7 @@
 #[path = "../../../../crates/cm/src/loader/pe.rs"]
 mod pe;
+#[path = "../../../../crates/cm/src/loader/windows.rs"]
+mod windows;
 
 use std::io::Read;
 use std::path::Path;
@@ -29,10 +31,23 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         return Err("expected absolute DLL path".into());
     }
     let entry = args[2].to_str().ok_or("invalid entry")?;
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)?
-        .take(32 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes)?;
+    let snapshot = if mode == "load" && args[5] == "guarded" {
+        Some(windows::Snapshot::open(
+            path,
+            args[4].to_str().ok_or("invalid hash")?,
+        )?)
+    } else {
+        None
+    };
+    let bytes = if let Some(snapshot) = &snapshot {
+        snapshot.read()?
+    } else {
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)?
+            .take(32 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        bytes
+    };
     let audit = match pe::check(&bytes, MACHINE, entry) {
         Ok(value) => value,
         Err(error) => {
@@ -49,6 +64,45 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     );
     if mode == "validate" {
         return Ok(0);
+    }
+    let snapshot = if args[5] == "snapshot" {
+        for (name, extension) in [
+            (c"cm-mod-v1", "dll"),
+            (c"cm-distribution-verifier", "exe"),
+            (c"cm-distribution-bundle", "jsonl"),
+            (c"cm-distribution-root", "bin"),
+        ] {
+            let private = windows::Snapshot::create(&bytes, name)?;
+            let private_path = private.path().to_path_buf();
+            assert_eq!(private_path.extension().unwrap(), extension);
+            assert_eq!(private.read()?, bytes);
+            assert!(
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&private_path)
+                    .is_err()
+            );
+            assert!(std::fs::remove_file(&private_path).is_err());
+            drop(private);
+            assert!(!private_path.exists());
+            assert!(!private_path.parent().unwrap().exists());
+        }
+        Some(windows::Snapshot::create(&bytes, c"cm-mod-v1")?)
+    } else {
+        snapshot
+    };
+    if let Some(snapshot) = snapshot {
+        let library = snapshot.load(&audit.dependencies)?;
+        let entry = std::ffi::CString::new(entry)?;
+        let function = unsafe {
+            library.get::<unsafe extern "system" fn() -> i32>(entry.as_bytes_with_nul())?
+        };
+        let value = unsafe { function() };
+        println!(
+            "{{\"status\":\"loaded\",\"entry_value\":{value},\"dependencies\":{},\"guarded\":true,\"payload_executed\":true}}",
+            audit.dependencies.len()
+        );
+        return Ok(if value == 41 { 0 } else { 2 });
     }
     let probe = Path::new(&args[3]);
     if !probe.is_absolute() {

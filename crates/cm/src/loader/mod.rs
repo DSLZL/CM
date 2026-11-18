@@ -25,9 +25,18 @@ use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
 
+#[cfg(not(windows))]
 mod elf;
+#[cfg(windows)]
+mod pe;
 pub(crate) mod native;
 pub(crate) mod registration;
+#[cfg(windows)]
+mod windows;
+#[cfg(not(windows))]
+pub(crate) type Snapshot = File;
+#[cfg(windows)]
+pub(crate) use windows::Snapshot;
 
 pub(crate) const MAX_MANIFEST: u64 = 64 * 1024;
 pub(crate) const MAX_PAYLOAD: u64 = 64 * 1024 * 1024;
@@ -192,7 +201,7 @@ pub(crate) struct ResourceSnapshot {
 
 pub(crate) struct Preflighted {
     pub manifest: Manifest,
-    pub snapshot: File,
+    pub snapshot: Snapshot,
     pub needed: Vec<String>,
     pub resources: Vec<ResourceSnapshot>,
 }
@@ -377,7 +386,7 @@ pub(crate) fn inventory(home: &Path) -> Result<Inventory, String> {
     let directory = open_directory(&root)?;
     let metadata = directory.metadata().map_err(|e| e.to_string())?;
     let mut packages = BTreeMap::new();
-    for entry in fs::read_dir(snapshot_path(&directory)).map_err(|e| e.to_string())? {
+    for entry in fs::read_dir(file_path(&directory)).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry
             .file_name()
@@ -523,11 +532,7 @@ fn prepare_bytes(
     if bytes.len() as u64 != manifest.payload_size || hash(&bytes) != manifest.payload_sha256 {
         return Err("payload size or SHA-256 mismatch".into());
     }
-    let needed = if let Some(binary) = &manifest.binary_manifest {
-        elf::check_declared(&bytes, &binary.binary.glibc_min)?
-    } else {
-        elf::check(&bytes)?
-    };
+    let needed = native_dependencies(&manifest, &bytes)?;
     let snapshot = sealed_snapshot(&bytes)?;
     let mut resources = Vec::new();
     for resource in &manifest.resources {
@@ -663,15 +668,40 @@ pub(crate) fn index_native_dependencies(
     snapshot: &InstallationSnapshot,
 ) -> Result<Vec<String>, crate::LoadError> {
     let manifest = crate::manifest::parse(&snapshot.files["mod.toml"])?;
-    let binary = manifest.binary_manifest.as_ref().ok_or_else(|| {
+    manifest.binary_manifest.as_ref().ok_or_else(|| {
         crate::LoadError::input("index_manifest", &manifest.id, "format 3 required")
     })?;
-    let mut needed =
-        elf::check_declared(&snapshot.files[&manifest.payload], &binary.binary.glibc_min)
-            .map_err(|e| crate::LoadError::input("index_native", &manifest.id, &e))?;
+    let mut needed = native_dependencies(&manifest, &snapshot.files[&manifest.payload])
+        .map_err(|e| crate::LoadError::input("index_native", &manifest.id, &e))?;
     needed.sort();
     needed.dedup();
     Ok(needed)
+}
+
+fn native_dependencies(manifest: &Manifest, bytes: &[u8]) -> Result<Vec<String>, String> {
+    #[cfg(windows)]
+    {
+        #[cfg(target_arch = "aarch64")]
+        const MACHINE: u16 = 0xaa64;
+        #[cfg(target_arch = "x86_64")]
+        const MACHINE: u16 = 0x8664;
+        let entry = match manifest.abi_major {
+            1 => "cm_mod_entry_v1",
+            2 => "cm_mod_entry_v2",
+            _ => return Err("unsupported native ABI".into()),
+        };
+        pe::check(bytes, MACHINE, entry)
+            .map(|audit| audit.dependencies)
+            .map_err(str::to_owned)
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(binary) = &manifest.binary_manifest {
+            elf::check_declared(bytes, &binary.binary.glibc_min)
+        } else {
+            elf::check(bytes)
+        }
+    }
 }
 
 impl Candidate {
@@ -710,7 +740,7 @@ fn walk(
     if depth > 16 {
         return Err("package: directory depth limit".into());
     }
-    for item in fs::read_dir(snapshot_path(directory)).map_err(|e| e.to_string())? {
+    for item in fs::read_dir(file_path(directory)).map_err(|e| e.to_string())? {
         let item = item.map_err(|e| e.to_string())?;
         let name = item
             .file_name()
@@ -1010,11 +1040,17 @@ fn zip_files(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, String> {
     Ok(files)
 }
 
-pub(crate) fn sealed_snapshot(bytes: &[u8]) -> Result<File, String> {
+pub(crate) fn sealed_snapshot(bytes: &[u8]) -> Result<Snapshot, String> {
     sealed_named_snapshot(bytes, c"cm-mod-v1")
 }
 
-pub(crate) fn sealed_named_snapshot(bytes: &[u8], name: &std::ffi::CStr) -> Result<File, String> {
+#[cfg(windows)]
+pub(crate) fn sealed_named_snapshot(bytes: &[u8], name: &std::ffi::CStr) -> Result<Snapshot, String> {
+    Snapshot::create(bytes, name)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn sealed_named_snapshot(bytes: &[u8], name: &std::ffi::CStr) -> Result<Snapshot, String> {
     // Seal the verified buffer, never reopen the package path for dlopen.
     let fd =
         unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
@@ -1047,8 +1083,15 @@ pub(crate) fn sealed_named_snapshot(bytes: &[u8], name: &std::ffi::CStr) -> Resu
     Ok(snapshot)
 }
 
-pub(crate) fn snapshot_path(snapshot: &File) -> PathBuf {
+fn file_path(snapshot: &File) -> PathBuf {
     format!("/proc/self/fd/{}", snapshot.as_raw_fd()).into()
+}
+
+pub(crate) fn snapshot_path(snapshot: &Snapshot) -> PathBuf {
+    #[cfg(windows)]
+    return snapshot.path().to_path_buf();
+    #[cfg(not(windows))]
+    file_path(snapshot)
 }
 
 #[cfg(test)]
