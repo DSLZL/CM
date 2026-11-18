@@ -194,7 +194,7 @@ mod tests {
     fn controlled_child() {
         let mode = std::env::var("CM_VERIFIER_TEST_MODE").unwrap();
         assert_eq!(std::env::var("CM_VERIFIER_QUOTED").unwrap(), QUOTED);
-        assert_eq!(std::env::args().last().unwrap(), QUOTED);
+        assert_eq!(std::env::args().next_back().unwrap(), QUOTED);
         match mode.as_str() {
             "ok" => std::io::stdout().write_all(b"verified bytes").unwrap(),
             "fail" => std::process::exit(3),
