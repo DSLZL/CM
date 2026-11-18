@@ -31,6 +31,7 @@ compile_error!("This fixture requires native 64-bit Windows");
 fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error::Error>> {
     use std::ffi::OsStr;
     use std::fs;
+    use std::io::Write;
 
     if !root.is_absolute() || !probe.is_absolute() {
         return Err("private controls require absolute owned paths".into());
@@ -186,6 +187,86 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     file.check_private()?;
     drop(file);
     println!("cm_private passed=created-ancestor-pin");
+
+    let streamed: Vec<u8> = (0..131_089).map(|i| (i % 251) as u8).collect();
+    let mut output = private.create_output("streamed-文件")?;
+    let streamed_identity = output.identity()?;
+    for chunk in streamed.chunks(65_535) {
+        output.write_all(chunk)?;
+    }
+    output.flush()?;
+    output.sync_all()?;
+    output.check_private()?;
+    private.check()?;
+    assert_eq!(output.metadata()?.len(), streamed.len() as u64);
+    drop(output);
+    assert_eq!(fs::read(private.path.join("streamed-文件"))?, streamed);
+    let mut file = input::open_at(&private.file, OsStr::new("streamed-文件"), false)?;
+    assert_eq!(file.identity()?, streamed_identity);
+    assert!(file.write_all(b"read-only handle").is_err());
+    file.check_private()?;
+    drop(file);
+    println!("cm_private passed=streamed-private-file");
+
+    let output = private.create_output("streamed-empty")?;
+    output.sync_all()?;
+    output.check_private()?;
+    drop(output);
+    assert!(fs::read(private.path.join("streamed-empty"))?.is_empty());
+    println!("cm_private passed=streamed-empty-file");
+
+    let mut output = private.create_output("streamed-pinned")?;
+    output.write_all(b"streamed retained bytes")?;
+    output.sync_all()?;
+    let clone = output.try_clone()?;
+    drop(output);
+    assert!(fs::write(private.path.join("streamed-pinned"), b"replacement").is_err());
+    assert!(fs::remove_file(private.path.join("streamed-pinned")).is_err());
+    assert!(
+        fs::rename(
+            private.path.join("streamed-pinned"),
+            private.path.join("streamed-moved"),
+        )
+        .is_err()
+    );
+    assert!(fs::rename(&private.path, root.join("private-moved")).is_err());
+    clone.check_private()?;
+    drop(clone);
+    assert_eq!(
+        fs::read(private.path.join("streamed-pinned"))?,
+        b"streamed retained bytes"
+    );
+    fs::rename(
+        private.path.join("streamed-pinned"),
+        private.path.join("streamed-moved"),
+    )?;
+    fs::remove_file(private.path.join("streamed-moved"))?;
+    println!("cm_private passed=streamed-retained-pins");
+
+    let before = inventory()?;
+    for name in [
+        "streamed-文件",
+        "collision-dir",
+        "",
+        ".",
+        "..",
+        "../escaped",
+        "..\\escaped",
+        "stream:ads",
+        "tail.",
+        "tail ",
+        "nul\0",
+    ] {
+        assert!(private.create_output(name).is_err(), "{name:?}");
+    }
+    assert_eq!(inventory()?, before);
+    control("private-change")?;
+    assert!(private.create_output("streamed-denied").is_err());
+    assert_eq!(inventory()?, before);
+    control("private-restore")?;
+    private.check()?;
+    assert_eq!(fs::read(private.path.join("streamed-文件"))?, streamed);
+    println!("cm_private passed=streamed-invalid-inputs");
 
     let lock_path = private.path.join(".cm-write.lock");
     assert!(private.writer_file(false).is_err());

@@ -5,6 +5,7 @@ use std::io;
 use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
+use std::io::Write;
 use std::ops::Deref;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::ffi::OsStringExt;
@@ -42,6 +43,10 @@ unsafe extern "C" {
     fn cm_windows_pin_path(pin: *const std::ffi::c_void) -> *const u16;
     fn cm_windows_pin_free(pin: *mut std::ffi::c_void);
     fn cm_windows_private_check(pin: *const std::ffi::c_void) -> i32;
+    fn cm_windows_private_create(
+        parent: *const std::ffi::c_void,
+        name: *const u16,
+    ) -> *mut std::ffi::c_void;
     fn cm_windows_private_write(
         parent: *const std::ffi::c_void,
         name: *const u16,
@@ -117,6 +122,11 @@ impl Handle {
             return Err(io::Error::last_os_error().to_string());
         }
         Ok(())
+    }
+
+    pub(crate) fn create_output(&self, name: &OsStr) -> Result<Self, String> {
+        let name = wide(name)?;
+        Self::take(unsafe { cm_windows_private_create(self.pin.0.as_ptr(), name.as_ptr()) })
     }
 
     pub(crate) fn create_directory(&self, name: &OsStr, create_only: bool) -> Result<Self, String> {
@@ -250,6 +260,16 @@ impl Read for Handle {
 impl Seek for Handle {
     fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
         self.file.seek(position)
+    }
+}
+
+impl Write for Handle {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.file.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
     }
 }
 

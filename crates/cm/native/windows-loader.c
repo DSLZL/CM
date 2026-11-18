@@ -465,19 +465,17 @@ static int cm_windows_private_parent(const CmWindowsPin *parent) {
     return 1;
 }
 
-int cm_windows_private_write(const CmWindowsPin *parent, const wchar_t *name,
-    const unsigned char *bytes, size_t length) {
-    if (length && !bytes) { SetLastError(ERROR_INVALID_PARAMETER); return 0; }
-    if (!cm_windows_private_parent(parent)) return 0;
+CmWindowsPin *cm_windows_private_create(const CmWindowsPin *parent, const wchar_t *name) {
+    if (!cm_windows_private_parent(parent)) return NULL;
     typedef NTSTATUS (NTAPI *QueryFile)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
     typedef ULONG (NTAPI *DosError)(NTSTATUS);
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    if (!ntdll || !cm_windows_system_module(ntdll)) { SetLastError(ERROR_BAD_EXE_FORMAT); return 0; }
+    if (!ntdll || !cm_windows_system_module(ntdll)) { SetLastError(ERROR_BAD_EXE_FORMAT); return NULL; }
     QueryFile query_file = (QueryFile)(void *)GetProcAddress(ntdll, "NtQueryInformationFile");
     DosError dos_error = (DosError)(void *)GetProcAddress(ntdll, "RtlNtStatusToDosError");
-    if (!query_file || !dos_error) { SetLastError(ERROR_PROC_NOT_FOUND); return 0; }
+    if (!query_file || !dos_error) { SetLastError(ERROR_PROC_NOT_FOUND); return NULL; }
     TOKEN_USER *user = cm_windows_user();
-    if (!user) return 0;
+    if (!user) return NULL;
     CmWindowsPin *p = NULL;
     int ok = 0;
     union { ACL alignment; BYTE bytes[sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) + SECURITY_MAX_SID_SIZE]; } acl;
@@ -496,6 +494,27 @@ int cm_windows_private_write(const CmWindowsPin *parent, const wchar_t *name,
     NTSTATUS result = query_file(p->file, &status, &mode, sizeof(mode), (FILE_INFORMATION_CLASS)16);
     if (result < 0) { SetLastError(dos_error(result)); goto done; }
     if (!(mode & 2)) { SetLastError(ERROR_INVALID_DATA); goto done; }
+    if (!cm_windows_private_check(parent)) goto done;
+    ok = 1;
+done: {
+    DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+    if (!ok && p) {
+        FILE_DISPOSITION_INFO disposition = {TRUE};
+        SetFileInformationByHandle(p->file, FileDispositionInfo, &disposition, sizeof(disposition));
+        cm_windows_pin_free(p);
+        p = NULL;
+    }
+    free(user);
+    SetLastError(error);
+    return p;
+}}
+
+int cm_windows_private_write(const CmWindowsPin *parent, const wchar_t *name,
+    const unsigned char *bytes, size_t length) {
+    if (length && !bytes) { SetLastError(ERROR_INVALID_PARAMETER); return 0; }
+    CmWindowsPin *p = cm_windows_private_create(parent, name);
+    if (!p) return 0;
+    int ok = 0;
     for (size_t offset = 0; offset < length;) {
         DWORD amount = length - offset > 16384 ? 16384 : (DWORD)(length - offset), received = 0;
         if (!WriteFile(p->file, bytes + offset, amount, &received, NULL)) goto done;
@@ -513,7 +532,6 @@ done: {
         }
         cm_windows_pin_free(p);
     }
-    free(user);
     SetLastError(error);
     return ok;
 }}

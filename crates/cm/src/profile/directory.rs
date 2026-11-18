@@ -172,6 +172,13 @@ impl Directory {
     }
 
     #[cfg(windows)]
+    // The caller must flush, revalidate, and discard its staging tree on failure.
+    pub(crate) fn create_output(&self, name: &str) -> Result<loader::Handle, String> {
+        self.check()?;
+        self.file.create_output(OsStr::new(name))
+    }
+
+    #[cfg(windows)]
     pub(crate) fn create_file(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
         self.check()?;
         self.file.create_file(OsStr::new(name), bytes)
