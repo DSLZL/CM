@@ -613,8 +613,9 @@ impl UpgradeState {
         let stage = target
             .store
             .trees
-            .child(&temporary)
+            .staging(&temporary)
             .map_err(|_| failure("state_ownership", "cannot prepare candidate state"))?;
+        let stage_identity = loader::identity(&stage.file).map_err(|e| profile::failure(&e))?;
         let mut view = new_view(&target.store)?;
         view.owners = source_view.owners.clone();
         let result = (|| {
@@ -643,7 +644,7 @@ impl UpgradeState {
             Ok(tree)
         })();
         if result.is_err() {
-            let _ = profile::discard(&target.store.trees, &temporary);
+            let _ = profile::discard(&target.store.trees, &temporary, stage_identity);
         }
         view.tree = result?;
         let captured = capture_tree(&target.store.tree(&view)?, &view.owners)?;
@@ -1089,8 +1090,9 @@ pub(crate) fn reconcile(
         let stage = held
             .store
             .trees
-            .child(&temporary)
+            .staging(&temporary)
             .map_err(|_| failure("state_ownership", "cannot prepare state tree"))?;
+        let stage_identity = loader::identity(&stage.file).map_err(|e| profile::failure(&e))?;
         let result = (|| {
             let mut source_pins = Vec::new();
             if let Some(old_tree) = &old_tree {
@@ -1131,7 +1133,7 @@ pub(crate) fn reconcile(
             Ok((id, source_pins))
         })();
         if result.is_err() {
-            let _ = profile::discard(&held.store.trees, &temporary);
+            let _ = profile::discard(&held.store.trees, &temporary, stage_identity);
         }
         let (id, pins) = result?;
         view.tree = id;
@@ -1327,8 +1329,9 @@ fn checkpoint(mut transaction: Transaction, options: &Options) -> Result<Value> 
     let stage = held
         .store
         .checkpoints
-        .child(&temporary)
+        .staging(&temporary)
         .map_err(|_| failure("state_checkpoint", "cannot prepare checkpoint"))?;
+    let stage_identity = loader::identity(&stage.file).map_err(|e| profile::failure(&e))?;
     let result = (|| {
         let data = stage
             .child("data")
@@ -1396,7 +1399,7 @@ fn checkpoint(mut transaction: Transaction, options: &Options) -> Result<Value> 
                     "existing checkpoint content differs",
                 ));
             }
-            profile::discard(&held.store.checkpoints, &temporary)
+            profile::discard(&held.store.checkpoints, &temporary, stage_identity)
                 .map_err(|_| failure("state_checkpoint", "cannot discard duplicate checkpoint"))?;
         }
         Ok(
@@ -1406,7 +1409,7 @@ fn checkpoint(mut transaction: Transaction, options: &Options) -> Result<Value> 
         )
     })();
     if result.is_err() {
-        let _ = profile::discard(&held.store.checkpoints, &temporary);
+        let _ = profile::discard(&held.store.checkpoints, &temporary, stage_identity);
     }
     transaction.revalidate()?;
     result
@@ -1492,8 +1495,9 @@ fn restore(
     let stage = held
         .store
         .trees
-        .child(&temporary)
+        .staging(&temporary)
         .map_err(|_| failure("state_checkpoint", "cannot stage restored state"))?;
+    let stage_identity = loader::identity(&stage.file).map_err(|e| profile::failure(&e))?;
     let result = (|| {
         let mut pins = captured.pins;
         if let (Some(root), Some(old)) = (&old_tree, &old_view) {
@@ -1546,7 +1550,7 @@ fn restore(
         Ok((tree, pins))
     })();
     if result.is_err() {
-        let _ = profile::discard(&held.store.trees, &temporary);
+        let _ = profile::discard(&held.store.trees, &temporary, stage_identity);
     }
     let (tree, pins) = result?;
     view.tree = tree;
@@ -1700,8 +1704,9 @@ fn clean(
     let stage = held
         .store
         .trees
-        .child(&temporary)
+        .staging(&temporary)
         .map_err(|_| failure("state_ownership", "cannot prepare cleaned state view"))?;
+    let stage_identity = loader::identity(&stage.file).map_err(|e| profile::failure(&e))?;
     view.owners.remove(id);
     view.cleanups.insert(id.into(), operation.clone());
     let result = (|| {
@@ -1732,7 +1737,7 @@ fn clean(
         Ok((tree, pins))
     })();
     if result.is_err() {
-        let _ = profile::discard(&held.store.trees, &temporary);
+        let _ = profile::discard(&held.store.trees, &temporary, stage_identity);
     }
     let (tree, pins) = result?;
     view.tree = tree;

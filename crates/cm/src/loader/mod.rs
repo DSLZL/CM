@@ -29,7 +29,7 @@ mod input;
 #[cfg(windows)]
 pub(crate) use input::open_lock;
 pub(crate) use input::{
-    Handle, Identity, InputPin, hash, open_at, open_directory, read_input, try_lock,
+    Handle, Identity, InputPin, hash, identity, open_at, open_directory, read_input, try_lock,
 };
 pub(crate) mod native;
 #[cfg(windows)]

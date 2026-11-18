@@ -517,7 +517,7 @@ done: {
     return ok;
 }}
 
-CmWindowsPin *cm_windows_private_directory(const CmWindowsPin *parent, const wchar_t *name) {
+CmWindowsPin *cm_windows_private_directory(const CmWindowsPin *parent, const wchar_t *name, int create_only) {
     if (!cm_windows_private_parent(parent)) return NULL;
     TOKEN_USER *user = cm_windows_user();
     if (!user) return NULL;
@@ -532,7 +532,7 @@ CmWindowsPin *cm_windows_private_directory(const CmWindowsPin *parent, const wch
         || !SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED)
         || !cm_windows_private_descriptor(&descriptor, user->User.Sid)) goto done;
     p = cm_windows_child(parent, name, 1, &descriptor, 0, 0);
-    if (!p && (GetLastError() == ERROR_ALREADY_EXISTS || GetLastError() == ERROR_FILE_EXISTS))
+    if (!p && !create_only && (GetLastError() == ERROR_ALREADY_EXISTS || GetLastError() == ERROR_FILE_EXISTS))
         p = cm_windows_child(parent, name, 1, NULL, 0, 0);
     if (p && (!cm_windows_private_check(p) || !cm_windows_private_check(parent))) {
         DWORD error = GetLastError();
@@ -619,6 +619,33 @@ int cm_windows_private_publish(const CmWindowsPin *parent, const wchar_t *source
     p = cm_windows_input_finish(p, -1, 0);
     if (!p || !cm_windows_private_check(p) || !cm_windows_private_check(parent)) goto done;
     result = 1;
+done: {
+    DWORD error = result == 1 ? ERROR_SUCCESS : GetLastError();
+    cm_windows_pin_free(p);
+    SetLastError(error);
+    return result;
+}}
+
+int cm_windows_private_remove(const CmWindowsPin *parent, const wchar_t *name,
+    ULONGLONG volume, const BYTE id[16], int directory) {
+    if (!cm_windows_private_parent(parent)) return -1;
+    CmWindowsPin *p = cm_windows_child(parent, name, directory, NULL, 0, 1);
+    if (!p) return -3;
+    int result = -4;
+    CmWindowsFileInformation info;
+    if (!cm_windows_private_check(p) || !cm_windows_private_check(parent)
+        || !cm_windows_file_information(p, &info)) goto done;
+    result = -5;
+    if (info.volume != volume || memcmp(info.id, id, sizeof(info.id))) {
+        SetLastError(ERROR_INVALID_DATA); goto done;
+    }
+    result = -6;
+    FILE_DISPOSITION_INFO disposition = {TRUE};
+    if (!SetFileInformationByHandle(p->file, FileDispositionInfo, &disposition, sizeof(disposition))) goto done;
+    /* Close only our deletion handle; unrelated retained pins must have prevented this open. */
+    cm_windows_pin_free(p);
+    p = NULL;
+    result = cm_windows_private_check(parent) ? 1 : -2;
 done: {
     DWORD error = result == 1 ? ERROR_SUCCESS : GetLastError();
     cm_windows_pin_free(p);

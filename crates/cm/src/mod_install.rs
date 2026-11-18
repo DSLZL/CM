@@ -145,8 +145,9 @@ fn ingest_mode(
     let name = profile::temporary("object");
     let stage = transaction
         .objects
-        .child(&name)
+        .staging(&name)
         .map_err(|e| profile::failure(&e))?;
+    let stage_identity = loader::identity(&stage.file).map_err(|e| profile::failure(&e))?;
     let result = (|| -> Result<(), LoadError> {
         for (relative, bytes) in &snapshot.files {
             loader::payload_path(&stage.path, relative).map_err(|e| profile::failure(&e))?;
@@ -187,6 +188,8 @@ fn ingest_mode(
                 "staged package differs from owned snapshot",
             ));
         }
+        #[cfg(windows)]
+        drop(stage);
         if !transaction
             .objects
             .publish(&name, &snapshot.sha256)
@@ -197,12 +200,13 @@ fn ingest_mode(
             if existing.id != snapshot.id || existing.sha256 != snapshot.sha256 {
                 return Err(profile::failure("CAS content/address mismatch"));
             }
-            profile::discard(&transaction.objects, &name).map_err(|e| profile::failure(&e))?;
+            profile::discard(&transaction.objects, &name, stage_identity)
+                .map_err(|e| profile::failure(&e))?;
         }
         Ok(())
     })();
     if result.is_err() {
-        let _ = profile::discard(&transaction.objects, &name);
+        let _ = profile::discard(&transaction.objects, &name, stage_identity);
     }
     result?;
     transaction.next.provenance.remove(&snapshot.id);

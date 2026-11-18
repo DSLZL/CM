@@ -15,7 +15,7 @@ use crate::loader::{self, InputPin};
 use crate::package::ManagedHost;
 
 mod directory;
-pub(crate) use directory::Directory;
+pub(crate) use directory::{Directory, discard};
 
 const LIMIT: u64 = 4 * 1024 * 1024;
 const OWNER: &[u8] = b"{\"schema_version\":1,\"domain\":\"cm.home.v1\"}\n";
@@ -362,34 +362,6 @@ pub(crate) fn temporary(kind: &str) -> String {
         std::process::id(),
         TEMP.fetch_add(1, Ordering::Relaxed)
     )
-}
-
-/// Removes only this operation's private, never-published staging tree.
-pub(crate) fn discard(parent: &Directory, name: &str) -> Result<(), String> {
-    let c_name = CString::new(name).map_err(|e| e.to_string())?;
-    let file = loader::open_at(&parent.file, OsStr::new(name), true)?;
-    for entry in std::fs::read_dir(format!("/proc/self/fd/{}", file.as_raw_fd()))
-        .map_err(|e| e.to_string())?
-    {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let entry_name = entry.file_name();
-        let directory = loader::open_at(&file, &entry_name, true);
-        let leaf = CString::new(entry_name.as_bytes()).map_err(|e| e.to_string())?;
-        if directory.is_ok() {
-            let child = Directory {
-                file: file.try_clone().map_err(|e| e.to_string())?,
-                path: parent.path.join(name),
-            };
-            discard(&child, entry_name.to_str().ok_or("non-UTF8 staging name")?)?;
-        } else if unsafe { libc::unlinkat(file.as_raw_fd(), leaf.as_ptr(), 0) } != 0 {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-    }
-    if unsafe { libc::unlinkat(parent.file.as_raw_fd(), c_name.as_ptr(), libc::AT_REMOVEDIR) } != 0
-    {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    Ok(())
 }
 
 pub(crate) struct Transaction {

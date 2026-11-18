@@ -40,8 +40,10 @@ int cm_windows_file_information(const CmWindowsPin *pin, CmWindowsFileInformatio
 int cm_windows_private_check(const CmWindowsPin *pin);
 int cm_windows_private_write(const CmWindowsPin *parent, const wchar_t *name,
     const unsigned char *bytes, size_t length);
-CmWindowsPin *cm_windows_private_directory(const CmWindowsPin *parent, const wchar_t *name);
+CmWindowsPin *cm_windows_private_directory(const CmWindowsPin *parent, const wchar_t *name, int create_only);
 int cm_windows_private_sync(const CmWindowsPin *directory);
 int cm_windows_private_publish(const CmWindowsPin *parent, const wchar_t *source, const wchar_t *target);
+int cm_windows_private_remove(const CmWindowsPin *parent, const wchar_t *name,
+    ULONGLONG volume, const BYTE id[16], int directory);
 CmWindowsPin *cm_windows_lock_open(const CmWindowsPin *parent, const wchar_t *name, int create);
 #endif

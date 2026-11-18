@@ -60,7 +60,9 @@ PRIVATE_CHECKS = ["descriptor-owner-mismatch", "owner-directory", "owner-file", 
     "directory-flush", "created-private-directory", "existing-private-directory", "directory-collisions",
     "directory-invalid-paths", "directory-parent-drift", "directory-ancestor-pin",
     "published-private-file", "publish-collisions", "published-private-directory",
-    "publish-retained-pins", "publish-unsafe-source", "publish-invalid-paths", "publish-parent-drift"]
+    "publish-retained-pins", "publish-unsafe-source", "publish-invalid-paths", "publish-parent-drift",
+    "staging-create-only", "remove-full-identity", "remove-entry-kinds", "remove-retained-pins",
+    "discard-private-tree", "discard-replacement-preserved", "remove-invalid-parent"]
 
 
 def private_record(text):

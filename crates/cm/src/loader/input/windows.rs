@@ -51,12 +51,20 @@ unsafe extern "C" {
     fn cm_windows_private_directory(
         parent: *const std::ffi::c_void,
         name: *const u16,
+        create_only: i32,
     ) -> *mut std::ffi::c_void;
     fn cm_windows_private_sync(directory: *const std::ffi::c_void) -> i32;
     fn cm_windows_private_publish(
         parent: *const std::ffi::c_void,
         source: *const u16,
         target: *const u16,
+    ) -> i32;
+    fn cm_windows_private_remove(
+        parent: *const std::ffi::c_void,
+        name: *const u16,
+        volume: u64,
+        id: *const u8,
+        directory: i32,
     ) -> i32;
     fn cm_windows_lock_open(
         parent: *const std::ffi::c_void,
@@ -111,9 +119,11 @@ impl Handle {
         Ok(())
     }
 
-    pub(crate) fn create_directory(&self, name: &OsStr) -> Result<Self, String> {
+    pub(crate) fn create_directory(&self, name: &OsStr, create_only: bool) -> Result<Self, String> {
         let name = wide(name)?;
-        Self::take(unsafe { cm_windows_private_directory(self.pin.0.as_ptr(), name.as_ptr()) })
+        Self::take(unsafe {
+            cm_windows_private_directory(self.pin.0.as_ptr(), name.as_ptr(), i32::from(create_only))
+        })
     }
 
     pub(crate) fn sync_private_directory(&self) -> Result<(), String> {
@@ -146,6 +156,41 @@ impl Handle {
                     _ => "parent validation",
                 };
                 Err(format!("namespace publication {operation} failed: {error}"))
+            }
+        }
+    }
+
+    pub(crate) fn remove(
+        &self,
+        name: &OsStr,
+        expected: super::Identity,
+        directory: bool,
+    ) -> Result<(), String> {
+        let name = wide(name)?;
+        match unsafe {
+            cm_windows_private_remove(
+                self.pin.0.as_ptr(),
+                name.as_ptr(),
+                expected.0,
+                expected.1.as_ptr(),
+                i32::from(directory),
+            )
+        } {
+            1 => Ok(()),
+            -2 => Err(format!(
+                "committed: private removal completed; {}",
+                io::Error::last_os_error()
+            )),
+            code => {
+                let error = io::Error::last_os_error();
+                let operation = match code {
+                    -3 => "source open",
+                    -4 => "permission validation",
+                    -5 => "identity validation",
+                    -6 => "disposition",
+                    _ => "parent validation",
+                };
+                Err(format!("private removal {operation} failed: {error}"))
             }
         }
     }

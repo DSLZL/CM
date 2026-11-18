@@ -8,6 +8,8 @@ use std::io::Write;
 #[cfg(not(windows))]
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(not(windows))]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(not(windows))]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -105,11 +107,20 @@ impl Directory {
         Ok(())
     }
 
-    #[cfg(not(windows))]
     pub(crate) fn child(&self, name: &str) -> Result<Self, String> {
+        self.child_mode(name, false)
+    }
+
+    pub(crate) fn staging(&self, name: &str) -> Result<Self, String> {
+        self.child_mode(name, true)
+    }
+
+    #[cfg(not(windows))]
+    fn child_mode(&self, name: &str, create_only: bool) -> Result<Self, String> {
         let name_c = CString::new(name).map_err(|e| e.to_string())?;
         if unsafe { libc::mkdirat(self.file.as_raw_fd(), name_c.as_ptr(), 0o700) } != 0
-            && std::io::Error::last_os_error().kind() != std::io::ErrorKind::AlreadyExists
+            && (create_only
+                || std::io::Error::last_os_error().kind() != std::io::ErrorKind::AlreadyExists)
         {
             return Err(std::io::Error::last_os_error().to_string());
         }
@@ -124,10 +135,10 @@ impl Directory {
     }
 
     #[cfg(windows)]
-    pub(crate) fn child(&self, name: &str) -> Result<Self, String> {
+    fn child_mode(&self, name: &str, create_only: bool) -> Result<Self, String> {
         self.check()?;
         let result = Self {
-            file: self.file.create_directory(OsStr::new(name))?,
+            file: self.file.create_directory(OsStr::new(name), create_only)?,
             path: self.path.join(name),
         };
         result.check()?;
@@ -199,5 +210,147 @@ impl Directory {
     pub(crate) fn writer_file(&self, create: bool) -> Result<loader::Handle, String> {
         self.check()?;
         loader::open_lock(&self.file, OsStr::new(".cm-write.lock"), create)
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn remove(
+        &self,
+        name: &OsStr,
+        expected: loader::Identity,
+        directory: bool,
+    ) -> Result<(), String> {
+        self.check()?;
+        self.file.remove(name, expected, directory)?;
+        self.file
+            .sync_private_directory()
+            .and_then(|()| self.check())
+            .map_err(|error| format!("committed: private removal completed; {error}"))
+    }
+}
+
+/// Removes only this operation's private, never-published staging tree.
+#[cfg(not(windows))]
+pub(crate) fn discard(
+    parent: &Directory,
+    name: &str,
+    expected: loader::Identity,
+) -> Result<(), String> {
+    let c_name = CString::new(name).map_err(|e| e.to_string())?;
+    let file = loader::open_at(&parent.file, OsStr::new(name), true)?;
+    if loader::identity(&file)? != expected {
+        return Err("staging directory identity changed".into());
+    }
+    for entry in std::fs::read_dir(format!("/proc/self/fd/{}", file.as_raw_fd()))
+        .map_err(|e| e.to_string())?
+    {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let entry_name = entry.file_name();
+        let directory = loader::open_at(&file, &entry_name, true);
+        let leaf = CString::new(entry_name.as_bytes()).map_err(|e| e.to_string())?;
+        if let Ok(directory) = directory {
+            let expected = loader::identity(&directory)?;
+            let child = Directory {
+                file: file.try_clone().map_err(|e| e.to_string())?,
+                path: parent.path.join(name),
+            };
+            discard(
+                &child,
+                entry_name.to_str().ok_or("non-UTF8 staging name")?,
+                expected,
+            )?;
+        } else if unsafe { libc::unlinkat(file.as_raw_fd(), leaf.as_ptr(), 0) } != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+    }
+    if loader::identity(&loader::open_at(&parent.file, OsStr::new(name), true)?)? != expected {
+        return Err("staging directory identity changed".into());
+    }
+    if unsafe { libc::unlinkat(parent.file.as_raw_fd(), c_name.as_ptr(), libc::AT_REMOVEDIR) } != 0
+    {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+pub(crate) fn discard(
+    parent: &Directory,
+    name: &str,
+    expected: loader::Identity,
+) -> Result<(), String> {
+    parent.check()?;
+    let file = loader::open_at(&parent.file, OsStr::new(name), true)?;
+    if loader::identity(&file)? != expected {
+        return Err("staging directory identity changed".into());
+    }
+    let stage = Directory {
+        file,
+        path: parent.path.join(name),
+    };
+    stage.check()?;
+    let names = std::fs::read_dir(&stage.path)
+        .map_err(|e| e.to_string())?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    for name in names {
+        if let Ok(file) = loader::open_at(&stage.file, &name, true) {
+            file.check_private()?;
+            let expected = loader::identity(&file)?;
+            drop(file);
+            discard(
+                &stage,
+                name.to_str().ok_or("non-UTF8 staging name")?,
+                expected,
+            )?;
+        } else {
+            let file = loader::open_at(&stage.file, &name, false)?;
+            file.check_private()?;
+            let expected = loader::identity(&file)?;
+            drop(file);
+            stage.remove(&name, expected, false)?;
+        }
+    }
+    stage.check()?;
+    drop(stage);
+    parent.remove(OsStr::new(name), expected, true)
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::DirBuilderExt;
+
+    #[test]
+    fn staging_cleanup_preserves_a_replacement_directory() {
+        let path = std::env::temp_dir().join(super::super::temporary("directory-test"));
+        std::fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+        let root = Directory::open(&path).unwrap();
+        let stage = root.staging("stage").unwrap();
+        stage
+            .child("nested")
+            .unwrap()
+            .create_file("value", b"owned")
+            .unwrap();
+        let original = loader::identity(&stage.file).unwrap();
+        assert!(root.staging("stage").is_err());
+        drop(stage);
+        std::fs::rename(path.join("stage"), path.join("saved")).unwrap();
+        let replacement = root.staging("stage").unwrap();
+        replacement.create_file("value", b"keep").unwrap();
+        let replaced = loader::identity(&replacement.file).unwrap();
+        drop(replacement);
+        assert_ne!(original, replaced);
+        assert!(discard(&root, "stage", original).is_err());
+        assert_eq!(std::fs::read(path.join("stage/value")).unwrap(), b"keep");
+        assert_eq!(
+            std::fs::read(path.join("saved/nested/value")).unwrap(),
+            b"owned"
+        );
+        discard(&root, "stage", replaced).unwrap();
+        discard(&root, "saved", original).unwrap();
+        assert!(std::fs::read_dir(&path).unwrap().next().is_none());
+        drop(root);
+        std::fs::remove_dir(path).unwrap();
     }
 }

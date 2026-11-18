@@ -342,6 +342,11 @@ def main(stage="initial-mechanisms"):
                     output = run(name + "-tests", [tests[name], *arguments, "--test-threads=1"])
                     assert re.search(r"test result: ok[.] [1-9][0-9]* passed; 0 failed;", output), output
                 report["gates"]["rust-abi-and-loader"] = {"status": "pass", "scope": "cm-abi all units; cm-runtime loader units"}
+                output = run("private-staging-tests", [tests["cm_runtime"],
+                    "profile::directory::tests::", "--test-threads=1"])
+                assert "test result: ok. 1 passed; 0 failed;" in output, output
+                report["gates"]["private-staging"] = {"status": "pass",
+                    "scope": "create-only staging; original identity; recursive cleanup; replacement preserved"}
                 for name in ("serial-eligibility", "sdk-seams-a"):
                     manifest = root / "fixtures/mods" / name / "Cargo.toml"
                     run(name + "-fmt", ["cargo", "fmt", "--manifest-path", manifest, "--", "--check"])
