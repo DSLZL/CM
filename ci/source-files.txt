@@ -284,6 +284,7 @@ ci/worker-files-windows-arm64.json
 ci/worker/windows-arm64-preflight.yml
 adapters/codex-e4568a3/native-protoc-build.rs
 ci/scripts/windows_pe_preflight.py
+ci/scripts/windows_runtime_preflight.py
 crates/cm/src/loader/pe.rs
 fixtures/native-loader/windows-pe.c
 fixtures/native-loader/windows-pe/Cargo.toml

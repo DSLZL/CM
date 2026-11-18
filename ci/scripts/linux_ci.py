@@ -14,7 +14,8 @@ import tomllib
 import cm_platforms
 from record_run import require_hosted_linux
 
-TARGET = cm_platforms.linux_native()["target"]
+# Source preparation is also imported by native preflights; executable phases retain their Linux guards.
+TARGET = os.environ.get("CM_TARGET", "x86_64-unknown-linux-gnu")
 SCCACHE_VERSION = "0.18.0"
 
 

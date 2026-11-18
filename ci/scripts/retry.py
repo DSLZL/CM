@@ -159,6 +159,18 @@ class ProductionRouting(ast.NodeTransformer):
         return node
 
 
+def linux_ci_recipe(text):
+    module = ProductionRouting().visit(ast.parse(text))
+    equivalents = {ast.dump(ast.parse(value, mode="eval").body, include_attributes=False) for value in (
+        'cm_platforms.linux_native()["target"]', 'os.environ.get("CM_TARGET", "x86_64-unknown-linux-gnu")')}
+    for node in module.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "TARGET" and ast.dump(node.value, include_attributes=False) in equivalents):
+            # Both forms reach the same validated native target before any Linux executable phase.
+            node.value = ast.parse('cm_platforms.linux_native()["target"]', mode="eval").body
+    return digest(ast.dump(module, include_attributes=False))
+
+
 def projection(text, entries=None, exclude=(), production=False):
     module = runtime_cases.Business().visit(ast.parse(text))
     if production:
@@ -322,7 +334,7 @@ def product_inputs(root, revision):
                       "fixtures/native-loader/macos-preflight.c",
                       "ci/worker-files-windows-x64.json", "ci/scripts/windows_x64_preflight.py",
                       "ci/scripts/windows_arm64_preflight.py", "ci/scripts/windows_native_inputs.py",
-                      "ci/scripts/windows_pe_preflight.py",
+                      "ci/scripts/windows_pe_preflight.py", "ci/scripts/windows_runtime_preflight.py",
                       "fixtures/native-loader/windows-preflight.c",
                       "fixtures/native-loader/windows-lpac-network.c",
                       "ci/scripts/windows_isolation_preflight.py", "fixtures/native-loader/windows-isolation-probe.rs",
@@ -380,7 +392,9 @@ def product_inputs(root, revision):
                 native["native_identity_files"] = ["crates/cm/src/distribution-policy-arm64.json"
                     if name == "crates/cm/src/distribution-policy.json" else name for name in native["native_identity_files"]]
             files[path] = digest(native)
-        elif path in ("ci/scripts/host.py", "ci/scripts/linux_ci.py"):
+        elif path == "ci/scripts/linux_ci.py":
+            files[path] = linux_ci_recipe(source(root, revision, path))
+        elif path == "ci/scripts/host.py":
             files[path] = digest(ast.dump(ProductionRouting().visit(ast.parse(source(root, revision, path))),
                                          include_attributes=False))
         elif path == "ci/scripts/runtime_consumer.py":
@@ -1939,6 +1953,18 @@ def refresh_self_check():
 
 def validation_self_check():
     import zipfile
+    from unittest.mock import patch
+    current = Path(__file__).with_name("linux_ci.py").read_text()
+    original = current.replace('TARGET = os.environ.get("CM_TARGET", "x86_64-unknown-linux-gnu")',
+        'TARGET = cm_platforms.linux_native()["target"]')
+    assert original != current
+    assert linux_ci_recipe(original) == digest(ast.dump(ProductionRouting().visit(ast.parse(original)), include_attributes=False))
+    for target in ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"):
+        with patch.dict(os.environ, {"CM_TARGET": target}):
+            assert linux_ci_recipe(current) == linux_ci_recipe(original)
+            assert linux_ci_recipe(current.replace('get("CM_TARGET", "x86_64-unknown-linux-gnu")',
+                'get("CM_TARGET", "aarch64-unknown-linux-gnu")')) != linux_ci_recipe(original)
+            assert linux_ci_recipe(current.replace("    require_hosted_linux()", "    unexpected_execution()")) != linux_ci_recipe(original)
     value = {"checkpoint_origins": [{"steps": [{"command": ["/usr/bin/env", "--", "payload"]}] * 12000}] * 12}
     assert len(json.dumps(value, indent=2).encode("utf-8")) > 16 * 1024 ** 2
     with tempfile.TemporaryDirectory() as directory:

@@ -163,7 +163,7 @@ jobs:
           assert win_arm_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'isolation-availability'") == 1
           assert "if: env.CM_PREFLIGHT_STAGE != 'isolation-surface'" in win_arm_recipe
           assert "if: env.CM_PREFLIGHT_STAGE == 'loader-terminal'" in win_arm_recipe
-          assert "-notin @('isolation-surface', 'isolation-availability', 'loader-terminal', 'isolation-process', 'isolation-network', 'isolation-inputs', 'native-inputs', 'v8-link', 'native-protocol', 'native-pe')" in win_arm_recipe
+          assert "-notin @('isolation-surface', 'isolation-availability', 'loader-terminal', 'isolation-process', 'isolation-network', 'isolation-inputs', 'native-inputs', 'v8-link', 'native-protocol', 'native-pe', 'runtime-library')" in win_arm_recipe
           assert win_arm_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'isolation-process'") == 1
           assert win_arm_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'isolation-network'") == 1
           assert win_arm_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'isolation-inputs'") == 1
@@ -174,6 +174,10 @@ jobs:
           assert win_arm_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'native-pe'") == 1
           assert win_arm_recipe.count("python -B cm-source/ci/scripts/windows_pe_preflight.py") == 1
           assert "ci/scripts/windows_pe_preflight.py" in paths
+          assert win_arm_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'runtime-library'") == 1
+          assert win_arm_recipe.count("python -B cm-source/ci/scripts/windows_runtime_preflight.py") == 1
+          assert "ci/scripts/windows_runtime_preflight.py" in paths
+          assert "GIT_CONFIG_KEY_0=core.autocrlf" in win_arm_recipe and "GIT_CONFIG_VALUE_0=false" in win_arm_recipe
           assert "ci/scripts/windows_native_inputs.py" in paths
           assert "fixtures/native-loader/windows-psec-child.rs" in paths
           assert "windows_isolation_preflight.main(key='windows-arm64')" in win_arm_recipe
@@ -269,6 +273,8 @@ jobs:
           windows_native_inputs.self_check()
           import windows_pe_preflight
           windows_pe_preflight.self_check()
+          import windows_runtime_preflight
+          windows_runtime_preflight.self_check()
           assert cm_platforms.select("linux-arm64")["enabled"]
           assert all(not row["enabled"] for key, row in cm_platforms.load()["platforms"].items()
               if key.startswith(("macos-", "windows-")))
