@@ -26,8 +26,28 @@ pub(crate) struct Binary {
     pub sha256: String,
     pub target: String,
     pub entry: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub glibc_min: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_min: Option<String>,
     pub cpu: String,
+}
+
+impl Binary {
+    pub(crate) fn valid_platform(&self) -> bool {
+        let cpu = match self.target.as_str() {
+            "x86_64-unknown-linux-gnu" | "x86_64-pc-windows-msvc" => "x86-64",
+            "aarch64-unknown-linux-gnu" | "aarch64-pc-windows-msvc" => "armv8-a",
+            _ => return false,
+        };
+        self.cpu == cpu && if self.target.ends_with("-pc-windows-msvc") {
+            self.path.ends_with(".dll") && self.glibc_min.is_empty()
+                && self.windows_min.as_deref().and_then(windows_version).is_some()
+        } else {
+            self.path.ends_with(".so") && self.windows_min.is_none()
+                && system_version(&self.glibc_min).is_some()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -183,7 +203,7 @@ impl BinaryManifest {
         if self.binary.entry != entry {
             return Err("binary.entry: unsupported ABI entry".into());
         }
-        if !self.binary.path.ends_with(".so") {
+        if !self.binary.path.ends_with(if cfg!(windows) { ".dll" } else { ".so" }) {
             return Err("binary.path: unsupported payload path".into());
         }
         if self.binary.target != loader::TARGET {
@@ -192,8 +212,8 @@ impl BinaryManifest {
         if self.binary.cpu != loader::CPU {
             return Err("binary.cpu: unsupported CPU baseline".into());
         }
-        if system_version(&self.binary.glibc_min).is_none() {
-            return Err("binary.glibc_min: invalid system declaration".into());
+        if !self.binary.valid_platform() {
+            return Err(if cfg!(windows) { "binary.windows_min: invalid or mixed system declaration" } else { "binary.glibc_min: invalid system declaration" }.into());
         }
         loader::payload_path(std::path::Path::new("/package"), &self.binary.path)?;
         if self.contributions.is_empty()
@@ -335,11 +355,23 @@ impl BinaryManifest {
         {
             return Err("compat.prepared_slot: only the registered ABI-2 eligibility policy slot is supported".into());
         }
+        #[cfg(not(windows))]
+        {
         let actual = unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) }
             .to_str()
             .map_err(|_| "glibc identity")?;
         if system_version(actual) < system_version(&self.binary.glibc_min) {
             return Err("binary.glibc_min: current system is too old".into());
+        }
+        }
+        #[cfg(windows)]
+        {
+            let actual = loader::windows_system_version()?;
+            let actual = windows_version(&actual).ok_or("native Windows identity")?;
+            let minimum = self.binary.windows_min.as_deref().and_then(windows_version).ok_or("binary.windows_min: invalid system declaration")?;
+            if actual < minimum {
+                return Err("binary.windows_min: current system is too old".into());
+            }
         }
         Ok(())
     }
@@ -362,7 +394,7 @@ impl BinaryManifest {
     }
 }
 
-fn system_version(value: &str) -> Option<(u32, u32)> {
+pub(crate) fn system_version(value: &str) -> Option<(u32, u32)> {
     let (major, minor) = value.split_once('.')?;
     if value.len() > 16
         || major.is_empty()
@@ -375,6 +407,15 @@ fn system_version(value: &str) -> Option<(u32, u32)> {
         return None;
     }
     Some((major.parse().ok()?, minor.parse().ok()?))
+}
+
+pub(crate) fn windows_version(value: &str) -> Option<(u32, u32, u32)> {
+    if value.is_empty() || value.len() > 32 || !value.bytes().all(|byte| byte.is_ascii_digit() || byte == b'.') {
+        return None;
+    }
+    let mut parts = value.split('.');
+    let version = (parts.next()?.parse().ok()?, parts.next()?.parse().ok()?, parts.next()?.parse().ok()?);
+    parts.next().is_none().then_some(version)
 }
 
 #[cfg(test)]
@@ -407,6 +448,12 @@ mod tests {
                 "license": "Apache-2.0", "release_notes": "binding regression"}
         }))
         .unwrap();
+        #[cfg(windows)]
+        {
+            manifest.binary.path = "payload.dll".into();
+            manifest.binary.glibc_min.clear();
+            manifest.binary.windows_min = Some("10.0.26100".into());
+        }
         manifest.validate().unwrap();
         manifest.compatible(&host).unwrap();
         let foreign_cpu = if cfg!(target_arch = "x86_64") {
@@ -451,6 +498,34 @@ mod tests {
         manifest.compat.exact_host = None;
         manifest.validate().unwrap();
         manifest.compatible(&host).unwrap();
+    }
+
+    #[test]
+    fn windows_minimum_is_explicit_and_target_bound() {
+        let mut binary: Binary = serde_json::from_value(serde_json::json!({
+            "path": "payload.dll", "size": 1, "sha256": "a".repeat(64),
+            "target": "aarch64-pc-windows-msvc", "entry": "cm_mod_entry_v2",
+            "windows_min": "10.0.26100", "cpu": "armv8-a"
+        })).unwrap();
+        assert!(binary.valid_platform());
+        binary.glibc_min = "2.17".into();
+        assert!(!binary.valid_platform());
+        binary.glibc_min.clear();
+        for value in ["", "10.0", "10.a.26100", "+10.0.26100", "10.0.26100.1", "10.0.4294967296"] {
+            assert!(windows_version(value).is_none(), "{value}");
+            binary.windows_min = Some(value.into());
+            assert!(!binary.valid_platform(), "{value}");
+        }
+        binary.windows_min = Some("10.0.26100".into());
+        binary.target = "aarch64-unknown-linux-gnu".into();
+        assert!(!binary.valid_platform());
+        binary.windows_min = None;
+        binary.glibc_min = "2.17".into();
+        binary.path = "payload.so".into();
+        assert!(binary.valid_platform());
+        let record = serde_json::to_value(binary).unwrap();
+        assert!(record.get("windows_min").is_none());
+        assert_eq!(record["glibc_min"], "2.17");
     }
 
     #[test]

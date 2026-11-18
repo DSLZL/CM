@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "domain": "cm.distribution-policy.v1",
+  "source_repository": "DSLZL/CM",
+  "source_repository_id": 1430833890,
+  "builder_repository": "DSLZL/CM-build-windows-arm64",
+  "builder_repository_id": 1457427399,
+  "workflow": ".github/workflows/build.yml",
+  "ref": "refs/heads/main",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "predicate_type": "https://slsa.dev/provenance/v1",
+  "verifier": {
+    "version": "2.103.3",
+    "source_commit": "63837fb778d6a39f02be0ce76ff89f2bc8d74bdc",
+    "asset_id": 679195799,
+    "archive": "gh_2.103.3_windows_arm64.zip",
+    "archive_sha256": "197211c98687d7770ac331fe8a3b6c198c389108c1536cdbedf659fe4703e484",
+    "url": "https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_windows_arm64.zip",
+    "license": "MIT"
+  }
+}

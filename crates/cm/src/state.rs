@@ -1,10 +1,16 @@
 //! Owned file state is separate from the ABI's process-local scope values.
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::ffi::{CString, OsStr};
-use std::fs::{self, File, Metadata};
+#[cfg(not(windows))]
+use std::ffi::CString;
+use std::ffi::OsStr;
+use std::fs;
+#[cfg(not(windows))]
+use std::fs::{File, Metadata};
 use std::io::{Read, Write};
+#[cfg(not(windows))]
 use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(not(windows))]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -25,6 +31,67 @@ const MAX_CHECKPOINT: u64 = 16 * 1024 * 1024;
 const MAX_TOTAL_ENTRIES: usize = MAX_ENTRIES * 32;
 
 type Result<T> = std::result::Result<T, LoadError>;
+
+#[cfg(windows)]
+type File = loader::Handle;
+#[cfg(not(windows))]
+type Inode = u64;
+#[cfg(windows)]
+type Inode = [u8; 16];
+
+#[cfg(windows)]
+struct Metadata {
+    information: loader::Information,
+    descriptor: String,
+}
+
+#[cfg(windows)]
+impl Metadata {
+    fn len(&self) -> u64 {
+        self.information.size
+    }
+
+    fn dev(&self) -> u64 {
+        self.information.identity.0
+    }
+
+    fn ino(&self) -> Inode {
+        self.information.identity.1
+    }
+}
+
+fn file_metadata(file: &File) -> Result<Metadata> {
+    #[cfg(not(windows))]
+    {
+        file.metadata().map_err(io)
+    }
+    #[cfg(windows)]
+    {
+        let before = loader::information(file).map_err(|e| failure("state_ownership", &e))?;
+        let (attributes, descriptor) = file
+            .private_metadata()
+            .map_err(|e| failure("state_ownership", &e))?;
+        let information = loader::information(file).map_err(|e| failure("state_ownership", &e))?;
+        if before != information || attributes != information.attributes {
+            return Err(failure("input_drift", "state metadata changed while reading"));
+        }
+        Ok(Metadata {
+            information,
+            descriptor,
+        })
+    }
+}
+
+fn record_mode(metadata: &Metadata) -> u32 {
+    #[cfg(not(windows))]
+    {
+        metadata.mode() & 0o777
+    }
+    #[cfg(windows)]
+    {
+        metadata.information.attributes
+    }
+}
 
 fn failure(code: &str, message: &str) -> LoadError {
     LoadError::input(code, "", message)
@@ -157,11 +224,11 @@ struct Identity {
     domain: String,
     home_id: String,
     home_device: u64,
-    home_inode: u64,
+    home_inode: Inode,
     state_device: u64,
-    state_inode: u64,
+    state_inode: Inode,
     lease_device: u64,
-    lease_inode: u64,
+    lease_inode: Inode,
 }
 
 impl Identity {
@@ -172,9 +239,9 @@ impl Identity {
         root: &Directory,
         lease: &File,
     ) -> Result<()> {
-        let home = home.file.metadata().map_err(io)?;
-        let root = root.file.metadata().map_err(io)?;
-        let lease = lease.metadata().map_err(io)?;
+        let home = file_metadata(&home.file)?;
+        let root = file_metadata(&root.file)?;
+        let lease = file_metadata(lease)?;
         if self.schema_version != 1
             || self.domain != "cm.state-home.v1"
             || !loader::digest(&self.home_id)
@@ -191,9 +258,7 @@ impl Identity {
 
 fn random_id() -> Result<String> {
     let mut bytes = [0_u8; 32];
-    File::open("/dev/urandom")
-        .and_then(|mut file| file.read_exact(&mut bytes))
-        .map_err(io)?;
+    loader::random_bytes(&mut bytes).map_err(io)?;
     Ok(loader::hash(&bytes))
 }
 
@@ -210,9 +275,11 @@ fn names(directory: &Directory) -> Result<BTreeSet<String>> {
         .check()
         .map_err(|_| failure("input_drift", "state directory changed"))?;
     let mut result = BTreeSet::new();
-    for entry in
-        fs::read_dir(format!("/proc/self/fd/{}", directory.file.as_raw_fd())).map_err(io)?
-    {
+    #[cfg(not(windows))]
+    let path = PathBuf::from(format!("/proc/self/fd/{}", directory.file.as_raw_fd()));
+    #[cfg(windows)]
+    let path = directory.file.path().to_path_buf();
+    for entry in fs::read_dir(path).map_err(io)? {
         let name = entry.map_err(io)?.file_name();
         let name = name
             .to_str()
@@ -241,6 +308,19 @@ fn open_child(parent: &Directory, name: &str) -> Result<Directory> {
     Ok(child)
 }
 
+#[cfg(windows)]
+fn regular(parent: &Directory, name: &str) -> Result<File> {
+    parent
+        .check()
+        .map_err(|_| failure("input_drift", "state directory changed"))?;
+    let file = loader::open_at(&parent.file, OsStr::new(name), false)
+        .map_err(|_| failure("state_ownership", "state file is absent or unsafe"))?;
+    file.check_private()
+        .map_err(|_| failure("state_ownership", "state file is not private"))?;
+    Ok(file)
+}
+
+#[cfg(not(windows))]
 fn regular(parent: &Directory, name: &str) -> Result<File> {
     let name = CString::new(name).map_err(|_| failure("state_ownership", "invalid file name"))?;
     let fd = unsafe {
@@ -320,35 +400,51 @@ impl Store {
                 "refusing to adopt an unmarked state namespace",
             ));
         }
-        let fd = unsafe {
-            libc::openat(
-                root.file.as_raw_fd(),
-                c".lease".as_ptr(),
-                libc::O_RDWR
-                    | libc::O_NONBLOCK
-                    | libc::O_NOFOLLOW
-                    | libc::O_CLOEXEC
-                    | if initialize { libc::O_CREAT } else { 0 },
-                0o600,
-            )
+        #[cfg(not(windows))]
+        let lease = {
+            let fd = unsafe {
+                libc::openat(
+                    root.file.as_raw_fd(),
+                    c".lease".as_ptr(),
+                    libc::O_RDWR
+                        | libc::O_NONBLOCK
+                        | libc::O_NOFOLLOW
+                        | libc::O_CLOEXEC
+                        | if initialize { libc::O_CREAT } else { 0 },
+                    0o600,
+                )
+            };
+            if fd < 0 {
+                return Err(failure("state_ownership", "unsafe state lease"));
+            }
+            let lease = unsafe { File::from_raw_fd(fd) };
+            let metadata = lease.metadata().map_err(io)?;
+            if !metadata.is_file()
+                || metadata.nlink() != 1
+                || metadata.uid() != unsafe { libc::geteuid() }
+                || metadata.mode() & 0o7077 != 0
+            {
+                return Err(failure("state_ownership", "unsafe state lease"));
+            }
+            lease
         };
-        if fd < 0 {
-            return Err(failure("state_ownership", "unsafe state lease"));
-        }
-        let lease = unsafe { File::from_raw_fd(fd) };
-        let metadata = lease.metadata().map_err(io)?;
-        if !metadata.is_file()
-            || metadata.nlink() != 1
-            || metadata.uid() != unsafe { libc::geteuid() }
-            || metadata.mode() & 0o7077 != 0
-        {
-            return Err(failure("state_ownership", "unsafe state lease"));
-        }
-        if acquire_lease && loader::try_lock(&lease, exclusive).is_err() {
-            return Err(failure(
-                "state_busy",
-                "state is in use; exit CM runtimes before this operation",
-            ));
+        #[cfg(windows)]
+        let lease = loader::open_lock(&root.file, OsStr::new(".lease"), initialize).map_err(|error| {
+            if error.raw_os_error() == Some(32) {
+                failure("state_busy", "state lease is in use")
+            } else {
+                failure("state_ownership", "unsafe state lease")
+            }
+        })?;
+        let metadata = file_metadata(&lease)?;
+        if acquire_lease {
+            loader::try_lock(&lease, exclusive).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::WouldBlock {
+                    failure("state_busy", "state is in use; exit CM runtimes before this operation")
+                } else {
+                    io(error)
+                }
+            })?;
         }
         if !present(&identity_path)? {
             if !initialize {
@@ -357,8 +453,8 @@ impl Store {
                     "source state has no home identity",
                 ));
             }
-            let home_metadata = home.file.metadata().map_err(io)?;
-            let state_metadata = root.file.metadata().map_err(io)?;
+            let home_metadata = file_metadata(&home.file)?;
+            let state_metadata = file_metadata(&root.file)?;
             let identity = Identity {
                 schema_version: 1,
                 domain: "cm.state-home.v1".into(),
@@ -411,10 +507,13 @@ impl Store {
         self.identity
             .revalidate()
             .map_err(|_| failure("input_drift", "state home identity changed"))?;
+        #[cfg(not(windows))]
         let current = regular(&self.root, ".lease")?;
-        let old = self.lease.metadata().map_err(io)?;
-        let now = current.metadata().map_err(io)?;
-        if (old.dev(), old.ino()) != (now.dev(), now.ino()) {
+        #[cfg(windows)]
+        let current = loader::open_lock(&self.root.file, OsStr::new(".lease"), false)
+            .map_err(|_| failure("input_drift", "state lease changed"))?;
+        let identity = |file: &File| loader::identity(file).map_err(|e| failure("input_drift", &e));
+        if identity(&self.lease)? != identity(&current)? {
             return Err(failure("input_drift", "state lease inode changed"));
         }
         Ok(())
@@ -433,8 +532,10 @@ impl Store {
 }
 
 #[derive(PartialEq, Eq)]
+#[cfg(not(windows))]
 struct Stamp(u64, u64, u64, u32, u32, u64, i64, i64, i64, i64);
 
+#[cfg(not(windows))]
 fn stamp(metadata: &Metadata) -> Stamp {
     Stamp(
         metadata.dev(),
@@ -450,6 +551,15 @@ fn stamp(metadata: &Metadata) -> Stamp {
     )
 }
 
+#[cfg(windows)]
+#[derive(PartialEq, Eq)]
+struct Stamp(loader::Information, String);
+
+#[cfg(windows)]
+fn stamp(metadata: &Metadata) -> Stamp {
+    Stamp(metadata.information.clone(), metadata.descriptor.clone())
+}
+
 struct Pin {
     path: PathBuf,
     stamp: Stamp,
@@ -460,7 +570,7 @@ impl Pin {
     fn new(path: PathBuf, file: &File, directory: bool) -> Result<Self> {
         Ok(Self {
             path,
-            stamp: stamp(&file.metadata().map_err(io)?),
+            stamp: stamp(&file_metadata(file)?),
             directory,
         })
     }
@@ -484,7 +594,7 @@ impl Pin {
                     .ok_or_else(|| failure("state_ownership", "invalid state file path"))?,
             )?
         };
-        if stamp(&file.metadata().map_err(io)?) != self.stamp {
+        if stamp(&file_metadata(&file)?) != self.stamp {
             return Err(failure(
                 "input_drift",
                 "state input changed during operation",
@@ -496,7 +606,7 @@ impl Pin {
 
 fn read_marker(parent: &Directory, name: &str, limit: u64) -> Result<(Vec<u8>, Pin)> {
     let mut file = regular(parent, name)?;
-    let before = file.metadata().map_err(io)?;
+    let before = file_metadata(&file)?;
     if before.len() > limit {
         return Err(failure("state_budget", "state marker exceeds byte limit"));
     }
@@ -505,7 +615,7 @@ fn read_marker(parent: &Directory, name: &str, limit: u64) -> Result<(Vec<u8>, P
         .take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(io)?;
-    if bytes.len() as u64 != before.len() || stamp(&before) != stamp(&file.metadata().map_err(io)?)
+    if bytes.len() as u64 != before.len() || stamp(&before) != stamp(&file_metadata(&file)?)
     {
         return Err(failure("input_drift", "state marker changed while reading"));
     }
@@ -663,19 +773,37 @@ fn unlink(parent: &Directory, name: &str, directory: bool) -> Result<()> {
     parent
         .check()
         .map_err(|_| failure("input_drift", "unlink parent changed"))?;
+    #[cfg(windows)]
+    {
+        let file = loader::open_at(&parent.file, OsStr::new(name), directory)
+            .map_err(|_| failure("state_ownership", "unsafe unlink target"))?;
+        file.check_private()
+            .map_err(|_| failure("state_ownership", "unlink target is not private"))?;
+        let expected = loader::identity(&file).map_err(|e| profile::failure(&e))?;
+        drop(file);
+        parent
+            .remove(OsStr::new(name), expected, directory)
+            .map_err(|e| profile::failure(&e))
+    }
+    #[cfg(not(windows))]
+    {
     let name = CString::new(name).map_err(|_| failure("state_ownership", "invalid unlink name"))?;
     let flags = if directory { libc::AT_REMOVEDIR } else { 0 };
     if unsafe { libc::unlinkat(parent.file.as_raw_fd(), name.as_ptr(), flags) } != 0 {
         return Err(io(std::io::Error::last_os_error()));
     }
     parent.file.sync_all().map_err(io)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct Record {
     directory: bool,
+    #[cfg_attr(windows, serde(rename = "attributes"))]
     mode: u32,
+    #[cfg(windows)]
+    descriptor: String,
     size: u64,
     sha256: Option<String>,
 }
@@ -719,10 +847,11 @@ fn copy_file(
     capture: &mut Capture,
 ) -> Result<()> {
     let mut input = regular(source, name)?;
-    let before = input.metadata().map_err(io)?;
+    let before = file_metadata(&input)?;
     if before.len() > MAX_BYTES.saturating_sub(budget.bytes) {
         return Err(failure("state_budget", "state owner exceeds 1 GiB"));
     }
+    #[cfg(not(windows))]
     let mut output = if let Some(destination) = destination {
         let name =
             CString::new(name).map_err(|_| failure("state_ownership", "invalid copy name"))?;
@@ -741,6 +870,11 @@ fn copy_file(
     } else {
         None
     };
+    #[cfg(windows)]
+    let mut output = destination
+        .map(|destination| destination.create_output(name))
+        .transpose()
+        .map_err(|e| profile::failure(&e))?;
     let mut digest = Sha256::new();
     let mut bytes = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
@@ -759,14 +893,19 @@ fn copy_file(
             output.write_all(&buffer[..length]).map_err(io)?;
         }
     }
-    if bytes != before.len() || stamp(&before) != stamp(&input.metadata().map_err(io)?) {
+    if bytes != before.len() || stamp(&before) != stamp(&file_metadata(&input)?) {
         return Err(failure("input_drift", "state file changed while copying"));
     }
     if let Some(output) = &output {
+        #[cfg(not(windows))]
+        {
         if unsafe { libc::fchmod(output.as_raw_fd(), before.mode() & 0o777) } != 0 {
             return Err(io(std::io::Error::last_os_error()));
         }
         output.sync_all().map_err(io)?;
+        }
+        #[cfg(windows)]
+        output.copy_metadata(&input).map_err(|e| profile::failure(&e))?;
     }
     budget.bytes += bytes;
     record(
@@ -775,7 +914,9 @@ fn copy_file(
         relative,
         Record {
             directory: false,
-            mode: before.mode() & 0o777,
+            mode: record_mode(&before),
+            #[cfg(windows)]
+            descriptor: before.descriptor.clone(),
             size: bytes,
             sha256: Some(format!("{:x}", digest.finalize())),
         },
@@ -795,14 +936,16 @@ fn walk(
     budget: &mut Budget,
     capture: &mut Capture,
 ) -> Result<()> {
-    let before = source.file.metadata().map_err(io)?;
+    let before = file_metadata(&source.file)?;
     record(
         capture,
         budget,
         relative,
         Record {
             directory: true,
-            mode: before.mode() & 0o777,
+            mode: record_mode(&before),
+            #[cfg(windows)]
+            descriptor: before.descriptor.clone(),
             size: 0,
             sha256: None,
         },
@@ -823,17 +966,22 @@ fn walk(
             copy_file(source, destination, name, &path, budget, capture)?;
         }
     }
-    if entries != names(source)? || stamp(&before) != stamp(&source.file.metadata().map_err(io)?) {
+    if entries != names(source)? || stamp(&before) != stamp(&file_metadata(&source.file)?) {
         return Err(failure(
             "input_drift",
             "state directory changed while copying",
         ));
     }
     if let Some(destination) = destination {
+        #[cfg(not(windows))]
+        {
         if unsafe { libc::fchmod(destination.file.as_raw_fd(), before.mode() & 0o777) } != 0 {
             return Err(io(std::io::Error::last_os_error()));
         }
         destination.file.sync_all().map_err(io)?;
+        }
+        #[cfg(windows)]
+        destination.file.copy_metadata(&source.file).map_err(|e| profile::failure(&e))?;
     }
     capture.pins.push(Pin {
         path: source.path.clone(),
@@ -862,11 +1010,14 @@ fn empty_owner(root: &Directory, id: &str, owner: &Owner) -> Result<bool> {
     Ok(names(&owner_directory(root, id, owner)?)?.is_empty())
 }
 
-fn create_owner(root: &Directory, id: &str, owner: &Owner) -> Result<Directory> {
-    root.child(id)
-        .and_then(|id| id.child(&owner.schema))
-        .and_then(|schema| schema.child(&owner.version.to_string()))
-        .map_err(|_| failure("state_ownership", "cannot create owned state path"))
+fn create_owner(root: &Directory, id: &str, owner: &Owner) -> Result<[Directory; 3]> {
+    let create = || {
+        let id = root.child(id)?;
+        let schema = id.child(&owner.schema)?;
+        let version = schema.child(&owner.version.to_string())?;
+        Ok([id, schema, version])
+    };
+    create().map_err(|_: String| failure("state_ownership", "cannot create owned state path"))
 }
 
 fn capture_owner(
@@ -885,14 +1036,16 @@ fn capture_owner(
     for relative in [id.to_owned(), format!("{id}/{}", owner.schema)] {
         let directory = Directory::open(&root.path.join(&relative))
             .map_err(|_| failure("state_ownership", "unsafe state header directory"))?;
-        let metadata = directory.file.metadata().map_err(io)?;
+        let metadata = file_metadata(&directory.file)?;
         record(
             capture,
             &mut budget,
             &relative,
             Record {
                 directory: true,
-                mode: metadata.mode() & 0o777,
+                mode: record_mode(&metadata),
+                #[cfg(windows)]
+                descriptor: metadata.descriptor.clone(),
                 size: 0,
                 sha256: None,
             },
@@ -905,22 +1058,25 @@ fn capture_owner(
     }
     walk(
         &source,
-        target.as_ref(),
+        target.as_ref().map(|directories| &directories[2]),
         &owner.relative(id),
         &mut budget,
         capture,
     )?;
-    if let Some(destination) = destination {
-        for relative in [format!("{id}/{}", owner.schema), id.to_owned()] {
+    if let Some(target) = &target {
+        for (relative, new) in [(format!("{id}/{}", owner.schema), &target[1]), (id.to_owned(), &target[0])] {
             let old = Directory::open(&root.path.join(&relative))
                 .map_err(|_| failure("state_ownership", "unsafe state header"))?;
-            let new = Directory::open(&destination.path.join(relative))
-                .map_err(|_| failure("state_ownership", "unsafe copied header"))?;
+            #[cfg(not(windows))]
+            {
             let mode = old.file.metadata().map_err(io)?.mode() & 0o777;
             if unsafe { libc::fchmod(new.file.as_raw_fd(), mode) } != 0 {
                 return Err(io(std::io::Error::last_os_error()));
             }
             new.file.sync_all().map_err(io)?;
+            }
+            #[cfg(windows)]
+            new.file.copy_metadata(&old.file).map_err(|e| profile::failure(&e))?;
         }
     }
     Ok(())
@@ -1603,6 +1759,13 @@ fn remove_tree(parent: &Directory, name: &str) -> Result<()> {
     directory
         .check()
         .map_err(|_| failure("input_drift", "cleanup directory replaced"))?;
+    #[cfg(windows)]
+    {
+        let expected = loader::identity(&directory.file).map_err(|e| profile::failure(&e))?;
+        drop(directory);
+        parent.remove(OsStr::new(name), expected, true).map_err(|e| profile::failure(&e))
+    }
+    #[cfg(not(windows))]
     unlink(parent, name, true)
 }
 
@@ -1636,6 +1799,7 @@ fn cleanup(tree: &Directory, id: &str, owner: &Owner) -> Result<()> {
         pin.revalidate()?;
     }
     fault(2)?;
+    drop(root);
     remove_tree(tree, id)
 }
 
@@ -1828,7 +1992,7 @@ fn fault(point: u8) -> Result<()> {
     #[cfg(test)]
     if FAULT.get() == point {
         return Err(if point == 3 {
-            io(std::io::Error::from_raw_os_error(libc::ENOSPC))
+            io(std::io::ErrorKind::StorageFull.into())
         } else {
             failure("state_checkpoint", "injected state operation failure")
         });
@@ -1841,7 +2005,9 @@ fn fault(point: u8) -> Result<()> {
 mod tests {
     use super::*;
     use std::io::{BufRead, BufReader};
+    #[cfg(not(windows))]
     use std::os::unix::ffi::OsStrExt;
+    #[cfg(not(windows))]
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, symlink};
     use std::process::{Command as Process, Stdio};
 
@@ -1850,8 +2016,24 @@ mod tests {
     impl Home {
         fn new() -> Self {
             let path = std::env::temp_dir().join(format!("cm-state-test-{}", random_id().unwrap()));
+            #[cfg(not(windows))]
             fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+            #[cfg(windows)]
+            Directory::create_home(&path).unwrap();
             Self(path)
+        }
+    }
+
+    fn directory_link(target: &Path, link: &Path) {
+        #[cfg(not(windows))]
+        symlink(target, link).unwrap();
+        #[cfg(windows)]
+        {
+            let output = Process::new("cmd.exe")
+                .args([OsStr::new("/D"), OsStr::new("/C"), OsStr::new("mklink"), OsStr::new("/J"), link.as_os_str(), target.as_os_str()])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "junction setup: {output:?}");
         }
     }
 
@@ -1876,7 +2058,7 @@ mod tests {
         let root = store.trees.child(&view.tree).unwrap();
         for (id, owner) in &view.owners {
             let path = create_owner(&root, id, owner).unwrap();
-            path.create_file("value", id.as_bytes()).unwrap();
+            path[2].create_file("value", id.as_bytes()).unwrap();
         }
         view
     }
@@ -1941,8 +2123,8 @@ mod tests {
         let mut view = new_view(&held.store).unwrap();
         let alias = random_id().unwrap();
         let external = home.0.join("external");
-        fs::DirBuilder::new().mode(0o700).create(&external).unwrap();
-        symlink(&external, held.store.trees.path.join(&alias)).unwrap();
+        Directory::open(&home.0).unwrap().child("external").unwrap();
+        directory_link(&external, &held.store.trees.path.join(&alias));
         view.cleanups.insert(
             "example-tool".into(),
             Cleanup {
@@ -1991,6 +2173,12 @@ mod tests {
         for pin in old.pins.iter().chain(copied.pins.iter()) {
             pin.revalidate().unwrap();
         }
+        #[cfg(windows)]
+        {
+            assert!(cleanup(&source, "example-tool", &owner(1)).is_err());
+            drop(old);
+            drop(copied);
+        }
         cleanup(&source, "example-tool", &owner(1)).unwrap();
         assert!(!source.path.join("example-tool").exists());
         assert_eq!(
@@ -2010,25 +2198,63 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn readonly_native_metadata_survives_copy_and_identity_bound_cleanup() {
+        let home = Home::new();
+        let held = guard(&home.0, true).unwrap();
+        let view = fixture(&held.store);
+        let source = held.store.tree(&view).unwrap();
+        let own = owner_directory(&source, "example-tool", &owner(1)).unwrap();
+        for path in [own.path.join("value"), own.path.clone()] {
+            let mut permissions = fs::metadata(&path).unwrap().permissions();
+            permissions.set_readonly(true);
+            fs::set_permissions(path, permissions).unwrap();
+        }
+        drop(own);
+        let original = capture_tree(&source, &view.owners).unwrap();
+        let destination = held.store.trees.child(&random_id().unwrap()).unwrap();
+        let mut copied = Capture::default();
+        for (id, owner) in &view.owners {
+            capture_owner(&source, Some(&destination), id, owner, &mut copied).unwrap();
+        }
+        assert_eq!(original.entries, copied.entries);
+        assert_eq!(capture_tree(&destination, &view.owners).unwrap().entries, original.entries);
+        let value = destination.path.join(owner(1).relative("example-tool")).join("value");
+        assert!(fs::metadata(&value).unwrap().permissions().readonly());
+        assert_eq!(fs::read(&value).unwrap(), b"example-tool");
+        assert!(cleanup(&source, "example-tool", &owner(1)).is_err());
+        drop(original);
+        drop(copied);
+        cleanup(&source, "example-tool", &owner(1)).unwrap();
+        cleanup(&destination, "example-tool", &owner(1)).unwrap();
+        assert!(!value.exists());
+        assert_eq!(fs::read(source.path.join(owner(1).relative("other")).join("value")).unwrap(), b"other");
+    }
+
+    #[test]
     fn links_special_files_and_unowned_paths_are_rejected_before_cleanup() {
-        for kind in ["symlink", "hardlink", "fifo", "unowned"] {
+        #[cfg(not(windows))]
+        let kinds = ["symlink", "hardlink", "fifo", "unowned"];
+        #[cfg(windows)]
+        let kinds = ["junction", "hardlink", "unowned"];
+        for kind in kinds {
             let home = Home::new();
             let held = guard(&home.0, true).unwrap();
             let view = fixture(&held.store);
             let root = held.store.tree(&view).unwrap();
             let own = owner_directory(&root, "example-tool", &owner(1)).unwrap();
             let external = home.0.join("external");
-            fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&external)
-                .unwrap()
-                .write_all(b"preserve")
-                .unwrap();
+            Directory::open(&home.0).unwrap().create_file("external", b"preserve").unwrap();
             match kind {
+                #[cfg(not(windows))]
                 "symlink" => symlink(&external, own.path.join("bad")).unwrap(),
+                #[cfg(windows)]
+                "junction" => {
+                    let target = Directory::open(&home.0).unwrap().child("outside").unwrap();
+                    directory_link(&target.path, &own.path.join("bad"));
+                }
                 "hardlink" => fs::hard_link(&external, own.path.join("bad")).unwrap(),
+                #[cfg(not(windows))]
                 "fifo" => {
                     let path = CString::new(own.path.join("bad").as_os_str().as_bytes()).unwrap();
                     assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
@@ -2056,6 +2282,7 @@ mod tests {
         let tree = held.store.tree(&view).unwrap();
         let own = owner_directory(&tree, "example-tool", &owner(1)).unwrap();
         let large = own.path.join("large");
+        #[cfg(not(windows))]
         fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -2064,12 +2291,21 @@ mod tests {
             .unwrap()
             .set_len(MAX_BYTES + 1)
             .unwrap();
+        #[cfg(windows)]
+        own.create_output("large").unwrap().set_len(MAX_BYTES + 1).unwrap();
         assert!(capture_tree(&tree, &view.owners).is_err());
         fs::remove_file(large).unwrap();
         let capture = capture_tree(&tree, &view.owners).unwrap();
         let path = own.path.join("value");
+        #[cfg(windows)]
+        {
+            assert!(fs::rename(&path, home.0.join("old-value")).is_err());
+            for pin in &capture.pins { pin.revalidate().unwrap(); }
+            drop(capture);
+        }
         fs::rename(&path, home.0.join("old-value")).unwrap();
         own.create_file("value", b"example-tool").unwrap();
+        #[cfg(not(windows))]
         assert!(capture.pins.iter().any(|pin| pin.revalidate().is_err()));
         assert_eq!(fs::read(home.0.join("old-value")).unwrap(), b"example-tool");
         let mut captured = Capture::default();
@@ -2085,6 +2321,8 @@ mod tests {
                 Record {
                     directory: true,
                     mode: 0o700,
+                    #[cfg(windows)]
+                    descriptor: String::new(),
                     size: 0,
                     sha256: None,
                 }
@@ -2099,10 +2337,24 @@ mod tests {
         let home = Home::new();
         let held = guard(&home.0, false).unwrap();
         let path = held.store.root.path.join(".lease");
+        #[cfg(not(windows))]
+        {
         fs::rename(&path, held.store.root.path.join("old-lease")).unwrap();
         held.store.root.create_file(".lease", b"").unwrap();
         assert!(held.revalidate().is_err());
         assert!(guard(&home.0, true).is_err());
+        }
+        #[cfg(windows)]
+        {
+            let expected = loader::identity(&held.store.lease).unwrap();
+            assert!(fs::rename(&path, held.store.root.path.join("old-lease")).is_err());
+            assert!(held.store.root.create_file(".lease", b"").is_err());
+            held.revalidate().unwrap();
+            assert!(guard(&home.0, true).is_err());
+            drop(held);
+            let next = guard(&home.0, true).unwrap();
+            assert_eq!(loader::identity(&next.store.lease).unwrap(), expected);
+        }
     }
 
     #[test]
@@ -2218,10 +2470,12 @@ mod tests {
         let relative = "example-tool/notes/1/value";
         let a = original.path.join(relative);
         let b = copied.path.join(relative);
-        assert_ne!(
-            fs::metadata(&a).unwrap().ino(),
-            fs::metadata(&b).unwrap().ino()
-        );
+        let file_identity = |path: &Path| {
+            let parent = loader::open_directory(path.parent().unwrap()).unwrap();
+            let file = loader::open_at(&parent, path.file_name().unwrap(), false).unwrap();
+            loader::identity(&file).unwrap()
+        };
+        assert_ne!(file_identity(&a), file_identity(&b));
         fs::write(b, b"new candidate data").unwrap();
         assert_eq!(fs::read(a).unwrap(), b"example-tool");
         captured.revalidate().unwrap();

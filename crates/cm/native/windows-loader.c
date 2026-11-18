@@ -131,7 +131,8 @@ CmWindowsPin *cm_windows_pin_open(const wchar_t *path, const wchar_t *expected) 
 
 CmWindowsPin *cm_windows_pin_copy(const unsigned char *bytes, size_t length, unsigned kind) {
     const wchar_t *extensions[] = {L"dll", L"exe", L"jsonl", L"bin"};
-    if (!bytes || !length || length > 32 * 1024 * 1024 || kind >= 4) {
+    const size_t limits[] = {64 * 1024 * 1024, 128 * 1024 * 1024, 2 * 1024 * 1024, 32 * 1024 * 1024};
+    if (!bytes || !length || kind >= 4 || length > limits[kind]) {
         SetLastError(ERROR_INVALID_PARAMETER); return NULL;
     }
     wchar_t temp[4096], directory[4096], path[4096], token[33];
@@ -867,4 +868,84 @@ CmWindowsPin *cm_windows_lock_open(const CmWindowsPin *parent, const wchar_t *na
         return NULL;
     }
     return p;
+}
+
+CmWindowsProcess *cm_windows_verifier_spawn(const wchar_t *program, wchar_t *command,
+    const wchar_t *environment, HANDLE *output, HANDLE *diagnostics) {
+    CmWindowsProcess *p = (CmWindowsProcess *)calloc(1, sizeof(*p));
+    if (!p) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return NULL; }
+    SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
+    STARTUPINFOEXW startup = {0};
+    PROCESS_INFORMATION child = {0};
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
+    HANDLE read_output = NULL, read_error = NULL, inherited[3] = {NULL, NULL, NULL};
+    SIZE_T size = 0;
+    BOOL initialized = FALSE, ok = FALSE;
+    p->job = CreateJobObjectW(NULL, NULL);
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!p->job || !SetInformationJobObject(p->job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))
+        || !CreatePipe(&read_output, &inherited[1], &security, 0)
+        || !CreatePipe(&read_error, &inherited[2], &security, 0)
+        || !SetHandleInformation(read_output, HANDLE_FLAG_INHERIT, 0)
+        || !SetHandleInformation(read_error, HANDLE_FLAG_INHERIT, 0)) goto done;
+    inherited[0] = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (inherited[0] == INVALID_HANDLE_VALUE) goto done;
+    InitializeProcThreadAttributeList(NULL, 2, 0, &size);
+    if (!size) goto done;
+    startup.lpAttributeList = (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(size);
+    if (!startup.lpAttributeList) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); goto done; }
+    if (!InitializeProcThreadAttributeList(startup.lpAttributeList, 2, 0, &size)) goto done;
+    initialized = TRUE;
+    /* Assign atomically at creation; a running child must never precede its job. */
+    if (!UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+            &p->job, sizeof(p->job), NULL, NULL)
+        || !UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            inherited, sizeof(inherited), NULL, NULL)) goto done;
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = inherited[0];
+    startup.StartupInfo.hStdOutput = inherited[1];
+    startup.StartupInfo.hStdError = inherited[2];
+    if (!CreateProcessW(program, command, NULL, NULL, TRUE,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+            (void *)environment, NULL, &startup.StartupInfo, &child)) goto done;
+    p->process = child.hProcess;
+    CloseHandle(child.hThread);
+    *output = read_output; *diagnostics = read_error;
+    read_output = read_error = NULL;
+    ok = TRUE;
+done: {
+    DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+    if (initialized) DeleteProcThreadAttributeList(startup.lpAttributeList);
+    free(startup.lpAttributeList);
+    for (size_t i = 0; i < 3; ++i)
+        if (inherited[i] && inherited[i] != INVALID_HANDLE_VALUE) CloseHandle(inherited[i]);
+    if (read_output) CloseHandle(read_output);
+    if (read_error) CloseHandle(read_error);
+    if (!ok) { cm_windows_verifier_free(p); p = NULL; }
+    SetLastError(error);
+    return p;
+}}
+
+int cm_windows_verifier_poll(const CmWindowsProcess *p, DWORD *code) {
+    DWORD status = WaitForSingleObject(p->process, 0);
+    if (status == WAIT_TIMEOUT) return 0;
+    if (status != WAIT_OBJECT_0 || !GetExitCodeProcess(p->process, code)) return -1;
+    return 1;
+}
+
+void cm_windows_verifier_stop(CmWindowsProcess *p) {
+    if (p->job) {
+        TerminateJobObject(p->job, 1);
+        CloseHandle(p->job);
+        p->job = NULL;
+    }
+}
+
+void cm_windows_verifier_free(CmWindowsProcess *p) {
+    if (!p) return;
+    cm_windows_verifier_stop(p);
+    if (p->process) CloseHandle(p->process);
+    free(p);
 }

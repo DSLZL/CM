@@ -2,7 +2,6 @@
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::future::Future;
-use std::io::Read;
 use std::mem::{align_of, size_of};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -149,8 +148,7 @@ struct Hub {
 fn hub() -> Result<&'static Hub, LoadError> {
     HUB.get_or_init(|| {
         let mut bytes = [0_u8; 8];
-        std::fs::File::open("/dev/urandom")
-            .and_then(|mut file| file.read_exact(&mut bytes))
+        crate::loader::random_bytes(&mut bytes)
             .map_err(|error| LoadError::native("runtime_epoch", &error.to_string()))?;
         let epoch = u64::from_ne_bytes(bytes);
         if epoch == 0 {

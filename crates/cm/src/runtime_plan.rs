@@ -181,7 +181,8 @@ impl PreparedPlan {
 
     pub(crate) fn revalidate(&self) -> Result<(), LoadError> {
         self.revalidate_inputs()?;
-        let current = HostIdentity::read(Path::new("/proc/self/exe"))
+        let executable = loader::current_executable().map_err(|e| LoadError::input("input_drift", "", &e.to_string()))?;
+        let current = HostIdentity::read(&executable)
             .map_err(|e| LoadError::input("input_drift", "", &e.to_string()))?;
         if current != self.plan.host {
             return Err(LoadError::input(
@@ -824,7 +825,8 @@ pub fn prepare_options(
     home: &Path,
     options: &crate::config::Options,
 ) -> Result<PreparedPlan, LoadError> {
-    prepare_inputs(home, Path::new("/proc/self/exe"), options)
+    let executable = loader::current_executable().map_err(|e| LoadError::input("host_identity", "", &e.to_string()))?;
+    prepare_inputs(home, &executable, options)
 }
 
 /// Probe-only counterfactual identity; commit still requires the current executable.
@@ -845,7 +847,8 @@ pub(crate) fn prepare_managed(
     options: &crate::config::Options,
     snapshot: crate::profile::Snapshot,
 ) -> Result<PreparedPlan, LoadError> {
-    prepare_snapshot(home, Path::new("/proc/self/exe"), options, Some(snapshot))
+    let executable = loader::current_executable().map_err(|e| LoadError::input("host_identity", "", &e.to_string()))?;
+    prepare_snapshot(home, &executable, options, Some(snapshot))
 }
 
 fn prepare_snapshot(
@@ -864,9 +867,10 @@ pub(crate) fn prepare_upgrade(
     variants: &BTreeMap<String, (PathBuf, String)>,
     host: Option<HostIdentity>,
 ) -> Result<PreparedPlan, LoadError> {
+    let executable = loader::current_executable().map_err(|e| LoadError::input("host_identity", "", &e.to_string()))?;
     prepare_selection(
         home,
-        Path::new("/proc/self/exe"),
+        &executable,
         options,
         Some(source.clone()),
         variants,

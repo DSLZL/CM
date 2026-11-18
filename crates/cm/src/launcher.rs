@@ -1,5 +1,6 @@
 //! Launch the receipt-bound Host without a shell, PATH lookup or official profile.
 use std::ffi::OsString;
+#[cfg(not(windows))]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 
@@ -33,8 +34,18 @@ pub fn launch(home: &Path, args: &[OsString], options: &Options) -> Result<(), L
         .env("CODEX_SQLITE_HOME", home)
         .env("CM_MANAGED_HOME", home)
         .env("CM_MANAGED_GENERATION", generation);
+    #[cfg(not(windows))]
+    {
     let error = command.exec();
     Err(profile::failure(&format!(
         "verified Host exec failed: {error}"
     )))
+    }
+    #[cfg(windows)]
+    {
+        let status = command.status().map_err(|error| profile::failure(&format!("verified Host launch failed: {error}")))?;
+        drop(command);
+        drop(snapshot);
+        crate::exit_after_shutdown(status.code().unwrap_or(1))
+    }
 }

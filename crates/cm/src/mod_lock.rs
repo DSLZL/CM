@@ -1,10 +1,13 @@
 //! A reproducibility record, never executable input or a substitute for prepare/commit.
-use std::ffi::CString;
-use std::fs::File;
+#[cfg(not(windows))]
+use std::{ffi::CString, fs::File};
+#[cfg(windows)]
+use std::ffi::OsStr;
 use std::io::Write;
+#[cfg(not(windows))]
 use std::os::fd::AsRawFd;
+#[cfg(not(windows))]
 use std::os::fd::FromRawFd;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -62,8 +65,9 @@ pub(crate) fn present(home: &Path) -> Result<bool, LoadError> {
 pub fn write(home: &Path, prepared: &PreparedPlan) -> Result<(), LoadError> {
     let directory =
         loader::open_directory(home).map_err(|_| failure("mod.lock: unsafe profile directory"))?;
-    let before = directory
-        .metadata()
+    #[cfg(windows)]
+    directory.check_private().map_err(|_| failure("mod.lock: unsafe profile directory"))?;
+    let before = loader::identity(&directory)
         .map_err(|_| failure("mod.lock: cannot inspect profile"))?;
     let old = if present(home)? {
         Some(
@@ -78,17 +82,19 @@ pub fn write(home: &Path, prepared: &PreparedPlan) -> Result<(), LoadError> {
     if bytes.len() as u64 > LIMIT {
         return Err(failure("mod.lock: byte limit"));
     }
-    let name = CString::new(format!(
+    let name = format!(
         ".mod.lock.{}.{}.tmp",
         std::process::id(),
         TEMP_ID.fetch_add(1, Ordering::Relaxed)
-    ))
-    .expect("constant path parts");
-    let target = c"mod.lock";
+    );
+    #[cfg(not(windows))]
+    let native_name = CString::new(name.as_str()).expect("constant path parts");
+    #[cfg(not(windows))]
+    let mut temp = {
     let fd = unsafe {
         libc::openat(
             directory.as_raw_fd(),
-            name.as_ptr(),
+            native_name.as_ptr(),
             libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
             0o600,
         )
@@ -96,7 +102,12 @@ pub fn write(home: &Path, prepared: &PreparedPlan) -> Result<(), LoadError> {
     if fd < 0 {
         return Err(failure("mod.lock: cannot create exclusive temporary file"));
     }
-    let mut temp = unsafe { File::from_raw_fd(fd) };
+    unsafe { File::from_raw_fd(fd) }
+    };
+    #[cfg(windows)]
+    let mut temp = directory.create_output(OsStr::new(&name)).map_err(|_| failure("mod.lock: cannot create exclusive temporary file"))?;
+    #[cfg(windows)]
+    let temporary_identity = loader::identity(&temp).map_err(|_| failure("mod.lock: cannot identify temporary file"))?;
     let result = (|| {
         temp.write_all(&bytes)
             .and_then(|()| temp.flush())
@@ -104,9 +115,9 @@ pub fn write(home: &Path, prepared: &PreparedPlan) -> Result<(), LoadError> {
             .map_err(|_| failure("mod.lock: temporary write failed"))?;
         prepared.revalidate()?;
         let current = loader::open_directory(home)
-            .and_then(|f| f.metadata().map_err(|e| e.to_string()))
+            .and_then(|f| loader::identity(&f))
             .map_err(|_| failure("mod.lock: profile changed"))?;
-        if before.dev() != current.dev() || before.ino() != current.ino() {
+        if before != current {
             return Err(failure("mod.lock: profile changed"));
         }
         if let Some(old) = &old {
@@ -115,12 +126,14 @@ pub fn write(home: &Path, prepared: &PreparedPlan) -> Result<(), LoadError> {
         } else if present(home)? {
             return Err(failure("mod.lock: concurrent lock appeared"));
         }
+        #[cfg(not(windows))]
+        {
         if unsafe {
             libc::renameat(
                 directory.as_raw_fd(),
-                name.as_ptr(),
+                native_name.as_ptr(),
                 directory.as_raw_fd(),
-                target.as_ptr(),
+                c"mod.lock".as_ptr(),
             )
         } != 0
         {
@@ -129,12 +142,27 @@ pub fn write(home: &Path, prepared: &PreparedPlan) -> Result<(), LoadError> {
         directory
             .sync_all()
             .map_err(|_| failure("mod.lock: directory sync failed after rename"))?;
+        }
+        #[cfg(windows)]
+        {
+            drop(temp);
+            if let Some(old) = &old {
+                directory.replace(OsStr::new(&name), OsStr::new("mod.lock"), old.identity())
+                    .map_err(|e| failure(&e))?;
+            } else if !directory.publish(OsStr::new(&name), OsStr::new("mod.lock")).map_err(|e| failure(&e))? {
+                return Err(failure("mod.lock: concurrent lock appeared"));
+            }
+            directory.sync_private_directory().map_err(|e| failure(&format!("committed: {e}")))?;
+        }
         Ok(())
     })();
     if result.is_err() {
+        #[cfg(not(windows))]
         unsafe {
-            libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0);
+            libc::unlinkat(directory.as_raw_fd(), native_name.as_ptr(), 0);
         }
+        #[cfg(windows)]
+        let _ = directory.remove(OsStr::new(&name), temporary_identity, false);
     }
     result
 }
@@ -146,7 +174,10 @@ mod tests {
     #[test]
     fn input_drift_preserves_old_lock_and_removes_temporary_file() {
         let home = std::env::temp_dir().join(format!("cm-lock-drift-{}", std::process::id()));
+        #[cfg(not(windows))]
         std::fs::create_dir(&home).unwrap();
+        #[cfg(windows)]
+        crate::profile::Directory::create_home(&home).unwrap();
         let selected = home.join("cm-runtime.toml");
         std::fs::write(&selected, "format_version = 1\nenabled = []\n").unwrap();
         let prepared = crate::runtime_plan::prepare(&home).unwrap();

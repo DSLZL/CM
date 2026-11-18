@@ -57,6 +57,8 @@ crates/cm/Cargo.toml
 crates/cm/examples/native_probe.rs
 crates/cm/src/config.rs
 crates/cm/src/distribution-policy-arm64.json
+crates/cm/src/distribution-policy-windows-arm64.json
+crates/cm/src/distribution-policy-windows-x64.json
 crates/cm/src/diagnostics.rs
 crates/cm/src/host_identity.rs
 crates/cm/src/lib.rs
@@ -221,6 +223,7 @@ ci/scripts/distribution_provenance.py
 crates/cm/src/distribution-policy.json
 crates/cm/src/distribution-root.jsonl
 crates/cm/src/provenance.rs
+crates/cm/src/provenance/windows.rs
 docs/distribution.md
 fixtures/distribution-provenance/acceptance.sh
 fixtures/distribution-provenance/driver.py

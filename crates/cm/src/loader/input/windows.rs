@@ -398,14 +398,18 @@ pub(crate) fn open_at(parent: &Handle, name: &OsStr, directory: bool) -> Result<
     })
 }
 
-pub(crate) fn open_lock(parent: &Handle, name: &OsStr, create: bool) -> Result<Handle, String> {
-    let name = wide(name)?;
-    Handle::take(unsafe {
+pub(crate) fn open_lock(parent: &Handle, name: &OsStr, create: bool) -> io::Result<Handle> {
+    let name = wide(name).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let raw = unsafe {
         cm_windows_lock_open(parent.pin.0.as_ptr(), name.as_ptr(), i32::from(create))
-    })
+    };
+    if raw.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    Handle::take(raw).map_err(io::Error::other)
 }
 
-pub(in super::super) fn information(file: &Handle) -> Result<Information, String> {
+pub(crate) fn information(file: &Handle) -> Result<Information, String> {
     let mut info = std::mem::MaybeUninit::uninit();
     if unsafe { cm_windows_file_information(file.pin.0.as_ptr(), info.as_mut_ptr()) } == 0 {
         return Err(io::Error::last_os_error().to_string());
@@ -418,5 +422,6 @@ pub(in super::super) fn information(file: &Handle) -> Result<Information, String
         changed: (info.changed, 0),
         regular: info.attributes & 0x10 == 0,
         links: u64::from(info.links),
+        attributes: info.attributes,
     })
 }

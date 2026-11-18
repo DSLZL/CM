@@ -1,9 +1,10 @@
 //! Signed first-party binary discovery. Metadata and CAS writes never activate a generation.
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(not(windows))]
 use std::ffi::CString;
 use std::future::Future;
+#[cfg(not(windows))]
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -206,15 +207,7 @@ impl Declaration {
             && loader::digest(&binary.sha256)
             && loader::identifier(&binary.entry)
             && binary.entry.len() <= 128
-            && matches!(
-                (binary.target.as_str(), binary.cpu.as_str()),
-                ("x86_64-unknown-linux-gnu", "x86-64") | ("aarch64-unknown-linux-gnu", "armv8-a")
-            )
-            && text(&binary.glibc_min, 16)
-            && binary
-                .glibc_min
-                .split_once('.')
-                .is_some_and(|(a, b)| a.parse::<u32>().is_ok() && b.parse::<u32>().is_ok())
+            && binary.valid_platform()
             && compat.abi_major > 0
             && compat.abi_minor_min <= compat.abi_minor_max
             && text(&compat.host_api_min, 128)
@@ -445,15 +438,28 @@ fn publish(
     bytes: &[u8],
     replace: bool,
 ) -> Result<(), LoadError> {
+    #[cfg(windows)]
+    let previous = if replace && present(&directory.path.join(name))? {
+        Some(loader::read_input(&directory.path.join(name), INDEX_LIMIT)
+            .map_err(|_| failure("index_cache", "unsafe cache pointer"))?.1)
+    } else {
+        None
+    };
     let temporary = profile::temporary("index");
     directory
         .create_file(&temporary, bytes)
         .map_err(|_| failure("index_cache", "cannot stage cache file"))?;
+    #[cfg(windows)]
+    let temporary_identity = loader::open_at(&directory.file, std::ffi::OsStr::new(&temporary), false)
+        .and_then(|file| loader::identity(&file))
+        .map_err(|_| failure("index_cache", "cannot identify staged cache file"))?;
     let result = (|| {
         directory
             .check()
             .map_err(|_| failure("input_drift", "cache directory changed"))?;
         if replace {
+            #[cfg(not(windows))]
+            {
             let from = CString::new(temporary.as_str()).expect("temporary name");
             let to =
                 CString::new(name).map_err(|_| failure("index_cache", "invalid cache name"))?;
@@ -472,6 +478,15 @@ fn publish(
                 .file
                 .sync_all()
                 .map_err(|_| failure("index_cache", "cache sync failed"))?;
+            }
+            #[cfg(windows)]
+            {
+                if let Some(previous) = &previous {
+                    previous.revalidate().map_err(|_| failure("input_drift", "cache pointer changed"))?;
+                }
+                directory.replace_file(&temporary, name, previous.as_ref().map(loader::InputPin::identity))
+                    .map_err(|error| failure("index_cache", &error))?;
+            }
         } else if !directory
             .publish(&temporary, name)
             .map_err(|_| failure("index_cache", "cannot publish cache file"))?
@@ -487,8 +502,13 @@ fn publish(
         }
         Ok(())
     })();
-    let temporary = CString::new(temporary).expect("temporary name");
-    unsafe { libc::unlinkat(directory.file.as_raw_fd(), temporary.as_ptr(), 0) };
+    #[cfg(not(windows))]
+    {
+        let temporary = CString::new(temporary).expect("temporary name");
+        unsafe { libc::unlinkat(directory.file.as_raw_fd(), temporary.as_ptr(), 0) };
+    }
+    #[cfg(windows)]
+    let _ = directory.remove(std::ffi::OsStr::new(&temporary), temporary_identity, false);
     result
 }
 
@@ -782,14 +802,11 @@ pub fn plan_source(path: &Path) -> Result<String, LoadError> {
 }
 
 fn home_identity(transaction: &Transaction) -> Result<String, LoadError> {
-    let metadata = transaction
-        .root
-        .file
-        .metadata()
+    let (device, inode) = loader::identity(&transaction.root.file)
         .map_err(|_| failure("index_plan", "cannot identify home"))?;
     Ok(loader::hash(&profile::canonical(
         &json!({"path":transaction.root.path,
-        "device":metadata.dev(),"inode":metadata.ino()}),
+        "device":device,"inode":inode}),
     )))
 }
 
@@ -947,11 +964,31 @@ struct Conditions {
     backend: String,
     target: String,
     cpu: String,
+    #[serde(default)]
     glibc_version: String,
+    #[serde(default)]
+    windows_version: Option<String>,
     mods: BTreeMap<String, String>,
     config_sha256: Option<String>,
     state_contracts_sha256: String,
     exclusions: Vec<String>,
+}
+
+impl Conditions {
+    fn system_version(&self) -> Option<&str> {
+        match self.target.as_str() {
+            "x86_64-pc-windows-msvc" | "aarch64-pc-windows-msvc" if self.glibc_version.is_empty() => {
+                let version = self.windows_version.as_deref()?;
+                crate::manifest::windows_version(version)?;
+                Some(version)
+            }
+            "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu" if self.windows_version.is_none() => {
+                crate::manifest::system_version(&self.glibc_version)?;
+                Some(&self.glibc_version)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1122,8 +1159,11 @@ async fn support(
         || consumer.source_sha != qualification.source.sha
         || consumer.worker_sha != qualification.signer.workflow_sha
         || !matches!(
-            (loader::CPU, consumer.image_os.as_str()),
-            ("x86-64", "ubuntu24") | ("armv8-a", "ubuntu24-arm64")
+            (loader::TARGET, consumer.image_os.as_str()),
+            ("x86_64-unknown-linux-gnu", "ubuntu24")
+                | ("aarch64-unknown-linux-gnu", "ubuntu24-arm64")
+                | ("aarch64-pc-windows-msvc", "win11-vs2026-arm64")
+                | ("x86_64-pc-windows-msvc", "win25")
         )
         || !text(&consumer.image_version, 64)
         || !consumer.report.valid(16 * 1024 * 1024)
@@ -1138,7 +1178,7 @@ async fn support(
         || qualification.conditions.backend != "Embedded"
         || qualification.conditions.target != loader::TARGET
         || qualification.conditions.cpu != loader::CPU
-        || !text(&qualification.conditions.glibc_version, 32)
+        || qualification.conditions.system_version().is_none()
         || qualification.conditions.mods.len() > 32
         || qualification
             .conditions
@@ -1166,11 +1206,14 @@ async fn support(
     }
     let plan = prepared.plan();
     let state = loader::hash(&profile::canonical(prepared.state_contracts()));
-    let glibc = unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) }
+    #[cfg(not(windows))]
+    let system = unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) }
         .to_str()
-        .map_err(|_| failure("index_qualification", "cannot identify glibc"))?;
+        .map_err(|_| failure("index_qualification", "cannot identify glibc"))?.to_owned();
+    #[cfg(windows)]
+    let system = loader::windows_system_version().map_err(|e| failure("index_qualification", &e))?;
     let exact = qualification.host == plan.host
-        && qualification.conditions.glibc_version == glibc
+        && qualification.conditions.system_version() == Some(system.as_str())
         && qualification.conditions.mods == plan.candidate_contents
         && qualification.conditions.config_sha256 == plan.config.sha256
         && qualification.conditions.state_contracts_sha256 == state;
@@ -1470,6 +1513,24 @@ mod tests {
 #[cfg(test)]
 mod native_policy_tests {
     use super::*;
+
+    #[test]
+    fn qualification_system_versions_are_target_bound() {
+        let mut conditions: Conditions = serde_json::from_value(json!({
+            "backend":"native", "target":"aarch64-pc-windows-msvc", "cpu":"armv8-a",
+            "windows_version":"10.0.26100", "mods":{}, "config_sha256":null,
+            "state_contracts_sha256":"a".repeat(64), "exclusions":[]
+        })).unwrap();
+        assert_eq!(conditions.system_version(), Some("10.0.26100"));
+        conditions.glibc_version = "2.39".into();
+        assert!(conditions.system_version().is_none());
+        conditions.target = "aarch64-unknown-linux-gnu".into();
+        assert!(conditions.system_version().is_none());
+        conditions.windows_version = None;
+        assert_eq!(conditions.system_version(), Some("2.39"));
+        conditions.target = "unknown".into();
+        assert!(conditions.system_version().is_none());
+    }
 
     #[test]
     fn declarations_bind_the_cpu_to_its_declared_target() {

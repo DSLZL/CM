@@ -90,10 +90,10 @@ impl Snapshot {
             .map_err(|e| e.to_string())?;
         file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let mut bytes = Vec::new();
-        file.take(32 * 1024 * 1024 + 1)
+        file.take(128 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| e.to_string())?;
-        if bytes.is_empty() || bytes.len() > 32 * 1024 * 1024 {
+        if bytes.is_empty() || bytes.len() > 128 * 1024 * 1024 {
             return Err("Windows snapshot size exceeds bounds".into());
         }
         Ok(bytes)
@@ -117,5 +117,25 @@ impl Drop for Snapshot {
     fn drop(&mut self) {
         drop(self.file.take());
         unsafe { cm_windows_pin_free(self.pin.as_ptr()) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_budgets_distinguish_verifiers_modules_and_bundles() {
+        for (kind, limit) in [(0, 64), (1, 128), (2, 2), (3, 32)] {
+            assert!(unsafe { cm_windows_pin_copy(b"x".as_ptr(), limit * 1024 * 1024 + 1, kind) }.is_null());
+        }
+        assert!(unsafe { cm_windows_pin_copy(b"x".as_ptr(), 1, 4) }.is_null());
+        let bytes = vec![b'x'; 33 * 1024 * 1024];
+        let snapshot = Snapshot::create(&bytes, c"cm-distribution-verifier").unwrap();
+        let path = snapshot.path().to_owned();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), bytes.len() as u64);
+        assert_eq!(snapshot.read().unwrap(), bytes);
+        drop(snapshot);
+        assert!(!path.exists());
     }
 }

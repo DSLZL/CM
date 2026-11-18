@@ -264,6 +264,7 @@ impl Directory {
     pub(crate) fn writer_file(&self, create: bool) -> Result<loader::Handle, String> {
         self.check()?;
         loader::open_lock(&self.file, OsStr::new(".cm-write.lock"), create)
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(windows)]

@@ -36,7 +36,8 @@ pub fn run(home: &Path, command: Command, options: &Options) -> Result<Value, Lo
         let mut mods = BTreeMap::new();
         let mut managed_pins = Vec::new();
         let mut managed_trees = Vec::new();
-        let host = runtime_plan::HostIdentity::read(Path::new("/proc/self/exe"))?;
+        let executable = loader::current_executable().map_err(|e| LoadError::input("host_identity", "", &e.to_string()))?;
+        let host = runtime_plan::HostIdentity::read(&executable)?;
         for (slot, path, expected) in paths {
             let candidate = loader::candidate(&path).map_err(|mut error| {
                 if error.mod_id.is_none() {

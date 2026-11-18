@@ -1,10 +1,9 @@
 //! Host-owned immutable native runtime. Libraries and sealed payloads stay pinned.
 #[cfg(not(all(
-    target_os = "linux",
-    target_env = "gnu",
+    any(all(target_os = "linux", target_env = "gnu"), all(windows, target_env = "msvc")),
     any(target_arch = "x86_64", target_arch = "aarch64")
 )))]
-compile_error!("CM native runtime requires Linux x86_64 or AArch64 GNU");
+compile_error!("CM native runtime requires x86_64 or AArch64 GNU Linux or MSVC Windows");
 
 use std::cell::Cell;
 use std::fs::File;
@@ -204,9 +203,19 @@ pub fn event(kind: &str, detail: Value) {
         match trace.lock() {
             Ok(mut trace) => {
                 trace.sequence += 1;
+                #[cfg(not(windows))]
+                let os_thread = unsafe { libc::syscall(libc::SYS_gettid) };
+                #[cfg(windows)]
+                let os_thread = unsafe {
+                    unsafe extern "system" {
+                        #[link_name = "GetCurrentThreadId"]
+                        fn thread_id() -> u32;
+                    }
+                    thread_id()
+                };
                 let value = json!({
                     "event": kind, "seq": trace.sequence, "detail": detail,
-                    "os_thread": unsafe { libc::syscall(libc::SYS_gettid) },
+                    "os_thread": os_thread,
                 });
                 if let Err(error) = writeln!(trace.file, "{value}") {
                     eprintln!("CM trace write failed: {error}");

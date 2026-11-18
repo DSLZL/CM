@@ -54,4 +54,10 @@ int cm_windows_private_replace(const CmWindowsPin *parent, const wchar_t *source
 int cm_windows_private_remove(const CmWindowsPin *parent, const wchar_t *name,
     ULONGLONG volume, const BYTE id[16], int directory);
 CmWindowsPin *cm_windows_lock_open(const CmWindowsPin *parent, const wchar_t *name, int create);
+typedef struct { HANDLE job, process; } CmWindowsProcess;
+CmWindowsProcess *cm_windows_verifier_spawn(const wchar_t *program, wchar_t *command,
+    const wchar_t *environment, HANDLE *output, HANDLE *diagnostics);
+int cm_windows_verifier_poll(const CmWindowsProcess *process, DWORD *code);
+void cm_windows_verifier_stop(CmWindowsProcess *process);
+void cm_windows_verifier_free(CmWindowsProcess *process);
 #endif

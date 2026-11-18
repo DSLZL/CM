@@ -1,13 +1,14 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs;
+#[cfg(not(windows))]
 use std::fs::File;
 use std::io::Read;
-use std::io::Seek;
-use std::io::SeekFrom;
-use std::io::Write;
-use std::os::fd::AsRawFd;
-use std::os::fd::FromRawFd;
+#[cfg(not(windows))]
+use std::io::{Seek, SeekFrom, Write};
+#[cfg(not(windows))]
+use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(not(windows))]
 use std::os::unix::fs::MetadataExt;
 use std::path::Component;
 use std::path::Path;
@@ -31,6 +32,8 @@ pub(crate) use input::open_lock;
 pub(crate) use input::{
     Handle, Identity, InputPin, hash, identity, open_at, open_directory, read_input, try_lock,
 };
+#[cfg(windows)]
+pub(crate) use input::{Information, information};
 pub(crate) mod native;
 #[cfg(windows)]
 mod pe;
@@ -46,10 +49,14 @@ pub(crate) const MAX_MANIFEST: u64 = 64 * 1024;
 pub(crate) const MAX_PAYLOAD: u64 = 64 * 1024 * 1024;
 pub(crate) const MAX_RESOURCE: u64 = 8 * 1024 * 1024;
 pub(crate) const MAX_CONTRIBUTIONS: usize = 128;
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(not(windows), target_arch = "x86_64"))]
 pub const TARGET: &str = "x86_64-unknown-linux-gnu";
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(not(windows), target_arch = "aarch64"))]
 pub const TARGET: &str = "aarch64-unknown-linux-gnu";
+#[cfg(all(windows, target_arch = "x86_64"))]
+pub const TARGET: &str = "x86_64-pc-windows-msvc";
+#[cfg(all(windows, target_arch = "aarch64"))]
+pub const TARGET: &str = "aarch64-pc-windows-msvc";
 #[cfg(target_arch = "x86_64")]
 pub(crate) const CPU: &str = "x86-64";
 #[cfg(target_arch = "aarch64")]
@@ -210,6 +217,99 @@ pub(crate) struct Preflighted {
     pub resources: Vec<ResourceSnapshot>,
 }
 
+#[cfg(windows)]
+pub(crate) fn windows_system_version() -> Result<String, String> {
+    #[repr(C)]
+    struct Version {
+        size: u32,
+        major: u32,
+        minor: u32,
+        build: u32,
+        platform: u32,
+        _service_pack: [u16; 128],
+    }
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        #[link_name = "RtlGetVersion"]
+        fn native_version(version: *mut Version) -> i32;
+    }
+    let mut version = Version {
+        size: std::mem::size_of::<Version>() as u32,
+        major: 0, minor: 0, build: 0, platform: 0, _service_pack: [0; 128],
+    };
+    if unsafe { native_version(&mut version) } != 0 || version.platform != 2 || version.major == 0 || version.build == 0 {
+        return Err("cannot identify native Windows version".into());
+    }
+    Ok(format!("{}.{}.{}", version.major, version.minor, version.build))
+}
+
+pub(crate) fn random_bytes(bytes: &mut [u8]) -> std::io::Result<()> {
+    #[cfg(not(windows))]
+    { File::open("/dev/urandom")?.read_exact(bytes) }
+    #[cfg(windows)]
+    {
+        unsafe extern "system" {
+            #[link_name = "BCryptGenRandom"]
+            fn random(algorithm: *mut std::ffi::c_void, bytes: *mut u8, length: u32, flags: u32) -> i32;
+        }
+        let length = u32::try_from(bytes.len()).map_err(std::io::Error::other)?;
+        if unsafe { random(std::ptr::null_mut(), bytes.as_mut_ptr(), length, 2) } < 0 {
+            return Err(std::io::Error::other("system random generator failed"));
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn current_executable() -> std::io::Result<PathBuf> {
+    #[cfg(not(windows))]
+    {
+        fs::canonicalize("/proc/self/exe")
+    }
+    #[cfg(windows)]
+    {
+        use std::path::Prefix;
+        let path = std::env::current_exe()?;
+        match path.components().next() {
+            Some(Component::Prefix(prefix)) => match prefix.kind() {
+                Prefix::Disk(_) => Ok(path),
+                Prefix::VerbatimDisk(drive) => {
+                    let mut normal = PathBuf::from(format!("{}:\\", char::from(drive)));
+                    for component in path.components().skip(2) {
+                        normal.push(component.as_os_str());
+                    }
+                    Ok(normal)
+                }
+                _ => Err(std::io::Error::other("Host executable must be on a local drive")),
+            },
+            _ => Err(std::io::Error::other("Host executable path is not absolute")),
+        }
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn executable_hash(path: &Path) -> Result<String, String> {
+    let parent = open_directory(path.parent().ok_or("missing executable parent")?)?;
+    let mut file = open_at(&parent, path.file_name().ok_or("missing executable name")?, false)?;
+    let before: Information = information(&file)?;
+    if !before.regular {
+        return Err("Host executable must be a regular file".into());
+    }
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let length = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        if length == 0 {
+            break;
+        }
+        digest.update(&buffer[..length]);
+    }
+    if before != information(&file)? {
+        return Err("Host executable changed while hashing".into());
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+#[cfg(not(windows))]
 pub(crate) fn executable_hash(path: &Path) -> Result<String, String> {
     let mut file = File::open(path).map_err(|e| e.to_string())?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
@@ -247,6 +347,7 @@ pub(crate) fn executable_hash(path: &Path) -> Result<String, String> {
     Err("Host executable changed while hashing".into())
 }
 
+#[cfg(not(windows))]
 fn file_stamp(metadata: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
     (
         metadata.dev(),
@@ -878,10 +979,10 @@ fn zip_files(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, String> {
             ]
             .contains(&file.compression())
             || file.unix_mode().is_some_and(|mode| {
-                ![0, libc::S_IFREG, libc::S_IFDIR].contains(&(mode & libc::S_IFMT))
+                ![0, 0o100000, 0o040000].contains(&(mode & 0o170000))
             })
             || file.unix_mode().is_some_and(|mode| {
-                (mode & libc::S_IFMT == libc::S_IFDIR) != file.is_dir() && mode & libc::S_IFMT != 0
+                (mode & 0o170000 == 0o040000) != file.is_dir() && mode & 0o170000 != 0
             })
             || (file.is_dir() && file.size() != 0)
         {
@@ -985,6 +1086,7 @@ pub(crate) fn sealed_named_snapshot(
     Ok(snapshot)
 }
 
+#[cfg(not(windows))]
 fn file_path(snapshot: &File) -> PathBuf {
     format!("/proc/self/fd/{}", snapshot.as_raw_fd()).into()
 }
@@ -1035,8 +1137,13 @@ mod tests {
         let snapshot = sealed_snapshot(b"verified bytes").unwrap();
         let path = snapshot_path(&snapshot);
         assert_eq!(fs::read(&path).unwrap(), b"verified bytes");
-        let mut writer = fs::OpenOptions::new().write(true).open(path).unwrap();
-        assert!(writer.write_all(b"changed bytes!").is_err());
+        #[cfg(not(windows))]
+        {
+            let mut writer = fs::OpenOptions::new().write(true).open(path).unwrap();
+            assert!(writer.write_all(b"changed bytes!").is_err());
+        }
+        #[cfg(windows)]
+        assert!(fs::OpenOptions::new().write(true).open(path).is_err());
     }
 
     #[test]
@@ -1049,13 +1156,35 @@ mod tests {
         let expected = hash(b"original executable");
         assert_eq!(executable_hash(&path).unwrap(), expected);
         fs::hard_link(&path, &link).unwrap();
+        #[cfg(not(windows))]
         assert_eq!(executable_hash(&path).unwrap(), expected);
+        #[cfg(windows)]
+        assert!(executable_hash(&path).is_err());
         fs::remove_file(&link).unwrap();
         assert_eq!(executable_hash(&path).unwrap(), expected);
         fs::write(&path, b"modified executable").unwrap();
         assert_ne!(executable_hash(&path).unwrap(), expected);
         fs::remove_file(&path).unwrap();
         fs::remove_dir(&base).unwrap();
+    }
+
+    #[test]
+    fn current_executable_has_a_stable_native_identity() {
+        let path = current_executable().unwrap();
+        assert!(path.is_absolute());
+        assert_eq!(executable_hash(&path).unwrap(), executable_hash(&path).unwrap());
+    }
+
+    #[test]
+    fn operating_system_randomness_is_available() {
+        let mut first = [0; 32];
+        let mut second = [0; 32];
+        random_bytes(&mut first).unwrap();
+        random_bytes(&mut second).unwrap();
+        assert_ne!(first, [0; 32]);
+        assert_ne!(first, second);
+        #[cfg(windows)]
+        assert!(crate::manifest::windows_version(&windows_system_version().unwrap()).is_some());
     }
 
     #[test]
@@ -1069,10 +1198,19 @@ mod tests {
         fs::rename(&path, base.join("old")).unwrap();
         fs::write(&path, b"old").unwrap();
         assert!(pin.revalidate().is_err());
-        std::os::unix::fs::symlink(&path, base.join("link")).unwrap();
-        assert!(read_input(&base.join("link"), 3).is_err());
-        std::os::unix::fs::symlink(&base, base.join("directory-link")).unwrap();
-        assert!(read_input(&base.join("directory-link/input"), 3).is_err());
+        #[cfg(not(windows))]
+        {
+            std::os::unix::fs::symlink(&path, base.join("link")).unwrap();
+            assert!(read_input(&base.join("link"), 3).is_err());
+            std::os::unix::fs::symlink(&base, base.join("directory-link")).unwrap();
+            assert!(read_input(&base.join("directory-link/input"), 3).is_err());
+        }
+        #[cfg(windows)]
+        {
+            fs::hard_link(&path, base.join("link")).unwrap();
+            assert!(read_input(&path, 3).is_err());
+            assert!(read_input(&base.join("link"), 3).is_err());
+        }
         fs::remove_dir_all(base).unwrap();
     }
 

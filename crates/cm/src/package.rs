@@ -1,6 +1,7 @@
 //! Complete distribution preflight, before any native Mod entry.
 use std::fs;
 use std::io::Read;
+#[cfg(not(windows))]
 use std::os::unix::fs::MetadataExt;
 use std::path::Component;
 use std::path::Path;
@@ -10,6 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::LoadError;
 use crate::loader;
+
+const ENTRYPOINT: &str = if cfg!(windows) { "bin/codex.exe" } else { "bin/codex" };
+const EXECUTABLE: &str = if cfg!(windows) { "codex.exe" } else { "codex" };
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,8 +49,12 @@ fn relative(value: &str) -> bool {
 }
 
 fn same_build_inode(executable: &Path, original: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-
+    #[cfg(windows)]
+    return match (file_identity(executable), file_identity(original)) {
+        (Ok(actual), Ok(built)) => actual.information.regular && actual.information.identity == built.information.identity,
+        _ => false,
+    };
+    #[cfg(not(windows))]
     match (fs::metadata(executable), fs::metadata(original)) {
         (Ok(actual), Ok(built)) => {
             actual.is_file() && (actual.dev(), actual.ino()) == (built.dev(), built.ino())
@@ -71,7 +79,7 @@ fn same_development_copy(executable: &Path, root: &Path, original: &Path) -> boo
     };
     if package.version != "0.0.0"
         || package.target != loader::TARGET
-        || package.entrypoint != "bin/codex"
+        || package.entrypoint != ENTRYPOINT
     {
         return false;
     }
@@ -99,7 +107,7 @@ pub(crate) struct ManagedHost {
 
 pub(crate) fn managed_identity() -> Result<ManagedHost, LoadError> {
     validate(false)?;
-    let executable = fs::canonicalize("/proc/self/exe")
+    let executable = loader::current_executable()
         .map_err(|e| LoadError::input("package", "", &e.to_string()))?;
     let inventory = executable
         .parent()
@@ -118,7 +126,7 @@ pub(crate) fn managed_identity() -> Result<ManagedHost, LoadError> {
 }
 
 fn validate(allow_development: bool) -> Result<(), LoadError> {
-    let executable = fs::canonicalize("/proc/self/exe")
+    let executable = loader::current_executable()
         .map_err(|error| LoadError::new("package", false, &error.to_string()))?;
     validate_at(&executable, allow_development)
 }
@@ -133,7 +141,7 @@ fn validate_at(executable: &Path, allow_development: bool) -> Result<(), LoadErr
         if let Some(target) = option_env!("CARGO_TARGET_DIR").filter(|_| allow_development) {
             let original = Path::new(target)
                 .join(loader::TARGET)
-                .join("dev-small/codex");
+                .join("dev-small").join(EXECUTABLE);
             if same_build_inode(executable, &original)
                 || same_development_copy(executable, root, &original)
             {
@@ -165,7 +173,7 @@ fn validate_at(executable: &Path, allow_development: bool) -> Result<(), LoadErr
             let path = root.join(&entry.path);
             let metadata =
                 fs::symlink_metadata(&path).map_err(|error| format!("{}: {error}", entry.path))?;
-            let hash = if entry.mode == "120000" && metadata.is_symlink() {
+            let hash = if cfg!(not(windows)) && entry.mode == "120000" && metadata.is_symlink() {
                 let target = fs::read_link(&path).map_err(|error| error.to_string())?;
                 if target.is_absolute()
                     || !fs::canonicalize(&path)
@@ -176,9 +184,12 @@ fn validate_at(executable: &Path, allow_development: bool) -> Result<(), LoadErr
                 }
                 loader::hash(target.as_os_str().as_encoded_bytes())
             } else if ["100644", "100755"].contains(&entry.mode.as_str()) && metadata.is_file() {
+                #[cfg(not(windows))]
+                {
                 use std::os::unix::fs::PermissionsExt;
                 if (metadata.permissions().mode() & 0o111 != 0) != (entry.mode == "100755") {
                     return Err(format!("package mode mismatch: {}", entry.path));
+                }
                 }
                 loader::executable_hash(&path)?
             } else {
@@ -188,14 +199,22 @@ fn validate_at(executable: &Path, allow_development: bool) -> Result<(), LoadErr
                 return Err(format!("package digest mismatch: {}", entry.path));
             }
         }
-        for required in [
+        #[cfg(not(windows))]
+        let required = [
             "bin/codex",
             "bin/codex-code-mode-host",
             "codex-resources/bwrap",
             "codex-path/rg",
             "cm-host.json",
             "dependency-inventory.json",
-        ] {
+        ];
+        #[cfg(windows)]
+        let required = [
+            "bin/codex.exe", "bin/codex-code-mode-host.exe", "codex-path/rg.exe",
+            "codex-resources/codex-command-runner.exe", "codex-resources/codex-windows-sandbox-setup.exe",
+            "cm-host.json", "dependency-inventory.json",
+        ];
+        for required in required {
             if !paths.contains(required) {
                 return Err(format!("missing required component: {required}"));
             }
@@ -204,7 +223,7 @@ fn validate_at(executable: &Path, allow_development: bool) -> Result<(), LoadErr
             return Err("missing licenses".into());
         }
         for name in &inventory.system_files {
-            if !name.starts_with('/') || name.contains("..") || !Path::new(name).is_file() {
+            if !Path::new(name).is_absolute() || name.contains("..") || !Path::new(name).is_file() {
                 return Err(format!("missing runtime dependency: {name}"));
             }
         }
@@ -214,6 +233,7 @@ fn validate_at(executable: &Path, allow_development: bool) -> Result<(), LoadErr
 }
 
 #[derive(PartialEq, Eq)]
+#[cfg(not(windows))]
 struct FileIdentity {
     path: PathBuf,
     device: u64,
@@ -224,6 +244,27 @@ struct FileIdentity {
     changed: (i64, i64),
 }
 
+#[cfg(windows)]
+#[derive(PartialEq, Eq)]
+struct FileIdentity {
+    path: PathBuf,
+    information: loader::Information,
+}
+
+#[cfg(windows)]
+fn file_identity(path: &Path) -> Result<FileIdentity, LoadError> {
+    let invalid = || LoadError::input("upgrade_package", "", "missing or unsafe Host package member");
+    let metadata = fs::symlink_metadata(path).map_err(|_| invalid())?;
+    let handle = if metadata.is_dir() {
+        loader::open_directory(path).map_err(|_| invalid())?
+    } else {
+        let directory = loader::open_directory(path.parent().ok_or_else(invalid)?).map_err(|_| invalid())?;
+        loader::open_at(&directory, path.file_name().ok_or_else(invalid)?, false).map_err(|_| invalid())?
+    };
+    Ok(FileIdentity { path: path.into(), information: loader::information(&handle).map_err(|_| invalid())? })
+}
+
+#[cfg(not(windows))]
 fn file_identity(path: &Path) -> Result<FileIdentity, LoadError> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|_| LoadError::input("upgrade_package", "", "missing Host package member"))?;
@@ -253,7 +294,7 @@ impl PackagePin {
         if host.target != loader::TARGET
             || !loader::digest(&host.executable_sha256)
             || !loader::digest(&host.inventory_sha256)
-            || host.executable.file_name() != Some(std::ffi::OsStr::new("codex"))
+            || host.executable.file_name() != Some(std::ffi::OsStr::new(EXECUTABLE))
             || host.executable.parent().and_then(Path::file_name)
                 != Some(std::ffi::OsStr::new("bin"))
         {
@@ -349,7 +390,7 @@ mod tests {
         fs::copy(&original, &copied).unwrap();
         assert!(!same_development_copy(&copied, &root, &original));
         let mut package = serde_json::json!({
-            "version": "0.0.0", "target": crate::loader::TARGET, "entrypoint": "bin/codex"
+            "version": "0.0.0", "target": crate::loader::TARGET, "entrypoint": super::ENTRYPOINT
         });
         fs::write(&manifest, serde_json::to_vec(&package).unwrap()).unwrap();
         assert!(same_development_copy(&copied, &root, &original));
@@ -380,8 +421,17 @@ mod tests {
         fs::write(&original, b"same Host bytes").unwrap();
         fs::hard_link(&original, &linked).unwrap();
         fs::copy(&original, &copied).unwrap();
-        assert!(same_build_inode(&original, &original));
-        assert!(same_build_inode(&linked, &original));
+        #[cfg(not(windows))]
+        {
+            assert!(same_build_inode(&original, &original));
+            assert!(same_build_inode(&linked, &original));
+        }
+        #[cfg(windows)]
+        {
+            assert!(!same_build_inode(&linked, &original));
+            fs::remove_file(&linked).unwrap();
+            assert!(same_build_inode(&original, &original));
+        }
         assert!(!same_build_inode(&copied, &original));
         assert!(!same_build_inode(&original, &root.join("missing")));
         fs::remove_dir_all(root).unwrap();

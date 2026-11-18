@@ -85,18 +85,20 @@ pub(crate) fn open_directory(path: &Path) -> Result<Handle, String> {
     Ok(directory)
 }
 
-#[derive(PartialEq, Eq)]
-pub(super) struct Information {
-    identity: Identity,
-    size: u64,
-    modified: (i64, i64),
-    changed: (i64, i64),
-    pub(super) regular: bool,
-    pub(super) links: u64,
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct Information {
+    pub(crate) identity: Identity,
+    pub(crate) size: u64,
+    pub(crate) modified: (i64, i64),
+    pub(crate) changed: (i64, i64),
+    pub(crate) regular: bool,
+    pub(crate) links: u64,
+    #[cfg(windows)]
+    pub(crate) attributes: u32,
 }
 
 #[cfg(not(windows))]
-pub(super) fn information(file: &Handle) -> Result<Information, String> {
+pub(crate) fn information(file: &Handle) -> Result<Information, String> {
     use std::os::unix::fs::MetadataExt;
 
     let metadata = file.metadata().map_err(|e| e.to_string())?;
@@ -111,7 +113,7 @@ pub(super) fn information(file: &Handle) -> Result<Information, String> {
 }
 
 #[cfg(windows)]
-pub(super) use windows::information;
+pub(crate) use windows::information;
 
 pub(crate) fn identity(file: &Handle) -> Result<Identity, String> {
     Ok(information(file)?.identity)

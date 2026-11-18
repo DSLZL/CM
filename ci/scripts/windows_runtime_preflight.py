@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Actual native Windows runtime library gate; no CLI, helper or binary cache."""
 import hashlib
+import difflib
 import json
 import os
 from pathlib import Path
@@ -27,6 +28,18 @@ def passed_tests(text):
     if len(matches) != 1:
         raise RuntimeError("Expected one successful nonempty native test result")
     return int(matches[0])
+
+
+def formatting_patch(root, formatted):
+    patch = []
+    for package in ("cm", "cm-abi"):
+        for original in sorted((root / "crates" / package).rglob("*.rs")):
+            relative = original.relative_to(root)
+            before = original.read_text(encoding="utf-8").splitlines(keepends=True)
+            after = (formatted / relative).read_text(encoding="utf-8").splitlines(keepends=True)
+            patch.extend(difflib.unified_diff(before, after,
+                fromfile="a/" + relative.as_posix(), tofile="b/" + relative.as_posix()))
+    return "".join(patch)
 
 
 def main():
@@ -123,8 +136,19 @@ def main():
                 "abis": pin["abis"], "production_host": False})
             os.environ["CM_HOST_IDENTITY_JSON"] = str(identity)
             report["private_identity_sha256"] = host.sha(identity)
-            run("library-format-check", [tools["rustfmt"]["path"], "--edition", "2024", "--check",
-                root / "crates/cm/src/lib.rs", root / "crates/cm/build.rs", root / "crates/cm-abi/src/lib.rs"])
+            report["gates"]["format"] = "pass"
+            try:
+                run("library-format-check", [tools["rustfmt"]["path"], "--edition", "2024", "--check",
+                    root / "crates/cm/src/lib.rs", root / "crates/cm/build.rs", root / "crates/cm-abi/src/lib.rs"])
+            except RuntimeError:
+                report["gates"]["format"] = "failed"
+                formatted = temp / "formatted"
+                for package in ("cm", "cm-abi"):
+                    shutil.copytree(root / "crates" / package, formatted / "crates" / package)
+                run("library-format-candidate", [tools["rustfmt"]["path"], "--edition", "2024",
+                    formatted / "crates/cm/src/lib.rs", formatted / "crates/cm/build.rs",
+                    formatted / "crates/cm-abi/src/lib.rs"])
+                (logs / "library-format.patch.log").write_text(formatting_patch(root, formatted), encoding="utf-8")
             cargo = [tools["cargo"]["path"]]
             common = ["--locked", "--target", TARGET, "--profile", "dev-small", "-p", "cm-abi", "-p", "cm-runtime", "--lib", "-j", "2"]
             run("library-clippy", [*cargo, "clippy", *common, "--", "-D", "warnings"], 600, cwd=tree / "codex-rs")
@@ -134,18 +158,29 @@ def main():
             report["test_binaries"] = {name: pe_fixture(path.read_bytes(), False, expected_machine=0xAA64)
                 for name, path in executables.items()}
             report["gates"]["actual_test_build"] = "pass"
-            for name, scope in (("abi", ""), ("loader", "loader::tests::"),
-                    ("profile", "profile::tests::"), ("state", "state::tests::")):
+            for name, scope in (("abi", ""), ("loader", "loader::"),
+                    ("profile", "profile::tests::"), ("state", "state::tests::"),
+                    ("manifest", "manifest::tests::"), ("package", "package::tests::"),
+                    ("index", "index::"), ("mod-lock", "mod_lock::tests::"),
+                    ("upgrade", "upgrade::tests::"), ("provenance", "provenance::"),
+                    ("runtime", "runtime::tests::")):
                 executable = executables["cm_abi" if name == "abi" else "cm_runtime"]
                 args = [executable, *([scope] if scope else []), "--test-threads=1"]
-                report["gates"][name + "_tests"] = {"status": "pass",
-                    "passed": passed_tests(run("library-" + name + "-tests", args, 180))}
+                try:
+                    report["gates"][name + "_tests"] = {"status": "pass",
+                        "passed": passed_tests(run("library-" + name + "-tests", args, 180))}
+                except RuntimeError as error:
+                    report["gates"][name + "_tests"] = {"status": "failed", "error": str(error)}
             if any(pe_fixture(Path(row["path"]).read_bytes(), False, expected_machine=0xAA64) !=
                     {key: value for key, value in row.items() if key != "path"} for row in tools.values()):
                 raise RuntimeError("Native library tools changed")
             if (host.manifest_digest(host.manifest(tree)) != provenance["host_manifest_sha256"] or
                     {row["path"]: row["sha256"] for row in host.cm_manifest(root)} != report["source_sha256"]):
                 raise RuntimeError("Library source inputs changed during compilation")
+            if report["gates"]["format"] != "pass":
+                raise RuntimeError("Source requires the hosted formatting patch")
+            if any(isinstance(value, dict) and value.get("status") != "pass" for value in report["gates"].values()):
+                raise RuntimeError("Actual library test failures; see the individual suite logs")
             report.update(status="pass", tools_unchanged=True)
     except BaseException as error:
         report.update(status="failed", error=repr(error))
@@ -155,6 +190,15 @@ def main():
 
 
 def self_check():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory) / "source"
+        formatted = Path(directory) / "formatted"
+        for tree, text in ((root, "fn main(){}\n"), (formatted, "fn main() {}\n")):
+            (tree / "crates/cm/src").mkdir(parents=True)
+            (tree / "crates/cm/src/lib.rs").write_text(text, encoding="utf-8")
+        patch = formatting_patch(root, formatted)
+        assert patch.startswith("--- a/crates/cm/src/lib.rs\n+++ b/crates/cm/src/lib.rs\n")
+        assert "-fn main(){}\n+fn main() {}\n" in patch
     assert passed_tests("test result: ok. 17 passed; 0 failed; 2 ignored; 0 measured\n") == 17
     for text in ("", "test result: ok. 0 passed; 0 failed;", "test result: ok. 1 passed; 1 failed;",
             "test result: ok. 1 passed; 0 failed;\ntest result: ok. 1 passed; 0 failed;"):

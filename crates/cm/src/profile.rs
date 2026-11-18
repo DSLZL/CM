@@ -712,10 +712,14 @@ impl Transaction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(windows))]
     use std::os::unix::fs::DirBuilderExt;
 
     fn root() -> PathBuf {
         let path = std::env::temp_dir().join(temporary("cm-profile-test"));
+        #[cfg(windows)]
+        Directory::create_home(&path).unwrap();
+        #[cfg(not(windows))]
         std::fs::DirBuilder::new()
             .mode(0o700)
             .create(&path)

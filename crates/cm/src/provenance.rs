@@ -1,12 +1,22 @@
 //! Offline provenance is independent of package integrity, ABI and state compatibility.
 use std::collections::BTreeMap;
+#[cfg(not(windows))]
 use std::fs::File;
 use std::io::Read;
+#[cfg(not(windows))]
 use std::os::fd::AsRawFd;
+#[cfg(not(windows))]
 use std::os::unix::fs::{DirBuilderExt, symlink};
+#[cfg(not(windows))]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+#[cfg(not(windows))]
+use std::process::Child;
+use std::process::{Command, Stdio};
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows::Child;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -16,10 +26,14 @@ use crate::LoadError;
 use crate::loader::{self, InputPin, InstallationSnapshot};
 
 const LIMIT: u64 = 2 * 1024 * 1024;
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(not(windows), target_arch = "x86_64"))]
 const POLICY: &str = include_str!("distribution-policy.json");
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(not(windows), target_arch = "aarch64"))]
 const POLICY: &str = include_str!("distribution-policy-arm64.json");
+#[cfg(all(windows, target_arch = "x86_64"))]
+const POLICY: &str = include_str!("distribution-policy-windows-x64.json");
+#[cfg(all(windows, target_arch = "aarch64"))]
+const POLICY: &str = include_str!("distribution-policy-windows-arm64.json");
 const ROOT: &[u8] = include_bytes!("distribution-root.jsonl");
 
 fn failure(message: &str) -> LoadError {
@@ -144,12 +158,22 @@ fn receipt(bytes: &[u8]) -> Result<Receipt, LoadError> {
     Ok(parsed)
 }
 
+#[cfg(not(windows))]
 fn parent_path(file: &File) -> PathBuf {
     format!("/proc/{}/fd/{}", std::process::id(), file.as_raw_fd()).into()
 }
 
+fn proof_path(snapshot: &loader::Snapshot) -> PathBuf {
+    #[cfg(not(windows))]
+    return parent_path(snapshot);
+    #[cfg(windows)]
+    loader::snapshot_path(snapshot)
+}
+
+#[cfg(not(windows))]
 struct BundleAlias(crate::profile::Directory);
 
+#[cfg(not(windows))]
 impl BundleAlias {
     fn new(bundle: &File) -> Result<Self, LoadError> {
         let path = std::env::temp_dir().join(crate::profile::temporary("distribution"));
@@ -176,6 +200,7 @@ impl BundleAlias {
     }
 }
 
+#[cfg(not(windows))]
 impl Drop for BundleAlias {
     fn drop(&mut self) {
         unsafe { libc::unlinkat(self.0.file.as_raw_fd(), c"bundle.jsonl".as_ptr(), 0) };
@@ -192,6 +217,7 @@ fn output(mut stream: impl Read) -> std::io::Result<Vec<u8>> {
 }
 
 fn collect_verifier(mut child: Child, timeout: Duration) -> Result<Vec<u8>, LoadError> {
+    #[cfg(not(windows))]
     let process_group = child.id() as libc::pid_t;
     let stdout = child.stdout.take().expect("piped verifier stdout");
     let stderr = child.stderr.take().expect("piped verifier stderr");
@@ -204,13 +230,19 @@ fn collect_verifier(mut child: Child, timeout: Duration) -> Result<Vec<u8>, Load
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
             _ => {
                 // Descendants must not retain the pipes beyond the verifier deadline.
+                #[cfg(not(windows))]
+                {
                 unsafe { libc::kill(-process_group, libc::SIGKILL) };
                 let _ = child.wait();
+                }
                 break None;
             }
         }
     };
+    #[cfg(not(windows))]
     unsafe { libc::kill(-process_group, libc::SIGKILL) };
+    #[cfg(windows)]
+    child.stop();
     let stdout = out
         .join()
         .ok()
@@ -270,12 +302,13 @@ fn verify_signature(bytes: &[u8], bundle: &[u8], signer: &Signer) -> Result<Inpu
         return Err(failure("missing or oversized proof bundle"));
     }
     let executable =
-        std::fs::canonicalize("/proc/self/exe").map_err(|_| failure("missing Host identity"))?;
+        loader::current_executable().map_err(|_| failure("missing Host identity"))?;
     let root = executable
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| failure("missing Host package"))?;
-    let (helper, pin) = loader::read_input(&root.join("codex-resources/gh"), 128 * 1024 * 1024)
+    let verifier_name = if cfg!(windows) { "codex-resources/gh.exe" } else { "codex-resources/gh" };
+    let (helper, pin) = loader::read_input(&root.join(verifier_name), 128 * 1024 * 1024)
         .map_err(|_| failure("missing trusted verifier"))?;
     if option_env!("CM_DISTRIBUTION_GH_SHA256") != Some(pin.sha256.as_str()) {
         return Err(failure("verifier differs from the compiled Host pin"));
@@ -287,20 +320,26 @@ fn verify_signature(bytes: &[u8], bundle: &[u8], signer: &Signer) -> Result<Inpu
     let bundle = loader::sealed_named_snapshot(bundle, c"cm-distribution-bundle")
         .map_err(|_| failure("cannot pin bundle"))?;
     let roots = loader::sealed_snapshot(ROOT).map_err(|_| failure("cannot pin roots"))?;
+    #[cfg(not(windows))]
     let bundle_alias = BundleAlias::new(&bundle)?;
+    #[cfg(not(windows))]
+    let bundle_path = bundle_alias.path();
+    #[cfg(windows)]
+    let bundle_path = loader::snapshot_path(&bundle);
     let policy: Value = serde_json::from_str(POLICY).expect("compiled policy");
     let repository = policy["builder_repository"]
         .as_str()
         .expect("builder repository");
     let certificate =
         format!("https://github.com/{repository}/.github/workflows/build.yml@refs/heads/main");
-    let child = Command::new(parent_path(&helper))
+    let mut command = Command::new(proof_path(&helper));
+    command
         .args(["attestation", "verify"])
-        .arg(parent_path(&subject))
+        .arg(proof_path(&subject))
         .arg("--bundle")
-        .arg(bundle_alias.path())
+        .arg(bundle_path)
         .arg("--custom-trusted-root")
-        .arg(parent_path(&roots))
+        .arg(proof_path(&roots))
         .args([
             "--repo",
             repository,
@@ -327,9 +366,12 @@ fn verify_signature(bytes: &[u8], bundle: &[u8], signer: &Signer) -> Result<Inpu
         .env("GH_PROMPT_DISABLED", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
+        .stderr(Stdio::piped());
+    #[cfg(not(windows))]
+    let child = command.process_group(0).spawn();
+    #[cfg(windows)]
+    let child = windows::spawn(&command);
+    let child = child
         .map_err(|_| failure("cannot start trusted verifier"))?;
     let stdout = collect_verifier(child, Duration::from_secs(20))?;
     verify_output(&stdout, bytes, signer)?;
@@ -475,6 +517,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(not(windows))]
     fn bundle_alias_keeps_sealed_bytes_and_cleans_up() {
         use std::io::Write;
         use std::os::unix::fs::PermissionsExt;
@@ -594,6 +637,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn verifier_failure_timeout_and_output_limits_fail_closed() {
         for script in [
             "printf rejected >&2; exit 3",
