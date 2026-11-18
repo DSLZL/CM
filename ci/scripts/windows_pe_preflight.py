@@ -250,8 +250,9 @@ def main():
                 run("pe-format-" + name, [tools["rustfmt"]["path"], "--edition", "2024", "--emit", "stdout", root / relative])
             run("pe-format-check", [tools["rustfmt"]["path"], "--edition", "2024", "--check",
                 root / INPUTS[0], root / INPUTS[5], root / INPUTS[6]])
+            report["rustflags"] = "-Ctarget-feature=+crt-static"
             os.environ.update({"CARGO_HOME": str(temp / "c"), "CARGO_TARGET_DIR": str(temp / "t"), "CARGO_INCREMENTAL": "0",
-                "RUSTUP_TOOLCHAIN": toolchain, "RUSTC": tools["rustc"]["path"],
+                "RUSTUP_TOOLCHAIN": toolchain, "RUSTC": tools["rustc"]["path"], "RUSTFLAGS": report["rustflags"],
                 "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER": tools["link"]["path"]})
             cargo = [tools["cargo"]["path"]]
             _, text = run("pe-cargo-metadata", [*cargo, "metadata", "--format-version", "1", "--locked"], 180, cwd=fixture)

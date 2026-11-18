@@ -1,3 +1,6 @@
+#[cfg(not(target_feature = "crt-static"))]
+compile_error!("This fixture requires the static C runtime");
+
 #[unsafe(no_mangle)]
 pub extern "C" fn cm_mod_entry_v1() -> u32 {
     41
