@@ -483,12 +483,13 @@ int cm_windows_private_metadata(const CmWindowsPin *p, DWORD *attributes, wchar_
     if (!SetSecurityDescriptorControl(descriptor, SE_DACL_AUTO_INHERITED, 0)) goto done;
     if (!ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, SDDL_REVISION_1,
         OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &serialized, &length)) goto done;
-    if (!length || length > capacity || length != wcslen(serialized) + 1) {
+    size_t used = wcsnlen_s(serialized, length < capacity ? length : capacity);
+    if (!used || used >= capacity || used >= length) {
         SetLastError(ERROR_BUFFER_OVERFLOW); goto done;
     }
     if (!cm_windows_file_information(p, &after) || !cm_windows_private_check(p)) goto done;
     if (!cm_windows_same_information(&before, &after)) { SetLastError(ERROR_INVALID_DATA); goto done; }
-    memcpy(text, serialized, length * sizeof(wchar_t));
+    memcpy(text, serialized, (used + 1) * sizeof(wchar_t));
     *attributes = before.attributes;
     ok = 1;
 done: {

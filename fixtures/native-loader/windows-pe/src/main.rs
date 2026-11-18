@@ -309,7 +309,7 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     println!("cm_private passed=metadata-file-attributes");
 
     let source = directory::Directory::open(&root.join("metadata-dir"))?;
-    let source_metadata = source.file.private_metadata()?;
+    let source_metadata = source.file.private_metadata().expect("directory metadata");
     assert!(source_metadata.1.contains("OICI"));
     let target = private.staging("metadata-directory-目录")?;
     let target_identity = target.file.identity()?;
@@ -326,6 +326,9 @@ fn private_controls(root: &Path, probe: &Path) -> Result<i32, Box<dyn std::error
     assert_eq!(child.identity()?, child_identity);
     assert_eq!(fs::read(child.path())?, b"protected child");
     drop(child);
+    // Restore this unpublished fixture through its original writable handle before cleanup.
+    target.file.copy_metadata(&private.file)?;
+    target.file.sync_private_directory()?;
     drop(target);
     drop(source);
     directory::discard(&private, "metadata-directory-目录", target_identity)?;
