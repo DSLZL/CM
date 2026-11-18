@@ -127,7 +127,9 @@ pub(crate) fn open(
         serde_json::json!({"id": manifest.id, "already_native_executed": true}),
     );
     #[cfg(windows)]
-    return snapshot.load(needed).map_err(|e| LoadError::native("dlopen", &e));
+    return snapshot
+        .load(needed)
+        .map_err(|e| LoadError::native("dlopen", &e));
     #[cfg(not(windows))]
     {
         // Constructors can publish pointers even when negotiation subsequently fails.

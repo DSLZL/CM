@@ -29,10 +29,12 @@ mod elf;
 mod input;
 #[cfg(windows)]
 pub(crate) use input::open_lock;
-pub(crate) use input::{Handle, Identity, InputPin, hash, open_at, open_directory, read_input, try_lock};
+pub(crate) use input::{
+    Handle, Identity, InputPin, hash, open_at, open_directory, read_input, try_lock,
+};
+pub(crate) mod native;
 #[cfg(windows)]
 mod pe;
-pub(crate) mod native;
 pub(crate) mod registration;
 #[cfg(windows)]
 mod windows;
@@ -940,12 +942,18 @@ pub(crate) fn sealed_snapshot(bytes: &[u8]) -> Result<Snapshot, String> {
 }
 
 #[cfg(windows)]
-pub(crate) fn sealed_named_snapshot(bytes: &[u8], name: &std::ffi::CStr) -> Result<Snapshot, String> {
+pub(crate) fn sealed_named_snapshot(
+    bytes: &[u8],
+    name: &std::ffi::CStr,
+) -> Result<Snapshot, String> {
     Snapshot::create(bytes, name)
 }
 
 #[cfg(not(windows))]
-pub(crate) fn sealed_named_snapshot(bytes: &[u8], name: &std::ffi::CStr) -> Result<Snapshot, String> {
+pub(crate) fn sealed_named_snapshot(
+    bytes: &[u8],
+    name: &std::ffi::CStr,
+) -> Result<Snapshot, String> {
     // Seal the verified buffer, never reopen the package path for dlopen.
     let fd =
         unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
