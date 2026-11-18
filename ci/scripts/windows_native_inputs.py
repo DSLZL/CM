@@ -15,6 +15,7 @@ import tarfile
 import tempfile
 import tomllib
 import urllib.request
+import zipfile
 
 import ci_progress
 import record_run
@@ -148,10 +149,28 @@ def rust_results(text):
         "historical_test_names": True, "experimental_abi_2_3_separate": True}
 
 
+def ninja_file(path):
+    limit = 4 * 1024 * 1024
+    with zipfile.ZipFile(path) as source:
+        rows = source.infolist()
+        if len(rows) != 1 or rows[0].filename != "ninja.exe" or rows[0].is_dir() or not 0 < rows[0].file_size <= limit or (
+                rows[0].external_attr >> 16) & 0o170000 not in (0, 0o100000):
+            raise RuntimeError("Expected one bounded regular native Ninja executable")
+        with source.open(rows[0]) as stream:
+            data = stream.read(limit + 1)
+        if len(data) != rows[0].file_size:
+            raise RuntimeError("Native Ninja input length differs")
+    return data
+
+
 def native_protoc(temp, tools, report, run):
+    archive, ninja = temp / "ninja-winarm64.zip", temp / "ninja.exe"
+    report["native_ninja_input"] = download("https://github.com/ninja-build/ninja/releases/download/v1.13.1/ninja-winarm64.zip",
+        archive, "fb959b674970e36a7c9a23191524b80fb5298fc71fc98bfa42456bcc0a8dfb2f", 1024 * 1024)
+    ninja.write_bytes(ninja_file(archive))
     cmake_root = Path(os.environ["VSINSTALLDIR"]) / "Common7/IDE/CommonExtensions/Microsoft/CMake"
     sdk_bin = Path(os.environ["WindowsSdkDir"]) / "bin" / os.environ["WindowsSDKVersion"].strip("\\/") / "arm64"
-    paths = {"cmake": cmake_root / "CMake/bin/cmake.exe", "ninja": cmake_root / "Ninja/ninja.exe",
+    paths = {"cmake": cmake_root / "CMake/bin/cmake.exe", "ninja": ninja,
         **{name: Path(tools["cl"]["path"]).with_name(name + ".exe") for name in ("link", "lib")},
         **{name: sdk_bin / (name + ".exe") for name in ("rc", "mt")}}
     for name, path in paths.items():
@@ -179,7 +198,7 @@ def native_protoc(temp, tools, report, run):
         "-Dprotobuf_BUILD_LIBUPB=OFF", "-Dprotobuf_BUILD_SHARED_LIBS=OFF", "-Dprotobuf_MSVC_STATIC_RUNTIME=ON",
         "-Dprotobuf_WITH_ZLIB=OFF", "-Dprotobuf_INSTALL=OFF", "-Dprotobuf_FORCE_FETCH_DEPENDENCIES=ON",
         "-DFETCHCONTENT_SOURCE_DIR_ABSL=" + str(temp / "absl"), "-DFETCHCONTENT_FULLY_DISCONNECTED=ON"], 180)
-    run("native-protoc-build", [paths["cmake"], "--build", build, "--target", "protoc", "--parallel", "2"], 1200)
+    run("native-protoc-build", [paths["cmake"], "--build", build, "--target", "protoc", "--parallel", "2"], 600)
     protoc = build / "protoc.exe"
     result["binary"] = pe_fixture(protoc.read_bytes(), False, expected_machine=0xAA64)
     result["native"] = True
@@ -351,10 +370,28 @@ def self_check():
 
     with tempfile.TemporaryDirectory() as directory:
         temp = Path(directory)
+        ninja_zip = temp / "ninja.zip"
+        with zipfile.ZipFile(ninja_zip, "w") as source:
+            source.writestr("ninja.exe", b"test")
+        assert ninja_file(ninja_zip) == b"test"
+        for case in ("missing", "extra", "symlink", "oversized", "empty"):
+            with zipfile.ZipFile(ninja_zip, "w") as source:
+                member = zipfile.ZipInfo("other.exe" if case == "missing" else "ninja.exe")
+                member.external_attr = (0o120777 if case == "symlink" else 0o100600) << 16
+                source.writestr(member, bytes(4 * 1024 * 1024 + 1) if case == "oversized" else b"" if case == "empty" else b"test")
+                if case == "extra":
+                    source.writestr("extra.exe", b"test")
+            try:
+                ninja_file(ninja_zip)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Invalid native Ninja ZIP accepted")
         env = {"VSINSTALLDIR": str(temp), "WindowsSdkDir": str(temp), "WindowsSDKVersion": "1"}
         for case in ("foreign-tool", "wrong-source"):
             command = Mock(return_value="wrong-commit")
             with patch.dict(os.environ, env), patch.object(Path, "read_bytes", return_value=b"foreign"), \
+                    patch(__name__ + ".download", return_value={}), patch(__name__ + ".ninja_file", return_value=b"foreign"), \
                     patch(__name__ + ".pe_fixture", return_value={}, side_effect=RuntimeError("foreign") if case == "foreign-tool" else None):
                 try:
                     native_protoc(temp, {"cl": {"path": str(temp / "cl.exe")}}, {}, command)
