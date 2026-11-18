@@ -132,6 +132,8 @@ CmWindowsPin *cm_windows_pin_copy(const unsigned char *bytes, size_t length, uns
     wchar_t temp[4096], directory[4096], path[4096], token[33];
     BYTE random[16];
     DWORD received = GetTempPathW(4096, temp);
+    if (!received || received > 4000) return NULL;
+    received = GetLongPathNameW(temp, temp, 4096);
     if (!received || received > 4000 || BCryptGenRandom(NULL, random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG))
         return NULL;
     for (size_t i = 0; i < 16; ++i) {
