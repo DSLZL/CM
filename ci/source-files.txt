@@ -283,3 +283,10 @@ ci/scripts/windows_native_inputs.py
 ci/worker-files-windows-arm64.json
 ci/worker/windows-arm64-preflight.yml
 adapters/codex-e4568a3/native-protoc-build.rs
+ci/scripts/windows_pe_preflight.py
+crates/cm/src/loader/pe.rs
+fixtures/native-loader/windows-pe.c
+fixtures/native-loader/windows-pe/Cargo.toml
+fixtures/native-loader/windows-pe/Cargo.lock
+fixtures/native-loader/windows-pe/src/payload.rs
+fixtures/native-loader/windows-pe/src/main.rs

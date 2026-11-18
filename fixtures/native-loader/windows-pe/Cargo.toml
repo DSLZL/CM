@@ -1,0 +1,19 @@
+[package]
+name = "cm-windows-pe-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+object = { version = "=0.37.3", default-features = false, features = ["read_core", "pe", "std"] }
+
+[lib]
+name = "cm_pe_rust_payload"
+crate-type = ["cdylib"]
+path = "src/payload.rs"
+
+[[bin]]
+name = "cm-pe"
+path = "src/main.rs"
