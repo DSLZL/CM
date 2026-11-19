@@ -107,8 +107,9 @@ jobs:
           assert "runs-on: macos-26" in mac_recipe and "timeout-minutes: 15" in mac_recipe
           assert mac_recipe.count("cache-mode: none") == 2 and "CM_CACHE_MODE: none" in mac_recipe
           assert "macos_arm64_preflight.py" in mac_recipe and "cancel-in-progress: false" in mac_recipe
-          assert "default: mechanisms" in mac_recipe and "- kernel-signature" in mac_recipe
-          assert 'case "$CM_PREFLIGHT_STAGE" in mechanisms|kernel-signature)' in mac_recipe
+          assert "default: mechanisms" in mac_recipe and all("- " + stage + "\n" in mac_recipe
+              for stage in ("mechanisms", "kernel-signature", "kernel-signature-fault"))
+          assert 'case "$CM_PREFLIGHT_STAGE" in mechanisms|kernel-signature|kernel-signature-fault)' in mac_recipe
           assert "CM_PREFLIGHT_STAGE: $" + "{{ inputs.stage }}" in mac_recipe
           assert not any(value in mac_recipe for value in ("actions/cache/", "cache-save", "secrets.",
               "attestations: write", "id-token: write", "cargo ", "rustup ", "sudo "))
