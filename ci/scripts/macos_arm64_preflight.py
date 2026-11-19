@@ -152,11 +152,7 @@ def signature_identity(text):
     return hashes[0], page_size
 
 
-def kernel_map_result(text, retained, signature_offset, signature_page_size, cdhash):
-    rows = [json.loads(line) for line in text.splitlines()]
-    if len(rows) != 2 or not all(isinstance(row, dict) for row in rows):
-        raise RuntimeError("Missing exact kernel signature and mapping observations")
-    api, value = rows
+def kernel_signature_result(api, signature_offset, signature_page_size, cdhash):
     if (set(api) != {"gate", "return_code", "errno", "signed_bytes", "cdhash", "hash_type"}
             or api["gate"] != "kernel-signature-api"
             or any(type(api[key]) is not int for key in ("return_code", "errno", "signed_bytes", "hash_type"))
@@ -167,6 +163,15 @@ def kernel_map_result(text, retained, signature_offset, signature_page_size, cdh
                 or api["cdhash"] != cdhash or not re.fullmatch(r"[0-9a-f]{40}", cdhash) or api["hash_type"] != 2))
             or (api["return_code"] == -1 and (api["signed_bytes"] != 0 or api["cdhash"] != "" or api["hash_type"] != 0))):
         raise RuntimeError("Kernel signature identity or API outcome differs")
+    return api
+
+
+def kernel_map_result(text, retained, signature_offset, signature_page_size, cdhash):
+    rows = [json.loads(line) for line in text.splitlines()]
+    if len(rows) != 2 or not all(isinstance(row, dict) for row in rows):
+        raise RuntimeError("Missing exact kernel signature and mapping observations")
+    api, value = rows
+    kernel_signature_result(api, signature_offset, signature_page_size, cdhash)
     if (set(value) != {"status", "gate", "mapped", "map_errno", "retained_writer_bytes", "write_errno",
             "object_changed", "frozen_loading_qualified", "native_executed", "locked", "lock_errno",
             "mapped_bytes", "prefaulted_pages", "page_size", "retained_writer"}
@@ -192,6 +197,44 @@ def kernel_map_result(text, retained, signature_offset, signature_page_size, cdh
             or value["object_changed"] != (value["retained_writer_bytes"] == 1)):
         raise RuntimeError("Inconsistent kernel signature mapping observation")
     return {"signature": api, "mapping": value}
+
+
+def kernel_fault_result(text, retained, signature_offset, signature_page_size, cdhash, expected, return_code):
+    rows = [json.loads(line) for line in text.splitlines()]
+    if (type(return_code) is not int or return_code not in (2, -9, -11)
+            or len(rows) != (4 if return_code == 2 else 3) or not all(isinstance(row, dict) for row in rows)):
+        raise RuntimeError("Missing exact kernel fault diagnostic phases")
+    api, prefault, writer = rows[:3]
+    kernel_signature_result(api, signature_offset, signature_page_size, cdhash)
+    if api["return_code"] != 0:
+        raise RuntimeError("Fault diagnostic requires the verified attached signature")
+    digests = [(prefault, "kernel-signature-prefault")]
+    if return_code == 2:
+        digests.append((rows[3], "kernel-signature-reread"))
+    for value, gate in digests:
+        if (set(value) != {"gate", "mapped_bytes", "sha256", "native_executed"} or value["gate"] != gate
+                or type(value["mapped_bytes"]) is not int or value["mapped_bytes"] != signature_offset
+                or not isinstance(value["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["sha256"])
+                or value["native_executed"] is not False):
+            raise RuntimeError("Malformed complete mapped-byte digest")
+    if prefault["sha256"] != expected:
+        raise RuntimeError("Initial mapped bytes differ from the verified payload prefix")
+    if (set(writer) != {"gate", "retained_writer", "retained_writer_bytes", "write_errno", "object_changed", "native_executed"}
+            or writer["gate"] != "kernel-signature-writer" or type(writer["retained_writer"]) is not bool
+            or writer["retained_writer"] != retained or type(writer["retained_writer_bytes"]) is not int
+            or writer["retained_writer_bytes"] not in (-1, 0, 1) or type(writer["write_errno"]) is not int
+            or writer["write_errno"] < 0 or type(writer["object_changed"]) is not bool
+            or writer["native_executed"] is not False
+            or (writer["retained_writer_bytes"] == -1) != (writer["write_errno"] > 0)
+            or writer["object_changed"] != (writer["retained_writer_bytes"] == 1)
+            or (writer["retained_writer_bytes"] != 0) != retained
+            or (return_code < 0 and not writer["object_changed"])
+            or (return_code == 2 and not writer["object_changed"] and rows[3]["sha256"] != expected)):
+        raise RuntimeError("Contradictory retained-writer fault observation")
+    return {"signature": api, "prefault": prefault, "writer": writer,
+        "reread": rows[3] if return_code == 2 else None, "return_code": return_code,
+        "termination_cause": "not_attributed" if return_code < 0 else "not_terminated",
+        "frozen_loading_qualified": False, "native_executed": False}
 
 
 def seatbelt(probe, marker, work, port):
@@ -229,7 +272,7 @@ def main():
     policy = json.loads((Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json").read_text())
     authority(policy, entry, os.environ)
     stage = os.environ.get("CM_PREFLIGHT_STAGE", "mechanisms")
-    if stage not in ("mechanisms", "kernel-signature"):
+    if stage not in ("mechanisms", "kernel-signature", "kernel-signature-fault"):
         raise RuntimeError("Unknown Darwin mechanism stage")
     if Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
         raise RuntimeError("Mechanism source must be the exact recorded source checkout")
@@ -246,14 +289,15 @@ def main():
         "release_ready": False, "same_byte": {"status": "not_run"}, "isolation": {"status": "not_run"}}
     started_at = time.time()
 
-    def run(label, command, timeout=60, codes=(0,)):
+    def run(label, command, timeout=60, codes=(0,), with_code=False):
         command = [str(value) for value in command]
         with (logs / "commands.jsonl").open("a") as stream:
             stream.write(json.dumps({"stage": label, "command": command, "timeout_seconds": timeout}) + "\n")
         result = ci_progress.run(logs, label, command, timeout)
         if result.returncode not in codes:
             raise RuntimeError(label + " failed (return code " + str(result.returncode) + "); see " + label + ".log")
-        return (logs / (label + ".log")).read_text(errors="replace")
+        text = (logs / (label + ".log")).read_text(errors="replace")
+        return (text, result.returncode) if with_code else text
 
     try:
         with tempfile.TemporaryDirectory(prefix="cm-ma-mechanisms-", dir=os.environ["RUNNER_TEMP"]) as directory:
@@ -280,13 +324,20 @@ def main():
             run("compile-native-probe", [clang, *compile_flags, source, "-o", probe], 120)
             run("compile-sentinel-dylib", [clang, *compile_flags, "-DCM_PAYLOAD", "-dynamiclib",
                 source, "-o", payload], 120)
+            if stage == "kernel-signature-fault":
+                run("sign-fault-probe", ["/usr/bin/codesign", "--force", "--sign", "-", "--options", "hard,kill", probe])
+                details = run("fault-probe-policy", ["/usr/bin/codesign", "-d", "--verbose=4", probe])
+                flags = re.findall(r"^CodeDirectory .* flags=0x([0-9a-f]+)\(", details, re.MULTILINE)
+                if len(flags) != 1 or int(flags[0], 16) & 0x302 != 0x302:
+                    raise RuntimeError("Fault probe lacks verified ad-hoc hard/kill signature flags")
+                report["probe_policy"] = {"ad_hoc": True, "hard": True, "kill": True}
             report["inputs"] = {"probe": macho(probe.read_bytes(), 2), "payload": macho(payload.read_bytes(), 6)}
             for name, path in (("probe", probe), ("payload", payload)):
                 run(name + "-dependencies", ["/usr/bin/otool", "-L", path])
                 run(name + "-signature", ["/usr/bin/codesign", "--verify", "--strict", "--verbose=2", path])
                 run(name + "-signature-details", ["/usr/bin/codesign", "-d", "--verbose=2", path])
             clean = ["/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME=" + str(temp), probe]
-            if stage == "kernel-signature":
+            if stage in ("kernel-signature", "kernel-signature-fault"):
                 payload_bytes = payload.read_bytes()
                 signature_offset, signature_size = signature_range(payload_bytes)
                 details = run("kernel-signature-details", ["/usr/bin/codesign", "-d", "--verbose=4", payload])
@@ -299,16 +350,42 @@ def main():
                     candidate.write_bytes(payload_bytes)
                     if hashlib.sha256(candidate.read_bytes()).hexdigest() != report["inputs"]["payload"]["sha256"]:
                         raise RuntimeError("Kernel diagnostic candidate differs from verified payload")
-                    results[adversary] = kernel_map_result(run("kernel-signature-" + adversary,
-                        [*clean, "kernel-signature", candidate, signature_offset, signature_size, adversary], codes=(2,)),
-                        adversary == "writer", signature_offset, signature_page_size, cdhash)
-                    if adversary == "none" and not results[adversary]["mapping"]["locked"]:
-                        raise RuntimeError("Kernel signature positive control could not map, lock and prefault signed pages")
+                    if stage == "kernel-signature-fault":
+                        text, return_code = run(stage + "-" + adversary,
+                            [*clean, stage, candidate, signature_offset, signature_size, adversary],
+                            codes=(2, -9, -11), with_code=True)
+                        results[adversary] = kernel_fault_result(text, adversary == "writer", signature_offset,
+                            signature_page_size, cdhash, hashlib.sha256(payload_bytes[:signature_offset]).hexdigest(), return_code)
+                        if return_code < 0:
+                            results[adversary]["crash_report"] = "not_observed"
+                            deadline = time.monotonic() + 10
+                            while time.monotonic() < deadline and results[adversary]["crash_report"] == "not_observed":
+                                for crash in (Path.home() / "Library/Logs/DiagnosticReports").glob("*native-probe*.ips"):
+                                    try:
+                                        if crash.stat().st_mtime < started_at:
+                                            continue
+                                        with crash.open("rb") as stream:
+                                            data = stream.read(1024 * 1024 + 1)
+                                    except OSError:
+                                        continue
+                                    if crash_matches(data, report["inputs"]["probe"]["uuid"]):
+                                        name = stage + "-" + adversary + "-crash-report.log"
+                                        (logs / name).write_bytes(data)
+                                        results[adversary]["crash_report"] = name
+                                        break
+                                if results[adversary]["crash_report"] == "not_observed":
+                                    time.sleep(0.25)
+                    else:
+                        results[adversary] = kernel_map_result(run(stage + "-" + adversary,
+                            [*clean, stage, candidate, signature_offset, signature_size, adversary], codes=(2,)),
+                            adversary == "writer", signature_offset, signature_page_size, cdhash)
+                        if adversary == "none" and not results[adversary]["mapping"]["locked"]:
+                            raise RuntimeError("Kernel signature positive control could not map, lock and prefault signed pages")
                 if payload.read_bytes() != payload_bytes:
                     raise RuntimeError("Kernel diagnostic changed the original payload")
                 report.update(status="observed", same_byte={"status": "unqualified", "frozen_loading_qualified": False,
                     "native_executed": False, "preheld_shared_mapping": "not_run", "actual_loader": "not_run"})
-                print(json.dumps({"status": "observed", "gate": "kernel-signature", "qualification": "not_run"}), flush=True)
+                print(json.dumps({"status": "observed", "gate": stage, "qualification": "not_run"}), flush=True)
                 return
             try:
                 bad_marker, marker = temp / "wrong-hash-marker", temp / "verified-marker"
@@ -561,6 +638,37 @@ def self_check():
             pass
         else:
             raise AssertionError("Kernel diagnostic accepted contradictory or qualified evidence")
+    prefault = {"gate": "kernel-signature-prefault", "mapped_bytes": 4096, "sha256": "b" * 64, "native_executed": False}
+    reread = {**prefault, "gate": "kernel-signature-reread"}
+    writer = {"gate": "kernel-signature-writer", "retained_writer": False,
+        "retained_writer_bytes": 0, "write_errno": 0, "object_changed": False, "native_executed": False}
+    def fault(rows, retained=False, code=2):
+        return kernel_fault_result("\n".join(json.dumps(row) for row in rows), retained,
+            4096, 4096, "a" * 40, "b" * 64, code)
+    positive = [api, prefault, writer, reread]
+    assert fault(positive)["reread"] == reread
+    changed = {**writer, "retained_writer": True, "retained_writer_bytes": 1, "object_changed": True}
+    for signal in (-9, -11):
+        observed = fault([api, prefault, changed], True, signal)
+        assert observed["frozen_loading_qualified"] is False and observed["termination_cause"] == "not_attributed"
+    assert fault([api, prefault, changed, {**reread, "sha256": "c" * 64}], True)["reread"]["sha256"] == "c" * 64
+    denied_writer = {**writer, "retained_writer": True, "retained_writer_bytes": -1, "write_errno": errno.EPERM}
+    assert fault([api, prefault, denied_writer, reread], True)["writer"] == denied_writer
+    for rows, retained, code in ((positive, False, 0), (positive[:3], False, -9), (positive[:2], False, -9),
+            (positive[:3], False, 2), (positive + [reread], False, 2),
+            ([api, {**prefault, "sha256": "c" * 64}, writer, reread], False, 2),
+            ([api, {**prefault, "mapped_bytes": True}, writer, reread], False, 2),
+            ([api, prefault, writer, {**reread, "sha256": "c" * 64}], False, 2),
+            ([api, prefault, {**changed, "write_errno": errno.EPERM}], True, -9),
+            ([api, prefault, {**changed, "native_executed": True}], True, -9),
+            ([api, prefault, {**changed, "frozen_loading_qualified": True}], True, -9),
+            ([{**api, "cdhash": "c" * 40}, prefault, changed], True, -9)):
+        try:
+            fault(rows, retained, code)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Fault diagnostic accepted incomplete, contradictory or qualified evidence")
     details = "CDHash=" + "a" * 40 + "\nPage size=4096\n"
     assert signature_identity(details) == ("a" * 40, 4096)
     for malformed in (details + details, details.replace("4096", "4097"), details.replace("4096", "131072"),

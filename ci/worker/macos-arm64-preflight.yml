@@ -19,6 +19,7 @@ on:
         options:
           - mechanisms
           - kernel-signature
+          - kernel-signature-fault
 
 permissions:
   contents: read
@@ -66,7 +67,7 @@ jobs:
         env:
           CM_POLICY_TOKEN: ${{ github.token }}
         run: |
-          case "$CM_PREFLIGHT_STAGE" in mechanisms|kernel-signature) ;; *) exit 64 ;; esac
+          case "$CM_PREFLIGHT_STAGE" in mechanisms|kernel-signature|kernel-signature-fault) ;; *) exit 64 ;; esac
           python3 -B .github/scripts/worker_policy.py native-preflight-self-check
           python3 -B .github/scripts/worker_policy.py native-preflight
 
