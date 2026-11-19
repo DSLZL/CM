@@ -165,7 +165,7 @@ def main():
                     ("manifest", "manifest::tests::"), ("package", "package::tests::"),
                     ("index", "index::"), ("mod-lock", "mod_lock::tests::"),
                     ("upgrade", "upgrade::tests::"), ("provenance", "provenance::"),
-                    ("runtime", "runtime::tests::")):
+                    ("runtime", "runtime::tests::"), ("runtime-plan", "runtime_plan::tests::")):
                 executable = executables["cm_abi" if name == "abi" else "cm_runtime"]
                 args = [executable, *([scope] if scope else []), "--test-threads=1"]
                 try:

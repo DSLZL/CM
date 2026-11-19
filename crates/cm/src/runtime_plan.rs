@@ -1142,18 +1142,23 @@ mod tests {
         let revision = "b".repeat(40);
         let target = loader::TARGET;
         let cpu = loader::CPU;
+        let (payload, system_minimum) = if cfg!(windows) {
+            ("payload.dll", r#"windows_min = "10.0.26100""#)
+        } else {
+            ("payload.so", r#"glibc_min = "2.17""#)
+        };
         let text = format!(
             r#"format_version = 3
 id = "{id}"
 version = "0.1.0"
 kind = "sdk"
 [binary]
-path = "payload.so"
+path = "{payload}"
 size = 1
 sha256 = "{hash}"
 target = "{target}"
 entry = "cm_mod_entry_v2"
-glibc_min = "2.17"
+{system_minimum}
 cpu = "{cpu}"
 [compat]
 abi_major = 2
