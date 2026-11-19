@@ -167,6 +167,8 @@ static int executable_map_probe(const char *path, off_t signature_offset, size_t
     size_t size = (size_t)source.st_size;
     int signature_result = 0, signature_error = 0;
     if (signature_size) {
+        /* The kernel reports page-rounded coverage; map only bytes before the signature. */
+        size = (size_t)signature_offset;
         fsignatures_t signature = {.fs_file_start = 0,
             .fs_blob_start = (void *)(uintptr_t)signature_offset, .fs_blob_size = signature_size,
             .fs_fsignatures_size = sizeof(signature)};
@@ -174,15 +176,12 @@ static int executable_map_probe(const char *path, off_t signature_offset, size_t
         signature_error = signature_result < 0 ? errno : 0;
         char cdhash[41] = "";
         if (signature_result == 0) {
-            require(signature.fs_file_start > 0 && signature.fs_file_start <= source.st_size,
-                "bounded kernel signed range");
-            size = (size_t)signature.fs_file_start;
             for (size_t index = 0; index < sizeof(signature.fs_cdhash); ++index)
                 snprintf(cdhash + 2 * index, 3, "%02x", (unsigned char)signature.fs_cdhash[index]);
         }
         printf("{\"gate\":\"kernel-signature-api\",\"return_code\":%d,\"errno\":%d,"
-            "\"signed_bytes\":%zu,\"cdhash\":\"%s\",\"hash_type\":%d}\n", signature_result,
-            signature_error, signature_result == 0 ? size : 0, cdhash,
+            "\"signed_bytes\":%lld,\"cdhash\":\"%s\",\"hash_type\":%d}\n", signature_result,
+            signature_error, signature_result == 0 ? (long long)signature.fs_file_start : 0, cdhash,
             signature_result == 0 ? signature.fs_hash_type : 0);
         require(fflush(stdout) == 0, "signature evidence before mapping faults");
     }
@@ -225,8 +224,9 @@ static int executable_map_probe(const char *path, off_t signature_offset, size_t
         mapping == MAP_FAILED ? "false" : "true", map_error, (long)outcome.bytes, outcome.error,
         before != after ? "true" : "false");
     if (signature_size)
-        printf(",\"locked\":%s,\"lock_errno\":%d,\"prefaulted_pages\":%zu,\"page_size\":%ld,\"retained_writer\":%s",
-            locked ? "true" : "false", lock_error, pages, page_size, retained ? "true" : "false");
+        printf(",\"locked\":%s,\"lock_errno\":%d,\"mapped_bytes\":%zu,\"prefaulted_pages\":%zu,\"page_size\":%ld,\"retained_writer\":%s",
+            locked ? "true" : "false", lock_error, mapping == MAP_FAILED ? 0 : size, pages,
+            page_size, retained ? "true" : "false");
     puts("}");
     return 2;
 }
