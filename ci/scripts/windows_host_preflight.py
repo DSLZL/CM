@@ -270,6 +270,13 @@ def component_identity(sdk, tools, proto, verifier, v8):
         "v8": {name: host.sha(Path(path)) for name, path in v8.items()}}
 
 
+def compatible_component_identity(producer, current):
+    producer_image = producer.get("image")
+    version = producer_image.get("ImageVersion") if isinstance(producer_image, dict) else None
+    return (isinstance(version, str) and bool(version)
+            and producer == {**current, "image": {**current["image"], "ImageVersion": version}})
+
+
 def checked_native(receipt, directory):
     quality = receipt.get("quality")
     if (not isinstance(quality, list) or [row.get("phase") for row in quality] != list(PROTOC_CHECKS)
@@ -430,6 +437,7 @@ def main():
                     v8 = {"RUSTY_V8_ARCHIVE": str(component / "native/v8.gz"),
                         "RUSTY_V8_SRC_BINDING_PATH": str(component / "native/v8.rs")}
                     report["native_original_job"] = native_job
+                    report["native_producer_image"] = native_receipt["identity"].get("image")
                     report["native_quality"] = native_receipt["quality"]
                 else:
                     report["native_protoc_build_attempts"] = 1
@@ -451,7 +459,7 @@ def main():
                     raise RuntimeError("Native verifier executable differs")
                 proto = report["protoc_replacement"]
                 component_inputs = component_identity(sdk, tools, proto, verifier, v8)
-                if native_origin and native_receipt["identity"] != component_inputs:
+                if native_origin and not compatible_component_identity(native_receipt["identity"], component_inputs):
                     raise RuntimeError("Native component differs from current native recipe/compiler/SDK/pins")
                 report.update(native_origin=native_origin, native_compilation="reused_original" if native_origin else "executed_current",
                     native_identity=component_inputs)
@@ -768,12 +776,18 @@ def self_check():
         host.write(component / "native/verifier.json", verifier)
         v8 = {"RUSTY_V8_ARCHIVE": component / "native/v8.gz", "RUSTY_V8_SRC_BINDING_PATH": component / "native/v8.rs"}
         component_inputs = component_identity(original, native_tools, proto, verifier, v8)
-        with patch.dict(os.environ, {"RUSTUP_TOOLCHAIN": "changed-rust", "RUSTFLAGS": "changed-rust-flags"}):
-            assert component_identity(sdk_inventory(roots), native_tools, proto, verifier, v8) == component_inputs
-        (sdk / "header.h").write_bytes(b"changed actual native header")
-        assert component_identity(sdk_inventory(roots), native_tools, proto, verifier, v8) != component_inputs
-        changed_tools = {**native_tools, "cl": {"sha256": "c" * 64}}
-        assert component_identity(original, changed_tools, proto, verifier, v8) != component_inputs
+        with patch.dict(os.environ, {"RUSTUP_TOOLCHAIN": "changed-rust", "RUSTFLAGS": "changed-rust-flags",
+                "ImageVersion": component_inputs["image"]["ImageVersion"] + "-updated"}):
+            current_component = component_identity(sdk_inventory(roots), native_tools, proto, verifier, v8)
+            (sdk / "header.h").write_bytes(b"changed actual native header")
+            changed_sdk = component_identity(sdk_inventory(roots), native_tools, proto, verifier, v8)
+            changed_tools = {**native_tools, "cl": {"sha256": "c" * 64}}
+            changed_compiler = component_identity(original, changed_tools, proto, verifier, v8)
+        for incompatible in (changed_sdk, changed_compiler, {**current_component, "target": "x86_64-pc-windows-msvc"},
+                {**current_component, "image": {**current_component["image"], "ImageOS": "different-runner-family"}}):
+            assert not compatible_component_identity(component_inputs, incompatible)
+        assert not compatible_component_identity(
+            {**component_inputs, "image": {"ImageOS": component_inputs["image"]["ImageOS"]}}, current_component)
         native_proof = {"schema_version": 1, "domain": "cm.windows-native-inputs.v1", "identity": component_inputs,
             "quality": native_quality, "files": files(component), "origin": receipt["origin"]}
         host.write(component / "build.json", native_proof)
@@ -797,6 +811,8 @@ def self_check():
                 "download_origin_archive", side_effect=lambda *args, **kwargs: zipfile.ZipFile(native_archive)):
             reused_component, actual_component, _ = restore(valid, temp, "native-inputs")
             assert actual_component == native_proof and files(reused_component) == files(component)
+            assert actual_component["identity"]["image"]["ImageVersion"] != current_component["image"]["ImageVersion"]
+            assert compatible_component_identity(actual_component["identity"], current_component)
         (temp / "failed-producer").mkdir()
         with patch.object(worker_policy, "api", side_effect=lambda path:
                 {**run, "conclusion": "failure"} if path.endswith("/actions/runs/1") else native_api(path)):
