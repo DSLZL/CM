@@ -107,6 +107,9 @@ jobs:
           assert "runs-on: macos-26" in mac_recipe and "timeout-minutes: 15" in mac_recipe
           assert mac_recipe.count("cache-mode: none") == 2 and "CM_CACHE_MODE: none" in mac_recipe
           assert "macos_arm64_preflight.py" in mac_recipe and "cancel-in-progress: false" in mac_recipe
+          assert "default: mechanisms" in mac_recipe and "- kernel-signature" in mac_recipe
+          assert 'case "$CM_PREFLIGHT_STAGE" in mechanisms|kernel-signature)' in mac_recipe
+          assert "CM_PREFLIGHT_STAGE: $" + "{{ inputs.stage }}" in mac_recipe
           assert not any(value in mac_recipe for value in ("actions/cache/", "cache-save", "secrets.",
               "attestations: write", "id-token: write", "cargo ", "rustup ", "sudo "))
           win_worker = json.loads(Path("ci/worker-files-windows-x64.json").read_text())
@@ -154,7 +157,7 @@ jobs:
           assert all(row["source"] in paths for row in win_arm_worker["files"])
           win_arm_recipe = Path("ci/worker/windows-arm64-preflight.yml").read_text()
           assert "runs-on: windows-11-arm" in win_arm_recipe
-          assert ("timeout-minutes: $" + "{{ inputs.stage == 'native-host' && 180 || inputs.stage == 'native-protocol' && 35 || inputs.stage == 'v8-link' && 25 || 15 }}") in win_arm_recipe
+          assert ("timeout-minutes: $" + "{{ inputs.stage == 'native-host' && 180 || inputs.stage == 'native-components' && 35 || inputs.stage == 'native-protocol' && 35 || inputs.stage == 'v8-link' && 25 || 15 }}") in win_arm_recipe
           assert win_arm_recipe.count("cache-mode: none") == 2 and "CM_CACHE_MODE: none" in win_arm_recipe
           assert "CM_PLATFORM: windows-arm64" in win_arm_recipe and "CM_TARGET: aarch64-pc-windows-msvc" in win_arm_recipe
           assert "default: isolation-surface" in win_arm_recipe and "cancel-in-progress: false" in win_arm_recipe
@@ -163,7 +166,7 @@ jobs:
           assert win_arm_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'isolation-availability'") == 1
           assert "if: env.CM_PREFLIGHT_STAGE != 'isolation-surface'" in win_arm_recipe
           assert "if: env.CM_PREFLIGHT_STAGE == 'loader-terminal'" in win_arm_recipe
-          assert "-notin @('isolation-surface', 'isolation-availability', 'loader-terminal', 'isolation-process', 'isolation-network', 'isolation-inputs', 'native-inputs', 'v8-link', 'native-protocol', 'native-pe', 'runtime-library', 'native-host')" in win_arm_recipe
+          assert "-notin @('isolation-surface', 'isolation-availability', 'loader-terminal', 'isolation-process', 'isolation-network', 'isolation-inputs', 'native-inputs', 'v8-link', 'native-protocol', 'native-pe', 'runtime-library', 'native-host', 'native-components')" in win_arm_recipe
           assert win_arm_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'isolation-process'") == 1
           assert win_arm_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'isolation-network'") == 1
           assert win_arm_recipe.count("if: env.CM_PREFLIGHT_STAGE == 'isolation-inputs'") == 1
@@ -181,6 +184,10 @@ jobs:
           assert win_arm_recipe.count("python -B cm-source/ci/scripts/windows_host_preflight.py") == 1
           assert "ci/scripts/windows_host_preflight.py" in paths
           assert "CM_PREFLIGHT_HOST_ORIGIN: $" + "{{ inputs.host_build_origin }}" in win_arm_recipe
+          assert "CM_PREFLIGHT_NATIVE_ORIGIN: $" + "{{ inputs.native_build_origin }}" in win_arm_recipe
+          assert "Host requires exactly one qualified origin" in win_arm_recipe
+          assert "steps.native-host.outputs.native_reused != 'true'" in win_arm_recipe
+          assert "path: $" + "{{ runner.temp }}/cm-windows-arm64-native-inputs" in win_arm_recipe
           assert "steps.native-host.outputs.host_reused != 'true'" in win_arm_recipe
           assert "path: $" + "{{ runner.temp }}/cm-windows-arm64-host-build" in win_arm_recipe
           assert "GIT_CONFIG_KEY_0=core.autocrlf" in win_arm_recipe and "GIT_CONFIG_VALUE_0=false" in win_arm_recipe

@@ -11,6 +11,14 @@ on:
         description: Unique reviewed mechanism request
         required: true
         type: string
+      stage:
+        description: Reviewed native mechanism stage
+        required: true
+        default: mechanisms
+        type: choice
+        options:
+          - mechanisms
+          - kernel-signature
 
 permissions:
   contents: read
@@ -41,6 +49,7 @@ jobs:
       CM_BUILD_KIND: qualification
       CM_HOST_ORIGIN: ""
       CM_CACHE_MODE: none
+      CM_PREFLIGHT_STAGE: ${{ inputs.stage }}
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - name: Checkout trusted worker revision
@@ -57,6 +66,7 @@ jobs:
         env:
           CM_POLICY_TOKEN: ${{ github.token }}
         run: |
+          case "$CM_PREFLIGHT_STAGE" in mechanisms|kernel-signature) ;; *) exit 64 ;; esac
           python3 -B .github/scripts/worker_policy.py native-preflight-self-check
           python3 -B .github/scripts/worker_policy.py native-preflight
 

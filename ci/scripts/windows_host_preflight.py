@@ -23,6 +23,12 @@ PACKAGES = ("codex-cli", "codex-code-mode-host", "cm-abi", "cm-runtime", "cm-sdk
 SCHEMA_CHECKS = ("g03-host-early-fmt", "g06-fixture-early-fmt", "g03-protocol-schema-0",
     "g03-protocol-schema-1", "g03-config-schema", "g03-protocol-contract-tests")
 NATIVE_FILES = ("protoc.exe", "sccache.exe", "ninja.exe", "v8.gz", "v8.rs", "gh.exe")
+PROTOC_CHECKS = ("native-cmake-version", "native-ninja-version",
+    *("protoc-" + source + "-" + phase for source in ("protobuf", "absl")
+        for phase in ("init", "fetch", "checkout", "identity")),
+    "native-protoc-configure", "native-protoc-upb-input", "native-protoc-build",
+    "native-built-protoc-version", "native-built-protoc-descriptor",
+    "protoc-protobuf-pristine", "protoc-absl-pristine")
 MAXIMUM = 2 * 1024 ** 3
 PE_MAXIMUM = 256 * 1024 ** 2
 SCCACHE_SHA = "205d613fa74a9a0525e41a5ace77b1c71907d5bd4a5e668bad79111776829290"
@@ -118,7 +124,9 @@ def read_origin(raw):
     return value
 
 
-def restore(origin, temp):
+def restore(origin, temp, kind="host-build"):
+    if kind not in ("host-build", "native-inputs"):
+        raise RuntimeError("Unknown native artifact role")
     repo = "DSLZL/CM-build-" + KEY
     run = worker_policy.api(f"repos/{repo}/actions/runs/{origin['run_id']}")
     jobs = worker_policy.api(f"repos/{repo}/actions/runs/{origin['run_id']}/attempts/{origin['run_attempt']}/jobs?per_page=100")
@@ -134,38 +142,48 @@ def restore(origin, temp):
         raise RuntimeError("Host producer worker is not a trusted current ancestor")
     artifact = worker_policy.api(f"repos/{repo}/actions/artifacts/{origin['artifact_id']}")
     worker_policy.artifact_binding(artifact, origin["artifact_id"],
-        f"cm-{KEY}-host-build-{origin['run_id']}-{origin['run_attempt']}", origin["artifact_sha256"], origin["run_id"])
-    destination = temp / "restored-host"
-    with worker_policy.download_origin_archive(repo, artifact, temp / "host-origin.zip", maximum=MAXIMUM) as archive:
+        f"cm-{KEY}-{kind}-{origin['run_id']}-{origin['run_attempt']}", origin["artifact_sha256"], origin["run_id"])
+    destination = temp / ("restored-" + kind)
+    with worker_policy.download_origin_archive(repo, artifact, temp / (kind + "-origin.zip"), maximum=MAXIMUM) as archive:
         extract(archive, destination)
     receipt = host.read(destination / "build.json")
     expected = {"source_sha": origin["source_sha"], "workflow_sha": origin["workflow_sha"],
         "run_id": origin["run_id"], "run_attempt": origin["run_attempt"], "job": "native-preflight",
         "repository": repo, "source_repository": "DSLZL/CM", "target": TARGET}
-    if (receipt.get("schema_version") != 1 or receipt.get("domain") != "cm.windows-host-build.v1"
+    if (receipt.get("schema_version") != (2 if kind == "host-build" else 1)
+            or receipt.get("domain") != ("cm.windows-host-build.v2" if kind == "host-build" else "cm.windows-native-inputs.v1")
             or receipt.get("origin") != expected or receipt.get("files") != [row for row in files(destination) if row["path"] != "build.json"]):
         raise RuntimeError("Host producer receipt or complete file inventory differs")
-    required = ({"bin/" + name for name in BINS} | {"native/" + name for name in NATIVE_FILES}
-        | {"native/inputs.json", "native/verifier.json"}
-        | {"quality/" + name + ".log" for name in (*recipes(), *SCHEMA_CHECKS)})
+    required = ({"bin/" + name for name in BINS}
+        | {"quality/" + name + ".log" for name in (*recipes(), *SCHEMA_CHECKS)}) if kind == "host-build" else (
+            {"native/" + name for name in NATIVE_FILES} | {"native/inputs.json", "native/verifier.json"}
+            | {"quality/" + name + ".log" for name in PROTOC_CHECKS})
     actual = {row["path"] for row in receipt["files"]}
-    if not required <= actual or any(name not in required and not name.startswith(("materials/", "generated/")) for name in actual):
+    extra = "generated/" if kind == "host-build" else "materials/"
+    if not required <= actual or any(name not in required and not name.startswith(extra) for name in actual):
         raise RuntimeError("Host origin has missing or unexpected build inputs")
-    checked_quality(receipt, destination)
+    if kind == "host-build":
+        if read_origin(json.dumps(receipt.get("native_origin"))) is None:
+            raise RuntimeError("Host lacks its independently qualified native component")
+        checked_quality(receipt, destination)
+    else:
+        if not any(name.startswith("materials/") for name in actual):
+            raise RuntimeError("Native component lacks its verified license materials")
+        checked_native(receipt, destination)
     return destination, receipt, job
 
 
-def sdk_inventory(llvm_root):
+def sdk_inventory(inputs):
     result, seen, total = [], set(), 0
-    inputs = {name: os.environ[name].split(";") for name in ("INCLUDE", "LIB")}
-    inputs["LLVM"] = [str(llvm_root)]
     for variable, roots in inputs.items():
         for index, name in enumerate(roots):
             if not name:
                 continue
-            root = Path(name).resolve()
-            if not root.is_dir() or getattr(root.lstat(), "st_file_attributes", 0) & 0x400:
+            root = Path(name)
+            if (not root.is_absolute() or not root.is_dir() or not stat.S_ISDIR(root.lstat().st_mode)
+                    or getattr(root.lstat(), "st_file_attributes", 0) & 0x400):
                 raise RuntimeError("SDK input root must be a non-reparse directory")
+            root = root.resolve()
             for directory, dirs, names in os.walk(root, followlinks=False):
                 for entry in dirs + names:
                     path = Path(directory) / entry
@@ -239,11 +257,53 @@ def checked_quality(receipt, directory):
             raise RuntimeError("Original schema generation check or log differs")
 
 
+def component_identity(sdk, tools, proto, verifier, v8):
+    return {"target": TARGET, "image": {name: os.environ[name] for name in ("ImageOS", "ImageVersion")},
+        "protoc_recipe": host.digest(inspect.getsource(native.native_protoc)
+            + inspect.getsource(native.protoc_tools)),
+        "sources": {name: {"repository": repo, "commit": revision} for name, repo, revision in native.PROTOC_SOURCES},
+        "sdk": host.digest([{key: row[key] for key in ("input", "sha256")} for row in sdk
+            if not row["input"].startswith("LLVM/")]),
+        "tools": {name: tools[name]["sha256"] for name in ("cl", "link", "lib", "rc", "mt", "cmake", "ninja", "sccache")},
+        "protoc": {name: proto[name] for name in ("sources", "version", "cxx_standard", "binary")},
+        "verifier": {name: verifier[name] for name in ("pin", "sha256", "policy_sha256", "root_sha256")},
+        "v8": {name: host.sha(Path(path)) for name, path in v8.items()}}
+
+
+def checked_native(receipt, directory):
+    quality = receipt.get("quality")
+    if (not isinstance(quality, list) or [row.get("phase") for row in quality] != list(PROTOC_CHECKS)
+            or any(row.get("return_code") != 0 or row.get("log") != row["phase"] + ".log"
+                or not isinstance(row.get("command"), list) or not row["command"]
+                or not all(isinstance(arg, str) and arg for arg in row["command"])
+                or row.get("log_sha256") != host.sha(directory / "quality" / row["log"]) for row in quality)):
+        raise RuntimeError("Native component lacks its original complete successful protoc checks")
+    proto = host.read(directory / "native/inputs.json")["protoc"]
+    if (proto.get("native") is not True or proto.get("executed") is not True or proto.get("cxx_standard") != 17
+            or proto.get("version") != "libprotoc 31.1"
+            or proto.get("sources") != receipt.get("identity", {}).get("sources")
+            or proto.get("sources") != {name: {"repository": repo, "commit": revision}
+                for name, repo, revision in native.PROTOC_SOURCES}
+            or receipt.get("identity", {}).get("protoc") != {name: proto.get(name)
+                for name in ("sources", "version", "cxx_standard", "binary")}
+            or proto.get("binary", {}).get("sha256") != host.sha(directory / "native/protoc.exe")):
+        raise RuntimeError("Native component protoc proof or actual binary differs")
+    identity = receipt["identity"]
+    verifier = host.read(directory / "native/verifier.json")
+    if (any(host.sha(directory / "native" / (name + ".exe")) != identity["tools"][name] for name in ("ninja", "sccache"))
+            or {name: verifier.get(name) for name in identity["verifier"]} != identity["verifier"]
+            or host.sha(directory / "native/gh.exe") != identity["verifier"]["sha256"]
+            or identity["v8"] != {"RUSTY_V8_ARCHIVE": host.sha(directory / "native/v8.gz"),
+                "RUSTY_V8_SRC_BINDING_PATH": host.sha(directory / "native/v8.rs")}):
+        raise RuntimeError("Native component portable tools, V8 or verifier proof differs")
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     entry = record_run.require_hosted_worker(enabled=False)
     authority(host.read(Path(os.environ["RUNNER_TEMP"]) / "cm-worker-preflight.json"), entry, os.environ, key=KEY)
-    if os.environ.get("CM_PREFLIGHT_STAGE") != "native-host" or Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
+    stage = os.environ.get("CM_PREFLIGHT_STAGE")
+    if stage not in ("native-host", "native-components") or Path(os.environ["CM_SOURCE_DIR"]).resolve() != root:
         raise RuntimeError("Host candidate requires its exact reviewed native stage and source")
     if any(os.environ.get(name) != value for name, value in GIT_CONFIG.items()):
         raise RuntimeError("Host source preparation requires the fixed per-process Git configuration")
@@ -253,18 +313,25 @@ def main():
         raise RuntimeError("Host candidate forbids unregistered compiler/native overrides")
     host.reject_native_overrides()
     origin = read_origin(os.environ.get("CM_PREFLIGHT_HOST_ORIGIN", ""))
+    native_origin = read_origin(os.environ.get("CM_PREFLIGHT_NATIVE_ORIGIN", ""))
+    if ((stage == "native-components" and origin) or (origin and native_origin)
+            or (stage == "native-host" and not (origin or native_origin))):
+        raise RuntimeError("Host requires exactly one qualified Host or native-component origin; native stage forbids Host origins")
     logs = Path(os.environ["CM_CI_LOG_DIR"]).resolve()
     if not logs.is_relative_to(Path(os.environ["RUNNER_TEMP"]).resolve()):
         raise RuntimeError("Host evidence must remain in runner temporary storage")
-    output = Path(os.environ["RUNNER_TEMP"]) / "cm-windows-arm64-host-build"
+    output = Path(os.environ["RUNNER_TEMP"]) / ("cm-windows-arm64-native-inputs" if stage == "native-components" else "cm-windows-arm64-host-build")
     if output.exists():
         raise RuntimeError("Host build export must start empty")
-    report = {"schema_version": 1, "status": "running", "stage": "native-host", "platform": KEY, "target": TARGET,
+    report = {"schema_version": 1, "status": "running", "stage": stage, "platform": KEY, "target": TARGET,
         "source_sha": os.environ["CM_SOURCE_SHA"], "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"],
         "run_id": int(os.environ["GITHUB_RUN_ID"]), "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
         "cache_mode": "none", "cache_writes": 0, "cache_deletes": 0, "platform_enabled": False,
         "full_qualification": "not_run", "product_consumer": "not_run", "actual_host_tui": "not_run",
-        "helper_setup_execution": "not_run", "cli_builds": 0, "quality": {}, "host_build_origin": origin}
+        "helper_setup_execution": "not_run", "cli_builds": 0, "quality": {}, "host_build_origin": origin,
+        "native_origin": native_origin, "native_quality": []}
+    report.update(native_protoc_builds=0, native_protoc_build_attempts=0,
+        schema_generation="not_run", host_compilation="not_run")
     tools, started = {}, False
 
     def run(label, args, timeout=60, *, cwd=root):
@@ -279,11 +346,16 @@ def main():
             os.chdir(previous)
         if result.returncode:
             raise RuntimeError(label + " failed; see " + label + ".log")
+        if label in PROTOC_CHECKS:
+            report["native_quality"].append({"phase": label, "command": values, "return_code": 0,
+                "log": label + ".log", "log_sha256": host.sha(logs / (label + ".log"))})
         return (logs / (label + ".log")).read_text(encoding="utf-8", errors="strict").strip()
 
     try:
         cfg = host.read(root / ".github/cm-ci.json")
         pin = host.read(root / host.ADAPTER / "source.json")
+        host.slot_descriptor(root, TARGET)
+        host.product_manifest(root)
         if cfg["rust_toolchain"] != "1.95.0" or cfg["upstream"]["commit"] != native.REVISION or host.TARGET != TARGET:
             raise RuntimeError("Host toolchain, target or upstream pins differ")
         if (cfg["task_id"] != "CM-S03" or len(cfg["units"]) != 1 or cfg["units"][0]["id"] != "host"
@@ -330,27 +402,39 @@ def main():
                     host.prepare(root, logs)
                 provenance = host.verify_sources(root, logs)
                 tree = root / host.HOST
+                sdk_roots = {name: os.environ[name].split(";") for name in ("INCLUDE", "LIB")}
+                sdk_roots.update({"LLVM": [str(llvm_root)], "MSVC": [str(cl.parent)],
+                    "CMAKE": [str(Path(os.environ["VSINSTALLDIR"]) / "Common7/IDE/CommonExtensions/Microsoft/CMake")],
+                    "SDK_TOOLS": [str(Path(os.environ["WindowsSdkDir"]) / "bin"
+                        / os.environ["WindowsSDKVersion"].strip("\\/") / "arm64")]})
                 with ci_progress.stage("host-native-sdk-inventory"):
-                    sdk = sdk_inventory(llvm_root)
+                    sdk = sdk_inventory(sdk_roots)
                 host.write(logs / "native-files.json", sdk)
                 if origin:
                     restored, receipt, original_job = restore(origin, temp)
+                    native_origin = read_origin(json.dumps(receipt["native_origin"]))
+                    report["original_job"] = original_job
+                if native_origin:
+                    component, native_receipt, native_job = restore(native_origin, temp, "native-inputs")
                     native.protoc_tools(temp, tools, report, run)
                     (temp / "protoc-build").mkdir()
-                    shutil.copyfile(restored / "native/protoc.exe", temp / "protoc-build/protoc.exe")
-                    native_inputs = host.read(restored / "native/inputs.json")
+                    shutil.copyfile(component / "native/protoc.exe", temp / "protoc-build/protoc.exe")
+                    native_inputs = host.read(component / "native/inputs.json")
                     report["protoc_replacement"] = native_inputs["protoc"]
                     verifier_dir = Path(os.environ["RUNNER_TEMP"]) / "cm-distribution-verifier"
                     verifier_dir.mkdir()
-                    shutil.copyfile(restored / "native/gh.exe", verifier_dir / "gh.exe")
-                    shutil.copyfile(restored / "native/verifier.json", verifier_dir / "verifier.json")
-                    shutil.copytree(restored / "materials", verifier_dir / "licenses")
+                    shutil.copyfile(component / "native/gh.exe", verifier_dir / "gh.exe")
+                    shutil.copyfile(component / "native/verifier.json", verifier_dir / "verifier.json")
+                    shutil.copytree(component / "materials", verifier_dir / "licenses")
                     verifier = host.read(verifier_dir / "verifier.json")
-                    v8 = {"RUSTY_V8_ARCHIVE": str(restored / "native/v8.gz"),
-                        "RUSTY_V8_SRC_BINDING_PATH": str(restored / "native/v8.rs")}
-                    report["original_job"] = original_job
+                    v8 = {"RUSTY_V8_ARCHIVE": str(component / "native/v8.gz"),
+                        "RUSTY_V8_SRC_BINDING_PATH": str(component / "native/v8.rs")}
+                    report["native_original_job"] = native_job
+                    report["native_quality"] = native_receipt["quality"]
                 else:
+                    report["native_protoc_build_attempts"] = 1
                     native.native_protoc(temp, tools, report, run)
+                    report["native_protoc_builds"] = 1
                     v8 = host.resolve_v8(root, TARGET)
                     import distribution_provenance
                     with ci_progress.stage("host-native-distribution-verifier"):
@@ -366,7 +450,42 @@ def main():
                         maximum_bytes=PE_MAXIMUM)["sha256"] != verifier["sha256"]:
                     raise RuntimeError("Native verifier executable differs")
                 proto = report["protoc_replacement"]
+                component_inputs = component_identity(sdk, tools, proto, verifier, v8)
+                if native_origin and native_receipt["identity"] != component_inputs:
+                    raise RuntimeError("Native component differs from current native recipe/compiler/SDK/pins")
+                report.update(native_origin=native_origin, native_compilation="reused_original" if native_origin else "executed_current",
+                    native_identity=component_inputs)
+                if stage == "native-components":
+                    if not native_origin:
+                        for name in ("native", "quality"):
+                            (output / name).mkdir(parents=True)
+                        native_paths = {"protoc.exe": protoc, "sccache.exe": Path(tools["sccache"]["path"]),
+                            "ninja.exe": Path(tools["ninja"]["path"]), "v8.gz": Path(v8["RUSTY_V8_ARCHIVE"]),
+                            "v8.rs": Path(v8["RUSTY_V8_SRC_BINDING_PATH"]), "gh.exe": verifier_path}
+                        for name, path in native_paths.items():
+                            shutil.copyfile(path, output / "native" / name)
+                        host.write(output / "native/inputs.json", {"protoc": proto})
+                        host.write(output / "native/verifier.json", verifier)
+                        shutil.copytree(verifier_path.parent / "licenses", output / "materials")
+                        for name in PROTOC_CHECKS:
+                            shutil.copyfile(logs / (name + ".log"), output / "quality" / (name + ".log"))
+                        native_receipt = {"schema_version": 1, "domain": "cm.windows-native-inputs.v1",
+                            "identity": component_inputs, "quality": report["native_quality"], "files": files(output),
+                            "origin": {"source_sha": report["source_sha"], "workflow_sha": report["workflow_sha"],
+                                "run_id": report["run_id"], "run_attempt": report["run_attempt"], "job": "native-preflight",
+                                "repository": "DSLZL/CM-build-" + KEY, "source_repository": "DSLZL/CM", "target": TARGET}}
+                        host.write(output / "build.json", native_receipt)
+                        checked_native(native_receipt, output)
+                    host.verify_sources(root, logs)
+                    if sdk_inventory(sdk_roots) != sdk or any(host.sha(Path(row["path"])) != row["sha256"] for row in tools.values()):
+                        raise RuntimeError("Native inputs changed during component qualification")
+                    report.update(status="pass", source_inputs_unchanged=True, tools_unchanged=True)
+                    producer = native_origin or report
+                    report["artifact_name"] = f"cm-{KEY}-native-inputs-{producer['run_id']}-{producer['run_attempt']}"
+                    worker_policy.output({"native_reused": "true" if native_origin else "false"})
+                    return
                 native_identity = {"rust_tools": rust_tools, "distribution_verifier": verifier,
+                    "image": {name: os.environ[name] for name in ("ImageOS", "ImageVersion")},
                     "schema_recipe": schema_recipe(),
                     "v8": {name: {"name": "v8.gz" if name == "RUSTY_V8_ARCHIVE" else "v8.rs", "sha256": host.sha(Path(path))}
                         for name, path in v8.items()},
@@ -452,25 +571,18 @@ def main():
                 report["host_identity"] = identity["host_build_id"]
 
                 if not origin:
-                    for name in ("bin", "native", "quality"):
+                    for name in ("bin", "quality"):
                         (output / name).mkdir(parents=True)
                     for name in BINS:
                         shutil.copyfile(binaries / name, output / "bin" / name)
-                    native_paths = {"protoc.exe": protoc, "sccache.exe": Path(tools["sccache"]["path"]),
-                        "ninja.exe": Path(tools["ninja"]["path"]), "v8.gz": Path(v8["RUSTY_V8_ARCHIVE"]),
-                        "v8.rs": Path(v8["RUSTY_V8_SRC_BINDING_PATH"]), "gh.exe": verifier_path}
-                    for name, path in native_paths.items():
-                        shutil.copyfile(path, output / "native" / name)
-                    host.write(output / "native/inputs.json", {"protoc": proto})
-                    host.write(output / "native/verifier.json", verifier)
-                    shutil.copytree(verifier_path.parent / "licenses", output / "materials")
                     for name in (*recipes(), *SCHEMA_CHECKS):
                         shutil.copyfile(logs / (name + ".log"), output / "quality" / (name + ".log"))
                     for name in schema["files"]:
                         destination = output / "generated" / name
                         destination.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(tree / name, destination)
-                    receipt = {"schema_version": 1, "domain": "cm.windows-host-build.v1", "identity": identity,
+                    receipt = {"schema_version": 2, "domain": "cm.windows-host-build.v2", "identity": identity,
+                        "native_origin": native_origin,
                         "quality": report["quality"], "schema": schema, "files": files(output),
                         "origin": {"source_sha": report["source_sha"], "workflow_sha": report["workflow_sha"],
                             "run_id": report["run_id"], "run_attempt": report["run_attempt"], "job": "native-preflight",
@@ -500,6 +612,15 @@ def self_check():
     import zipfile
     from unittest.mock import patch
 
+    root = Path(__file__).resolve().parents[2]
+    assert host.slot_descriptor(root, TARGET)["target"] == TARGET
+    for unsupported in ("x86_64-pc-windows-msvc", "aarch64-apple-darwin"):
+        try:
+            host.slot_descriptor(root, unsupported)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Unqualified prepared-slot target accepted")
     cfg = {"task_id": "CM-S03"}
     with patch.object(host, "load_config", return_value=cfg), patch.object(host, "generate_schemas") as generate, \
             patch.dict(os.environ, {"CARGO_TARGET_DIR": str(Path(os.environ["RUNNER_TEMP"]) / "schema-check-target")}):
@@ -515,7 +636,7 @@ def self_check():
     valid = {"run_id": 1, "run_attempt": 1, "source_sha": "a" * 40, "workflow_sha": "b" * 40,
         "artifact_id": 2, "artifact_sha256": "c" * 64}
     assert read_origin(json.dumps(valid)) == valid
-    for bad in ([], {}, {**valid, "extra": 1}, {**valid, "run_id": True}, {**valid, "run_attempt": 0},
+    for bad in (None, [], {}, {**valid, "extra": 1}, {**valid, "run_id": True}, {**valid, "run_attempt": 0},
             {**valid, "source_sha": "main"}, {**valid, "artifact_sha256": "c" * 63}):
         try:
             read_origin(json.dumps(bad))
@@ -544,12 +665,13 @@ def self_check():
         resource = llvm / "intrinsics.h"
         resource.write_bytes(b"compiler resource")
         with patch.dict(os.environ, {"INCLUDE": str(sdk), "LIB": str(sdk)}):
-            original = sdk_inventory(llvm)
+            roots = {"INCLUDE": [str(sdk)], "LIB": [str(sdk)], "LLVM": [str(llvm)]}
+            original = sdk_inventory(roots)
             assert [row["input"] for row in original] == ["INCLUDE/0/header.h", "LLVM/0/intrinsics.h"]
             resource.write_bytes(b"changed compiler resource")
-            assert sdk_inventory(llvm) != original
+            assert sdk_inventory(roots) != original
             try:
-                sdk_inventory(resource)
+                sdk_inventory({"LLVM": [str(resource)]})
             except RuntimeError:
                 pass
             else:
@@ -558,9 +680,6 @@ def self_check():
         for name in BINS:
             (fixture / "bin").mkdir(parents=True, exist_ok=True)
             (fixture / "bin" / name).write_bytes(b"native-fixture")
-        for name in (*NATIVE_FILES, "inputs.json", "verifier.json"):
-            (fixture / "native").mkdir(parents=True, exist_ok=True)
-            (fixture / "native" / name).write_bytes(b"input-fixture")
         quality = {}
         (fixture / "quality").mkdir()
         for name, command in recipes().items():
@@ -596,7 +715,7 @@ def self_check():
             else:
                 raise AssertionError("Changed original Host quality was reused")
         repo = "DSLZL/CM-build-" + KEY
-        receipt = {"schema_version": 1, "domain": "cm.windows-host-build.v1", **proof,
+        receipt = {"schema_version": 2, "domain": "cm.windows-host-build.v2", **proof, "native_origin": valid,
             "identity": {"host_build_id": "fixture"},
             "origin": {"source_sha": valid["source_sha"], "workflow_sha": valid["workflow_sha"],
                 "run_id": 1, "run_attempt": 1, "job": "native-preflight", "repository": repo,
@@ -623,6 +742,70 @@ def self_check():
             restored, actual, original_job = restore(valid, temp)
             assert actual == receipt and original_job == {"job": "native-preflight", "job_id": 3,
                 "job_conclusion": "success"} and files(restored) == files(fixture)
+        component = temp / "component"
+        for name in NATIVE_FILES:
+            (component / "native").mkdir(parents=True, exist_ok=True)
+            (component / "native" / name).write_bytes(b"native-input-fixture")
+        proto = {"sources": {name: {"repository": repo, "commit": revision}
+                for name, repo, revision in native.PROTOC_SOURCES}, "version": "libprotoc 31.1", "cxx_standard": 17,
+            "binary": {"sha256": host.sha(component / "native/protoc.exe")}, "native": True, "executed": True}
+        host.write(component / "native/inputs.json", {"protoc": proto})
+        host.write(component / "native/verifier.json", {})
+        (component / "materials").mkdir()
+        (component / "materials/LICENSE").write_text("original verified license material\n", encoding="utf-8")
+        native_quality = []
+        (component / "quality").mkdir()
+        for name in PROTOC_CHECKS:
+            path = component / "quality" / (name + ".log")
+            path.write_text("original native check passed\n", encoding="utf-8")
+            native_quality.append({"phase": name, "command": ["native-tool", name], "return_code": 0,
+                "log": path.name, "log_sha256": host.sha(path)})
+        native_tools = {name: {"sha256": "a" * 64} for name in ("cl", "link", "lib", "rc", "mt", "cmake", "ninja", "sccache")}
+        native_tools.update({name: {"sha256": host.sha(component / "native" / (name + ".exe"))}
+            for name in ("ninja", "sccache")})
+        verifier = {name: "b" * 64 for name in ("pin", "sha256", "policy_sha256", "root_sha256")}
+        verifier["sha256"] = host.sha(component / "native/gh.exe")
+        host.write(component / "native/verifier.json", verifier)
+        v8 = {"RUSTY_V8_ARCHIVE": component / "native/v8.gz", "RUSTY_V8_SRC_BINDING_PATH": component / "native/v8.rs"}
+        component_inputs = component_identity(original, native_tools, proto, verifier, v8)
+        with patch.dict(os.environ, {"RUSTUP_TOOLCHAIN": "changed-rust", "RUSTFLAGS": "changed-rust-flags"}):
+            assert component_identity(sdk_inventory(roots), native_tools, proto, verifier, v8) == component_inputs
+        (sdk / "header.h").write_bytes(b"changed actual native header")
+        assert component_identity(sdk_inventory(roots), native_tools, proto, verifier, v8) != component_inputs
+        changed_tools = {**native_tools, "cl": {"sha256": "c" * 64}}
+        assert component_identity(original, changed_tools, proto, verifier, v8) != component_inputs
+        native_proof = {"schema_version": 1, "domain": "cm.windows-native-inputs.v1", "identity": component_inputs,
+            "quality": native_quality, "files": files(component), "origin": receipt["origin"]}
+        host.write(component / "build.json", native_proof)
+        checked_native(native_proof, component)
+        for bad_quality in (native_quality[:-1], [{**row, "return_code": 1} if i == 0 else row
+                for i, row in enumerate(native_quality)]):
+            try:
+                checked_native({**native_proof, "quality": bad_quality}, component)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Incomplete or failed native component reused")
+        native_archive = temp / "native.zip"
+        with zipfile.ZipFile(native_archive, "w") as stream:
+            for row in files(component):
+                stream.write(component / row["path"], row["path"])
+        native_artifact = {**artifact, "name": f"cm-{KEY}-native-inputs-1-1"}
+        def native_api(path):
+            return native_artifact if "/artifacts/" in path else api(path)
+        with patch.object(worker_policy, "api", side_effect=native_api), patch.object(worker_policy,
+                "download_origin_archive", side_effect=lambda *args, **kwargs: zipfile.ZipFile(native_archive)):
+            reused_component, actual_component, _ = restore(valid, temp, "native-inputs")
+            assert actual_component == native_proof and files(reused_component) == files(component)
+        (temp / "failed-producer").mkdir()
+        with patch.object(worker_policy, "api", side_effect=lambda path:
+                {**run, "conclusion": "failure"} if path.endswith("/actions/runs/1") else native_api(path)):
+            try:
+                restore(valid, temp / "failed-producer", "native-inputs")
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Failed native producer was reused")
         with zipfile.ZipFile(archive, "a") as stream:
             stream.writestr("bin/unexpected.exe", b"unregistered")
         (temp / "changed").mkdir()

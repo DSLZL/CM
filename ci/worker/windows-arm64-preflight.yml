@@ -29,8 +29,14 @@ on:
           - native-pe
           - runtime-library
           - native-host
+          - native-components
       host_build_origin:
-        description: Exact sealed successful Host origin JSON; empty builds once
+        description: Exact sealed successful Host origin JSON; exclusive with native origin
+        required: false
+        default: ""
+        type: string
+      native_build_origin:
+        description: Exact successful native component origin JSON; required for a new Host
         required: false
         default: ""
         type: string
@@ -51,7 +57,7 @@ defaults:
 jobs:
   native-preflight:
     runs-on: windows-11-arm
-    timeout-minutes: ${{ inputs.stage == 'native-host' && 180 || inputs.stage == 'native-protocol' && 35 || inputs.stage == 'v8-link' && 25 || 15 }}
+    timeout-minutes: ${{ inputs.stage == 'native-host' && 180 || inputs.stage == 'native-components' && 35 || inputs.stage == 'native-protocol' && 35 || inputs.stage == 'v8-link' && 25 || 15 }}
     cache-mode: none
     env:
       CM_PLATFORM: windows-arm64
@@ -66,6 +72,7 @@ jobs:
       CM_CACHE_MODE: none
       CM_PREFLIGHT_STAGE: ${{ inputs.stage }}
       CM_PREFLIGHT_HOST_ORIGIN: ${{ inputs.host_build_origin }}
+      CM_PREFLIGHT_NATIVE_ORIGIN: ${{ inputs.native_build_origin }}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUTF8: "1"
     steps:
@@ -83,8 +90,10 @@ jobs:
         env:
           CM_POLICY_TOKEN: ${{ github.token }}
         run: |
-          if ($env:CM_PREFLIGHT_STAGE -notin @('isolation-surface', 'isolation-availability', 'loader-terminal', 'isolation-process', 'isolation-network', 'isolation-inputs', 'native-inputs', 'v8-link', 'native-protocol', 'native-pe', 'runtime-library', 'native-host')) { throw 'Unknown mechanism stage' }
+          if ($env:CM_PREFLIGHT_STAGE -notin @('isolation-surface', 'isolation-availability', 'loader-terminal', 'isolation-process', 'isolation-network', 'isolation-inputs', 'native-inputs', 'v8-link', 'native-protocol', 'native-pe', 'runtime-library', 'native-host', 'native-components')) { throw 'Unknown mechanism stage' }
           if ($env:CM_PREFLIGHT_STAGE -ne 'native-host' -and $env:CM_PREFLIGHT_HOST_ORIGIN) { throw 'Host origin is only valid for native-host' }
+          if ($env:CM_PREFLIGHT_STAGE -notin @('native-host', 'native-components') -and $env:CM_PREFLIGHT_NATIVE_ORIGIN) { throw 'Native origin is only valid for native stages' }
+          if ($env:CM_PREFLIGHT_STAGE -eq 'native-host' -and [bool]$env:CM_PREFLIGHT_HOST_ORIGIN -eq [bool]$env:CM_PREFLIGHT_NATIVE_ORIGIN) { throw 'Host requires exactly one qualified origin' }
           python -B .github/scripts/worker_policy.py native-preflight-self-check
           if ($LASTEXITCODE -ne 0) { throw 'Native authority self-check failed' }
           python -B .github/scripts/worker_policy.py native-preflight
@@ -97,7 +106,7 @@ jobs:
           "CM_CI_LOG_DIR=$logs" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
           "CM_SOURCE_DIR=$(Join-Path $env:GITHUB_WORKSPACE 'cm-source')" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
           Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'cm-worker-preflight.json') -Destination (Join-Path $logs 'worker-preflight.json')
-          if ($env:CM_PREFLIGHT_STAGE -in @('runtime-library', 'native-host')) {
+          if ($env:CM_PREFLIGHT_STAGE -in @('runtime-library', 'native-host', 'native-components')) {
             @('GIT_CONFIG_COUNT=3', 'GIT_CONFIG_KEY_0=core.autocrlf', 'GIT_CONFIG_VALUE_0=false',
               'GIT_CONFIG_KEY_1=core.longpaths', 'GIT_CONFIG_VALUE_1=true',
               'GIT_CONFIG_KEY_2=core.hooksPath', 'GIT_CONFIG_VALUE_2=NUL') |
@@ -180,12 +189,21 @@ jobs:
         if: env.CM_PREFLIGHT_STAGE == 'runtime-library'
         run: python -B cm-source/ci/scripts/windows_runtime_preflight.py
 
-      - name: Build or reuse sealed native Host with original quality checks
+      - name: Build or reuse sealed native inputs or Host with original quality checks
         id: native-host
-        if: env.CM_PREFLIGHT_STAGE == 'native-host'
+        if: env.CM_PREFLIGHT_STAGE == 'native-host' || env.CM_PREFLIGHT_STAGE == 'native-components'
         env:
           CM_POLICY_TOKEN: ${{ github.token }}
         run: python -B cm-source/ci/scripts/windows_host_preflight.py
+
+      - name: Retain independently qualified native inputs once
+        if: env.CM_PREFLIGHT_STAGE == 'native-components' && steps.native-host.outcome == 'success' && steps.native-host.outputs.native_reused != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cm-windows-arm64-native-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cm-windows-arm64-native-inputs
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Retain successful sealed Host build once
         if: env.CM_PREFLIGHT_STAGE == 'native-host' && steps.native-host.outcome == 'success' && steps.native-host.outputs.host_reused != 'true'

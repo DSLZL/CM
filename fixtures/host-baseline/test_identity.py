@@ -122,7 +122,7 @@ class IdentityTests(unittest.TestCase):
                 host.product_manifest(root)
 
     def test_only_selected_policy_and_slot_target_enter_product_identity(self):
-        targets = ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu")
+        targets = ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "aarch64-pc-windows-msvc")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             pin = {"patches": [], "overlay": {}, "runtime_slots": "runtime-slots.json",

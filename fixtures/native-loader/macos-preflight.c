@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <spawn.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -122,7 +123,7 @@ static int snapshot_probe(const char *root) {
     return 2;
 }
 
-static int executable_map_probe(const char *path) {
+static int executable_map_probe(const char *path, off_t signature_offset, size_t signature_size, int retained) {
     struct stat source, viewed;
     int writer = open(path, O_RDWR | O_NOFOLLOW | O_CLOEXEC);
     int reader = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
@@ -130,6 +131,8 @@ static int executable_map_probe(const char *path) {
         fstat(reader, &viewed) == 0 && S_ISREG(source.st_mode) &&
         source.st_dev == viewed.st_dev && source.st_ino == viewed.st_ino &&
         source.st_size > 0 && source.st_size <= 32 * 1024 * 1024, "mapped diagnostic object");
+    require(!signature_size || (signature_offset > 0 && signature_offset < source.st_size &&
+        signature_size <= (size_t)(source.st_size - signature_offset)), "bounded embedded signature");
     unsigned char before, after;
     require(pread(reader, &before, 1, 0) == 1, "mapped diagnostic initial byte");
     unsigned char replacement = before ^ 0xff;
@@ -141,26 +144,69 @@ static int executable_map_probe(const char *path) {
     if (child == 0) {
         require(close(reader) == 0 && close(barrier[1]) == 0 && close(receipt[0]) == 0,
             "writer descriptor boundaries");
+        if (!retained)
+            require(close(writer) == 0, "positive control has no retained writer");
+        require(write(receipt[1], "r", 1) == 1, "writer readiness barrier");
         char signal;
         require(read(barrier[0], &signal, 1) == 1, "writer waits for mapping");
-        if (signal == 'w') {
+        if (signal == 'w' && retained) {
             outcome.bytes = pwrite(writer, &replacement, 1, 0);
             outcome.error = outcome.bytes < 0 ? errno : 0;
         } else {
-            require(signal == 's', "unavailable mapping skips write");
+            require(signal == 's' || (signal == 'w' && !retained), "unavailable mapping skips write");
         }
         require(write(receipt[1], &outcome, sizeof(outcome)) == (ssize_t)sizeof(outcome) &&
-            close(writer) == 0 && close(barrier[0]) == 0 && close(receipt[1]) == 0,
+            (!retained || close(writer) == 0) && close(barrier[0]) == 0 && close(receipt[1]) == 0,
             "writer result and cleanup");
         _exit(0);
     }
     require(close(writer) == 0 && close(barrier[0]) == 0 && close(receipt[1]) == 0,
         "reader descriptor boundaries");
+    char ready;
+    require(read(receipt[0], &ready, 1) == 1 && ready == 'r', "writer is ready before signature attachment");
     size_t size = (size_t)source.st_size;
+    int signature_result = 0, signature_error = 0;
+    if (signature_size) {
+        fsignatures_t signature = {.fs_file_start = 0,
+            .fs_blob_start = (void *)(uintptr_t)signature_offset, .fs_blob_size = signature_size,
+            .fs_fsignatures_size = sizeof(signature)};
+        signature_result = fcntl(reader, F_ADDFILESIGS_INFO, &signature);
+        signature_error = signature_result < 0 ? errno : 0;
+        char cdhash[41] = "";
+        if (signature_result == 0) {
+            require(signature.fs_file_start > 0 && signature.fs_file_start <= source.st_size,
+                "bounded kernel signed range");
+            size = (size_t)signature.fs_file_start;
+            for (size_t index = 0; index < sizeof(signature.fs_cdhash); ++index)
+                snprintf(cdhash + 2 * index, 3, "%02x", (unsigned char)signature.fs_cdhash[index]);
+        }
+        printf("{\"gate\":\"kernel-signature-api\",\"return_code\":%d,\"errno\":%d,"
+            "\"signed_bytes\":%zu,\"cdhash\":\"%s\",\"hash_type\":%d}\n", signature_result,
+            signature_error, signature_result == 0 ? size : 0, cdhash,
+            signature_result == 0 ? signature.fs_hash_type : 0);
+        require(fflush(stdout) == 0, "signature evidence before mapping faults");
+    }
     /* A diagnostic mapping only; never parse, relocate or execute its bytes. */
-    void *mapping = mmap(NULL, size, PROT_READ | PROT_EXEC, MAP_PRIVATE, reader, 0);
-    int map_error = mapping == MAP_FAILED ? errno : 0;
-    require(write(barrier[1], mapping == MAP_FAILED ? "s" : "w", 1) == 1 &&
+    void *mapping = signature_result < 0 ? MAP_FAILED : mmap(NULL, size, PROT_READ | PROT_EXEC, MAP_PRIVATE, reader, 0);
+    int map_error = mapping == MAP_FAILED && signature_result == 0 ? errno : 0;
+    int locked = 0, lock_error = 0;
+    size_t pages = 0;
+    long page_size = signature_size ? sysconf(_SC_PAGESIZE) : 0;
+    require(!signature_size || page_size > 0, "native page size");
+    if (signature_size && mapping != MAP_FAILED) {
+        locked = mlock(mapping, size) == 0;
+        lock_error = locked ? 0 : errno;
+        if (locked) {
+            volatile unsigned char checksum = 0;
+            for (size_t offset = 0; offset < size; offset += (size_t)page_size) {
+                checksum ^= ((volatile unsigned char *)mapping)[offset];
+                ++pages;
+            }
+            checksum ^= ((volatile unsigned char *)mapping)[size - 1];
+            (void)checksum;
+        }
+    }
+    require(write(barrier[1], mapping == MAP_FAILED || (signature_size && !locked) ? "s" : "w", 1) == 1 &&
         close(barrier[1]) == 0, "release writer after mapping");
     require(read(receipt[0], &outcome, sizeof(outcome)) == (ssize_t)sizeof(outcome) && close(receipt[0]) == 0,
         "mapped writer result");
@@ -168,13 +214,20 @@ static int executable_map_probe(const char *path) {
     require(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
         "mapped writer completed");
     require(pread(reader, &after, 1, 0) == 1 && close(reader) == 0, "mapped object readback");
+    if (locked)
+        require(munlock(mapping, size) == 0, "diagnostic unlock");
     if (mapping != MAP_FAILED)
         require(munmap(mapping, size) == 0, "diagnostic unmap");
-    printf("{\"status\":\"unqualified\",\"gate\":\"executable-map\",\"mapped\":%s,\"map_errno\":%d,"
+    printf("{\"status\":\"unqualified\",\"gate\":\"%s\",\"mapped\":%s,\"map_errno\":%d,"
         "\"retained_writer_bytes\":%ld,\"write_errno\":%d,\"object_changed\":%s,"
-        "\"frozen_loading_qualified\":false,\"native_executed\":false}\n",
+        "\"frozen_loading_qualified\":false,\"native_executed\":false",
+        signature_size ? "kernel-signature-map" : "executable-map",
         mapping == MAP_FAILED ? "false" : "true", map_error, (long)outcome.bytes, outcome.error,
         before != after ? "true" : "false");
+    if (signature_size)
+        printf(",\"locked\":%s,\"lock_errno\":%d,\"prefaulted_pages\":%zu,\"page_size\":%ld,\"retained_writer\":%s",
+            locked ? "true" : "false", lock_error, pages, page_size, retained ? "true" : "false");
+    puts("}");
     return 2;
 }
 
@@ -259,7 +312,16 @@ int main(int argc, char **argv) {
     if (argc == 3 && strcmp(argv[1], "snapshot") == 0)
         return snapshot_probe(argv[2]);
     if (argc == 3 && strcmp(argv[1], "executable-map") == 0)
-        return executable_map_probe(argv[2]);
+        return executable_map_probe(argv[2], 0, 0, 1);
+    if (argc == 6 && strcmp(argv[1], "kernel-signature") == 0) {
+        char *end;
+        unsigned long offset = strtoul(argv[3], &end, 10);
+        require(*argv[3] && *end == '\0' && offset > 0 && offset <= 32 * 1024 * 1024, "signature offset argument");
+        unsigned long size = strtoul(argv[4], &end, 10);
+        require(*argv[4] && *end == '\0' && size > 0 && size <= 32 * 1024 * 1024, "signature size argument");
+        require(strcmp(argv[5], "none") == 0 || strcmp(argv[5], "writer") == 0, "closed signature adversary");
+        return executable_map_probe(argv[2], (off_t)offset, (size_t)size, strcmp(argv[5], "writer") == 0);
+    }
     if (argc == 11 && strcmp(argv[1], "isolation") == 0) {
         isolation_checks(argv);
         pid_t child = fork();
