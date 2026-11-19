@@ -501,12 +501,14 @@ def main():
                     "protoc": {name: proto[name] for name in ("sources", "version", "cxx_standard", "binary")},
                     "protoc_recipe": host.digest(inspect.getsource(native.native_protoc) + inspect.getsource(native.protoc_tools))}
 
+                codex_home = temp / "codex-home"
+                codex_home.mkdir()
                 os.environ.update({**v8, "CM_NATIVE_PROTOC": str(protoc), "CM_DISTRIBUTION_GH_SHA256": verifier["sha256"],
                     "CARGO_INCREMENTAL": "0", "RUSTC": tools["rustc"]["path"], "RUSTC_WRAPPER": tools["sccache"]["path"],
                     "RUSTFLAGS": "-Ctarget-feature=+crt-static", "CC": tools["clang-cl"]["path"], "CXX": tools["clang-cl"]["path"],
                     "AR": tools["lib"]["path"], "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER": tools["link"]["path"],
                     "SCCACHE_DIR": str(temp / "sccache"), "SCCACHE_GHA_ENABLED": "false", "SCCACHE_CACHE_SIZE": "2G",
-                    "SCCACHE_IDLE_TIMEOUT": "0", "SCCACHE_BASEDIRS": str(root), "CODEX_HOME": str(temp / "codex-home")})
+                    "SCCACHE_IDLE_TIMEOUT": "0", "SCCACHE_BASEDIRS": str(root), "CODEX_HOME": str(codex_home)})
                 host.write(root / host.ADAPTER / "inputs/native.json", native_identity)
                 if origin:
                     before = {row["path"]: row for row in host.manifest(tree)}
