@@ -68,7 +68,8 @@ static const char *descendant_creation_gates[] = {
     "descendant-section-file", "descendant-image-section",
     "descendant-sxs-control-read", "descendant-sxs-client-read",
     "descendant-default-package-count", "descendant-default-package-mask", "descendant-explicit-dacl",
-    "descendant-ordinary-create", "descendant-ordinary-cleanup"
+    "descendant-ordinary-create", "descendant-ordinary-cleanup",
+    "descendant-lpac-provider-create", "descendant-lpac-provider-cleanup"
 };
 static const wchar_t *file_inputs[3];
 static const wchar_t *file_aliases[] = {
@@ -1531,6 +1532,13 @@ int wmain(int argc, wchar_t **argv) {
                 if (closesocket(probe)) fail("control-restored-socket-close", (DWORD)WSAGetLastError());
             }
         } else if (!wcscmp(argv[1], L"provider")) {
+            if (catalog_descendant) {
+                wchar_t environment[4096];
+                child_environment(environment, ARRAYSIZE(environment));
+                // Observe process creation before the known LPAC socket denial; never resume it.
+                if (suspended_creation_comparison(environment, NULL, "descendant-lpac-provider-create"))
+                    message(16, 0, "descendant-lpac-provider-cleanup");
+            }
             unsigned short port = 0;
             SOCKET server = listener(&port, TRUE);
             message(1, port, "internal-provider-ready");
